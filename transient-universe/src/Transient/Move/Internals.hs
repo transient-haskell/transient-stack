@@ -2933,29 +2933,27 @@ rawHTTP node restmsg = do
   setState hdrs
 
   tr ("HEADERS", first, headers)
-  result <- case lookup "Transfer-Encoding" headers of
-          Just "chunked" -> dechunk |- deserialize
-
-          _ ->  case fmap (read . BC.unpack) $ lookup "Content-Length" headers  of
-
-                Just length -> do
-                      msg <- tTake length
-                      withParseString msg deserialize
-                _ -> deserialize
-
-  
-
-  
-  when (vers == http10                       ||
-    --    BS.isPrefixOf http10 str             ||
-        lookup "Connection" headers == Just "close" )
-        $ liftIO $ mclose c
 
   
   
-  guard (BC.head code== '2') <|> error ( show(hdrs, result))
+  
+  guard (BC.head code== '2') 
+     <|> do Raw body <- parseBody headers
+            error $ show (hdrs,body) -- TODO decode the body and print
+  
+  result <- parseBody headers
+
+  
+  
+
+  
+  
   
   tr ("result", result)
+  
+  
+  
+  
   --when (not $ null rest)  $ error "THERE WERE SOME REST"
   ctx <- gets parseContext
   -- "SET PARSECONTEXT PREVIOUS"
@@ -2967,16 +2965,28 @@ rawHTTP node restmsg = do
   -- ("PUTMVAR",nodeHost node)
   liftIO $ putMVar blocked  $ Just t
 
-  
+  when (vers == http10                       ||
+    --    BS.isPrefixOf http10 str             ||
+        lookup "Connection" headers == Just "close" )
+        $ liftIO $ mclose c
   
   if (isJust mcon) then setData (fromJust mcon) else delData c
   return result
   where
   
-  
+  parseBody headers= case lookup "Transfer-Encoding" headers of
+          Just "chunked" -> dechunk |- deserialize
+
+          _ ->  case fmap (read . BC.unpack) $ lookup "Content-Length" headers  of
+
+                Just length -> do
+                      msg <- tTake length
+                      tr ("GOT", length)
+                      withParseString msg deserialize
+                _ -> deserialize
   getFirstLineResp= do
 
-      showNext "getFirstLineResp" 20
+      -- showNext "getFirstLineResp" 20
       (,,) <$> httpVers <*> (BS.toStrict <$> getCode) <*> getMessage
     where
     httpVers= tTakeUntil (BS.isPrefixOf "HTTP" ) >> parseString

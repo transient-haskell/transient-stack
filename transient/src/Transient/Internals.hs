@@ -1293,9 +1293,10 @@ optionf flag ret message  = do
   -- abduce
   return ret
 
--- | General asynchronous console input
+-- | General asynchronous console input. NOTE: it does NOT print the prompt message
 -- 
--- inputf <remove input listener after sucessful or not> <listener identifier> <prompt> <Maybe default value> <validation proc>
+-- inputf <remove input listener after sucessful or not> <listener identifier> <prompt> 
+--      <Maybe default value> <validation proc>
 inputf ::  (Show a, Read a,Typeable a)  => Bool -> String -> String -> Maybe a -> (a -> Bool) -> TransIO a
 inputf flag ident message mv cond= do
     str <- react (addConsoleAction ident message) (return ())
@@ -1345,10 +1346,6 @@ input' mv cond prompt= do
   liftIO $ putStr prompt >> hFlush stdout 
   inputf True "input" prompt  mv cond
   
-
-
-
-
 rcb= unsafePerformIO $ newIORef [] :: IORef [ (String,String,String -> IO())]
 
 addConsoleAction :: String -> String -> (String ->  IO ()) -> IO ()
@@ -1370,18 +1367,16 @@ reads1 s=x where
 read1 s= let [(x,"")]= reads1 s  in x
 
 
-
 rprompt= unsafePerformIO $ newIORef "> "
 inputLoop= do
     line <- getLine
-    threadDelay 1000000
+    --threadDelay 1000000
 
     processLine line
 
     prompt <- readIORef rprompt
     when (not $ null prompt) $ do putStr prompt ; hFlush stdout
     inputLoop
-
 
 
 {-# NOINLINE rconsumed #-}
