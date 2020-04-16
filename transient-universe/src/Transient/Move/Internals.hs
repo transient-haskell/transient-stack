@@ -2910,11 +2910,10 @@ rawHTTP node restmsg = do
   --sock <- liftIO $ connectTo' 8192 (nodeHost node) (PortNumber $ fromIntegral $ nodePort node)
   mcon <- getData :: TransIO (Maybe Connection)
   c <- mconnect' node
-  --sn <- liftIO $ makeStableName c
-  --liftIO $ print $ hashStableName $ sn `seq` sn
+  
   sendRaw c  $ BS.pack $ restmsg
   
-  let blocked= isBlocked c
+  let blocked= isBlocked c    -- TODO: the same flag is used now for sending and receiving
   
   liftIO $ takeMVar blocked
 
@@ -2941,6 +2940,18 @@ rawHTTP node restmsg = do
      <|> do Raw body <- parseBody headers
             error $ show (hdrs,body) -- TODO decode the body and print
   
+  when (vers == http10                       ||
+    --    BS.isPrefixOf http10 str             ||
+        lookup "Connection" headers == Just "close" )
+        $ do
+            TOD t _ <- liftIO $ getClockTime
+
+            liftIO $ putMVar blocked  $ Just t
+            liftIO $ mclose c
+            liftIO $ takeMVar blocked
+            return()
+  
+
   result <- parseBody headers
 
   
@@ -2965,10 +2976,6 @@ rawHTTP node restmsg = do
   -- ("PUTMVAR",nodeHost node)
   liftIO $ putMVar blocked  $ Just t
 
-  when (vers == http10                       ||
-    --    BS.isPrefixOf http10 str             ||
-        lookup "Connection" headers == Just "close" )
-        $ liftIO $ mclose c
   
   if (isJust mcon) then setData (fromJust mcon) else delData c
   return result

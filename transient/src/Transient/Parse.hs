@@ -259,7 +259,7 @@ tTake n= withGetParseString $ \s ->  return $ BS.splitAt n s  !> ("tTake",n)
 tDrop n= withGetParseString $ \s ->  return $ ((),BS.drop n s)
 
 -- | read a char. If there is no input left it fails with empty
-anyChar= withGetParseString $ \s -> do tr "anyChar"; if BS.null s then empty else  return (BS.head s ,BS.tail s ) -- !> ("anyChar",s)
+anyChar= withGetParseString $ \s -> if BS.null s then empty else  return (BS.head s ,BS.tail s ) -- !> ("anyChar",s)
 
 -- | verify that the next character is the one expected
 tChar c= withGetParseString $ \s -> if BS.null s || BS.head s /= c then empty else return (BS.head s,BS.tail s)  -- !> ("tChar", BS.head s) 
