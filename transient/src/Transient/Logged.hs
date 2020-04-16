@@ -43,7 +43,7 @@ Loggable(..), logged, received, param, getLog, exec,wait, emptyLog,
  suspend, checkpoint, rerun, restore,
 #endif
 
-Log(..), toLazyByteString, byteString, lazyByteString
+Log(..), toLazyByteString, byteString, lazyByteString, Raw(..)
 ) where
 
 import Data.Typeable
@@ -184,7 +184,10 @@ instance Loggable BSS.ByteString where
 #endif
 instance Loggable SomeException
 
-
+newtype Raw= Raw BS.ByteString deriving (Read,Show)
+instance Loggable Raw where
+  serialize (Raw str)= lazyByteString str
+  deserialize= Raw <$> notParsed
 
 data Log    = Log{ recover :: Bool, buildLog :: Builder, fulLog :: Builder, lengthFull:: Int, hashClosure :: Int}
 
