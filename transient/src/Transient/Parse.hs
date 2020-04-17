@@ -535,7 +535,7 @@ p |-- q =  do
 
 (|-) :: TransIO (StreamData BS.ByteString) -> TransIO b -> TransIO b
 p |- q =  do
-  addThreads 1
+  --addThreads 1
   pcontext <- liftIO $ newIORef $ Just undefined
   v  <- liftIO $ newEmptyMVar
   initp v pcontext <|> initq v pcontext

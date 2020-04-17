@@ -1720,7 +1720,7 @@ listen  (node@(Node _ port _ _ )) = onAll $ do
    -- setData ex
    onException $ \(ConnectionError msg node) -> empty
 
-   addThreads 2
+   --addThreads 2
    fork connectionTimeouts
    fork loopClosures
 
@@ -2933,9 +2933,6 @@ rawHTTP node restmsg = do
   setState hdrs
 
   tr ("HEADERS", first, headers)
-
-  
-  
   
   guard (BC.head code== '2') 
      <|> do Raw body <- parseBody headers

@@ -528,8 +528,9 @@ tailsafe (_:xs) = xs
 
 -- * Threads
 
-waitQSemB   sem = atomicModifyIORef sem $ \n ->
-                    if n > 0 then(n - 1, True) else (n, False)
+waitQSemB  onemore sem = atomicModifyIORef sem $ \n ->
+                    let one =  if onemore then 1 else 0
+                    in if n + one > 0 then(n - 1, True) else (n, False)
 signalQSemB sem = atomicModifyIORef sem $ \n -> (n + 1, ())
 
 -- | Sets the maximum number of threads that can be created for the given task
@@ -1088,7 +1089,7 @@ parallel ioaction = Transient $ do
 
 -- | Execute the IO action and the continuation
 loop ::  EventF -> IO (StreamData t) -> IO ()
-loop parentc rec = forkMaybe parentc $ \cont -> do
+loop parentc rec = forkMaybe True parentc $ \cont -> do
   -- Execute the IO computation and then the closure-continuation
   liftIO $ atomicModifyIORef (labelth cont) $ \(_,label) -> ((Listener,label),())
   let loop'=   do
@@ -1099,7 +1100,7 @@ loop parentc rec = forkMaybe parentc $ \cont -> do
              last@(SLast _) -> setworker cont >> iocont  last  cont
 
              more@(SMore _) -> do
-                  forkMaybe cont $ iocont  more
+                  forkMaybe False cont $ iocont  more
                   loop'
 
          where
@@ -1116,12 +1117,12 @@ loop parentc rec = forkMaybe parentc $ \cont -> do
   return ()
   where
   {-# INLINABLE forkMaybe #-}
-  forkMaybe :: EventF -> (EventF -> IO ()) -> IO ()
-  forkMaybe parent  proc = do
+  forkMaybe :: Bool -> EventF -> (EventF -> IO ()) -> IO ()
+  forkMaybe onemore parent  proc = do
      case maxThread parent  of
        Nothing -> forkIt parent  proc
        Just sem  -> do
-             dofork <- waitQSemB sem
+             dofork <- waitQSemB onemore sem
              if dofork then forkIt parent proc 
                        else proc parent  
                                 `catch` \e ->exceptBack parent e >> return()

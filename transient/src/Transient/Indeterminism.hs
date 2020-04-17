@@ -99,7 +99,7 @@ collect' n t search= do
 
       timer= do
              when (t > 0) $ do
-                addThreads 1
+                --addThreads 1
                 async $ threadDelay t >> putMVar rv Nothing 
              empty
 
