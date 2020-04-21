@@ -808,7 +808,7 @@ killBranch' cont = do
   return ()
 -- * Extensible State: Session Data Management
 
--- | Same as 'getSData' but with a more general type. If the data is found, a
+-- | Same as 'getSData' but with a more conventional interface. If the data is found, a
 -- 'Just' value is returned. Otherwise, a 'Nothing' value is returned.
 getData :: (TransMonad m, Typeable a) => m (Maybe a)
 getData = resp
@@ -824,12 +824,17 @@ getData = resp
 
 -- | Retrieve a previously stored data item of the given data type from the
 -- monad state. The data type to retrieve is implicitly determined by the data type.
--- If the data item is not found, empty is executed, so the  alternative computation will be executed, if any, or
--- Otherwise, the computation will stop..
--- If you want to print an error message or a default value, you can use an 'Alternative' composition. For example:
+-- If the data item is not found, empty is executed, so the  alternative computation will be executed, if any. 
+-- Otherwise, the computation will stop.
+-- If you want to print an error message or return a default value, you can use an 'Alternative' composition. For example:
 --
 -- > getSData <|> error "no data of the type desired"
 -- > getInt = getSData <|> return (0 :: Int)
+--
+-- The later return either the value set or 0.
+--
+-- It is highly recommended not to use it directly, since his relatively complex behaviour may be confusing sometimes.
+-- Use instead a monomorphic alias like "getInt" defined above.
 getSData :: Typeable a => TransIO a
 getSData = Transient getData
 
@@ -888,11 +893,11 @@ modifyData' f  v= do
   where t          = typeOf v
         alterf  _ _ x = unsafeCoerce $ f $ unsafeCoerce x
 
--- | Same as modifyData
+-- | Same as `modifyData`
 modifyState :: (TransMonad m, Typeable a) => (Maybe a -> Maybe a) -> m ()
 modifyState = modifyData
 
--- | Same as 'setData'
+-- | Same as `setData`
 setState :: (TransMonad m, Typeable a) => a -> m ()
 setState = setData
 
@@ -900,7 +905,7 @@ setState = setData
 delData :: (TransMonad m, Typeable a) => a -> m ()
 delData x = modify $ \st -> st { mfData = M.delete (typeOf x) (mfData st) }
 
--- | Same as 'delData'
+-- | Same as `delData`
 delState :: (TransMonad m, Typeable a) => a -> m ()
 delState = delData
 
@@ -1288,37 +1293,46 @@ optionf :: (Typeable b, Show b, Read b, Eq b) =>
           Bool -> b -> String  -> TransIO b
 optionf flag ret message  = do
   let sret= if typeOf ret == typeOf "" then unsafeCoerce ret else show ret
-  liftIO $ putStrLn $ "Enter  "++sret++"\t\tto: " ++ message
-  inputf flag sret message Nothing ( == sret)
+  let msg= "Enter  "++sret++"\t\tto: " ++ message++"\n"
+  inputf flag sret msg Nothing ( == sret) 
   liftIO $ putStr "\noption: " >> putStrLn sret
   -- abduce
   return ret
 
--- | General asynchronous console input. NOTE: it does NOT print the prompt message
+-- | General asynchronous console input.
 -- 
 -- inputf <remove input listener after sucessful or not> <listener identifier> <prompt> 
 --      <Maybe default value> <validation proc>
-inputf ::  (Show a, Read a,Typeable a)  => Bool -> String -> String -> Maybe a -> (a -> Bool) -> TransIO a
-inputf flag ident message mv cond= do
-    str <- react (addConsoleAction ident message) (return ())
-
-    when flag $  do removeChild; liftIO $ delConsoleAction ident 
-    c <- liftIO $ readIORef rconsumed
-    if c then returnm mv else do
-        if null str then do liftIO $ writeIORef rconsumed True; returnm mv  else do 
-            let rr = read1 str 
-        
-            case   rr  of
-               Just x -> if cond x 
-                             then liftIO $ do
-                                   writeIORef rconsumed True  
-                                   print x
-                                   -- hFlush stdout
-                                   return x
-                             else do liftIO $  when (isJust mv) $ putStrLn "";  returnm mv
-               _      -> do liftIO $  when (isJust mv) $ putStrLn ""; returnm mv 
-
-    where
+inputf ::  (Show a, Read a,Typeable a)  => Bool -> String -> String -> Maybe a -> (a -> Bool)  -> TransIO a
+inputf remove ident message mv cond = do
+  let loop= do
+        liftIO $ putStr message >> hFlush stdout 
+        str <- react (addConsoleAction ident message) (return ())
+        when remove $  do removeChild; liftIO $ delConsoleAction ident 
+        c <- liftIO $ readIORef rconsumed
+        if c then returnm mv else do
+            -- if null str 
+            --   then
+                  
+            --       if retry then do
+            --           liftIO $ writeIORef rconsumed True; 
+            --           loop
+            --       else do liftIO $ writeIORef rconsumed True; returnm mv  
+            --   else do 
+                let rr = read1 str 
+            
+                case   rr  of
+                  Just x -> if cond x 
+                                then liftIO $ do
+                                      writeIORef rconsumed True  
+                                      print x
+                                      -- hFlush stdout
+                                      return x
+                            
+                                else do liftIO $  when (isJust mv) $ putStrLn "";  returnm mv
+                  _      -> do liftIO $  when (isJust mv) $ putStrLn ""; returnm mv 
+  loop
+  where
     returnm (Just x)= return x
     returnm _ = empty
     
@@ -1344,13 +1358,15 @@ input= input' Nothing
 -- | `input` with a default value
 input' :: (Typeable a, Read a,Show a) => Maybe a -> (a -> Bool) -> String -> TransIO a
 input' mv cond prompt= do  
-  liftIO $ putStr prompt >> hFlush stdout 
-  inputf True "input" prompt  mv cond
-  
+  --liftIO $ putStr prompt >> hFlush stdout 
+  inputf True "input" prompt  mv cond 
+
+
 rcb= unsafePerformIO $ newIORef [] :: IORef [ (String,String,String -> IO())]
 
 addConsoleAction :: String -> String -> (String ->  IO ()) -> IO ()
-addConsoleAction name message cb= atomicModifyIORef rcb $ \cbs ->  ((name,message, cb) : filter ((/=) name . fst) cbs ,())
+addConsoleAction name message cb= atomicModifyIORef rcb $ \cbs ->  
+              ((name,message, cb) : filter ((/=) name . fst) cbs ,())
  where
  fst (x,_,_)= x
 
@@ -1520,7 +1536,7 @@ keep mx = do
 
                    d <- input' (Just "n") (\x -> x=="y" || x =="n" || x=="Y" || x=="N") "\nDetails? N/y "
                    when  (d == "y") $
-                       let line (x,y,_)= do putStr x; putStr "\t\t"; putStrLn y
+                       let line (x,y,_)= putStrLn y  -- do putStr x; putStr "\t\t"; putStrLn y
                        in liftIO $ mapM_ line  mbs
                    liftIO $ putStrLn ""
                    empty
