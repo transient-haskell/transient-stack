@@ -39,7 +39,6 @@ import           Control.Concurrent
 -- import           GHC.Conc(unsafeIOToSTM)
 -- import           Control.Concurrent.STM hiding (retry)
 -- import qualified Control.Concurrent.STM  as STM (retry)
-import           System.Mem.StableName
 import           Data.Maybe
 import           Data.List
 import           Data.IORef
@@ -1713,17 +1712,17 @@ registerBack witness f  = Transient $ do
         Just (Backtrack b []) ->  setData $ Backtrack b  [cont] 
         Just (bss@(Backtrack b (bs@((EventF _ x'  _ _ _ _ _ _ _ _ _ _ _):_)))) ->
           when (isNothing b) $ do
-                addrx  <- addr x
-                addrx' <- addr x'         -- to avoid duplicate backtracking points
-                setData $ Backtrack b  $ if addrx == addrx' then (cont:tail bs) else  (cont:bs)
-               --setData $ Backtrack b (cont:bs)
+                -- addrx  <- addr x -- not needed that shit in principle, since the state is pure
+                -- addrx' <- addr x'         -- to avoid duplicate backtracking points
+                -- setData $ Backtrack b  $ if addrx == addrx' then (cont:tail bs) else  (cont:bs)
+               setData $ Backtrack b (cont:bs)
 
         Nothing ->  setData $ Backtrack mwit [cont]
 
    runTrans f
    where
    mwit= Nothing `asTypeOf` (Just witness)
-   addr x = liftIO $ return . hashStableName =<< (makeStableName $! x)
+   --addr x = liftIO $ return . hashStableName =<< (makeStableName $! x)
 
 
 registerUndo :: TransientIO a -> TransientIO a
