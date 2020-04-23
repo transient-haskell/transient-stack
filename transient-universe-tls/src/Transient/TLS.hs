@@ -93,7 +93,7 @@ maybeTLSServerHandshake certpath keypath sock input= do
              liftIO $ writeIORef (connData conn) $  Just $ TLSNode2Node $ unsafeCoerce ctx 
                    
              modify $ \s -> s{ parseContext=ParseContext (TLS.recvData ctx >>= return . SMore . BL8.fromStrict)
-                               ("" ::   BL8.ByteString)}
+                               ("" ::   BL8.ByteString) (unsafePerformIO $ newIORef False)}
 
              onException $ \(e:: SomeException) -> liftIO $ TLS.contextClose ctx
    else return ()
@@ -122,7 +122,7 @@ maybeClientTLSHandshake hostname sock input = do
         conn <- getSData <|> error "TLS: no socket connection"
         liftIO $ writeIORef (connData conn) $  Just $ TLSNode2Node $ unsafeCoerce ctx 
         modify $ \st -> st{parseContext= ParseContext (TLS.recvData ctx >>= return . SMore . BL.fromChunks . (:[]))
-                               ("" ::   BL8.ByteString)}
+                               ("" ::   BL8.ByteString) (unsafePerformIO $ newIORef False)}
         onException $ \(e:: SomeException) ->  liftIO $ TLS.contextClose ctx
 
 makeClientSettings global hostname= ClientParams{
