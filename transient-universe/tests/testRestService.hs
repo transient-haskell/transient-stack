@@ -36,10 +36,10 @@ postRESTReq=  "POST /todos HTTP/1.1\r\n"
            <>"{\"id\": $1,\"userId\": $2,\"completed\": $3,\"title\":$4}"
 
 
-postRestService= [("service","post"),("type","HTTPS")
+postRestService= [("service","post"),("type","HTTP")
                  ,("nodehost","jsonplaceholder.typicode.com")
                  ,("HTTPstr",postRESTReq)]
-getRestService = [("service","get"),("type","HTTPS")
+getRestService = [("service","get"),("type","HTTP")
                  ,("nodehost","jsonplaceholder.typicode.com")
                  ,("HTTPstr",getRESTReq)]
 
