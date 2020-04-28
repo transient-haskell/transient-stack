@@ -22,7 +22,6 @@ import Transient.Parse
 import Transient.Logged
 import Transient.Indeterminism
 import Transient.Mailboxes
-import Transient.EVars
 
 
 import Data.Typeable
@@ -196,13 +195,15 @@ runCloud x= do
 --- empty Hooks for TLS
 
 {-# NOINLINE tlsHooks #-}
-tlsHooks ::IORef (SData -> BS.ByteString -> IO ()
+tlsHooks ::IORef (Bool
+                 ,SData -> BS.ByteString -> IO ()
                  ,SData -> IO B.ByteString
                  ,NS.Socket -> BS.ByteString -> TransIO ()
                  ,String -> NS.Socket -> BS.ByteString -> TransIO ()
                  ,SData -> IO ())
 tlsHooks= unsafePerformIO $ newIORef
-                 ( notneeded
+                 ( False
+                 , notneeded
                  , notneeded
                  , \_ i ->  tlsNotSupported i
                  , \_ _ _->  return()
@@ -220,7 +221,7 @@ tlsHooks= unsafePerformIO $ newIORef
          sendRaw conn $ BS.pack $ "HTTP/1.0 525 SSL Handshake Failed\r\nContent-Length: 0\nConnection: close\r\n\r\n"
        else return ()
 
-(sendTLSData,recvTLSData,maybeTLSServerHandshake,maybeClientTLSHandshake,tlsClose)= unsafePerformIO $ readIORef tlsHooks
+(isTLSIncluded,sendTLSData,recvTLSData,maybeTLSServerHandshake,maybeClientTLSHandshake,tlsClose)= unsafePerformIO $ readIORef tlsHooks
 
 
 #endif
@@ -413,11 +414,9 @@ single f= do
    mapth <- liftIO $ readIORef rmap
    id <- liftIO $ f `seq` makeStableName f >>= return .  hashStableName
 
-
    case  M.lookup id mapth of
           Just tv -> liftIO $ killBranch'  tv
           Nothing ->  return ()
-
 
    tv <- get
    f <** do
@@ -1303,9 +1302,9 @@ mconnect'  node'=  exclusiveCon $ do
 
 
 #ifndef ghcjs_HOST_OS
-mconnect1 (node@(Node host port _ _))= do
+mconnect1 (node@(Node host port _ services ))= do
 
-     return ()  !> ("MCONNECT1",host,port,nodeServices node)
+     return ()  !> ("MCONNECT1",host,port,nodeServices node,isTLSIncluded)
      {-
      onException $ \(ConnectionError msg node) -> do
                  liftIO $ do
@@ -1315,10 +1314,17 @@ mconnect1 (node@(Node host port _ _))= do
                  continue
                  empty
         -}
-     (conn,parseContext) <- checkSelf node                                 <|>
-                            timeout 1000000 (connectNode2Node host port)   <|>
-                            timeout 1000000 (connectWebSockets host port)  <|>
-                            timeout 1000000 checkRelay                     <|>
+     needTLS <- case lookup "type" services  of
+                       Just "HTTP" -> return False;
+                       Just "HTTPS" -> 
+                              if not isTLSIncluded then error "no 'initTLS'. This is necessary for https connections. Please include it: main= do{ initTLS; keep ...."
+                                                   else return True
+                       _ -> return isTLSIncluded 
+
+     (conn,parseContext) <- checkSelf node                                         <|>
+                            timeout 1000000 (connectNode2Node host port needTLS)   <|>
+                            timeout 1000000 (connectWebSockets host port needTLS)  <|>
+                            timeout 1000000 (checkRelay needTLS)                   <|>
                             (throw $ ConnectionError "no connection" node)
 
      setState conn
@@ -1359,8 +1365,8 @@ mconnect1 (node@(Node host port _ _))= do
           return (conn, noParseContext)
 
     timeout t proc=  do
-       r <- collect' 1 t $ do
-          onException $ \(e:: SomeException) -> empty
+       r <- collect' 1 t $ do   
+          -- onException $ \(SomeException _) ->  empty -- TODO check if it is right
           proc
        case r of
           []  -> empty         !> "TIMEOUT EMPTY"
@@ -1368,15 +1374,15 @@ mconnect1 (node@(Node host port _ _))= do
              Nothing -> throw $ ConnectionError "Bad cookie" node
              Just r -> return r
 
-    checkRelay= do
+    checkRelay needTLS= do
         case lookup "relay" $ nodeServices node of
                     Nothing -> empty  -- !> "NO RELAY"
                     Just relayinfo -> do
                        let (h,p)= read relayinfo
-                       connectWebSockets1  h p $  "/relay/"  ++  h  ++ "/" ++ show p ++ "/"
+                       connectWebSockets1  h p ("/relay/"  ++  h  ++ "/" ++ show p ++ "/") needTLS
 
 
-    connectSockTLS host port= do
+    connectSockTLS host port needTLS= do
         return ()                                         !> "connectSockTLS"
 
         let size=8192
@@ -1387,8 +1393,11 @@ mconnect1 (node@(Node host port _ _))= do
         let cdata= (Node2Node u  sock (error $ "addr: outgoing connection"))
         cdata' <- liftIO $ readIORef rcdata
 
-        input <-  liftIO $ SBSL.getContents sock
-        let pcontext= ParseContext (do mclose c; return SDone) input (unsafePerformIO $ newIORef False)
+        --input <-  liftIO $ SBSL.getContents sock
+        -- let pcontext= ParseContext (do mclose c; return SDone) input (unsafePerformIO $ newIORef False)
+
+        pcontext <- makeParseContext $ SBSL.recv sock 4096
+        
         conn' <- if isNothing cdata'    -- lost connection, reconnect
           
            then do 
@@ -1408,28 +1417,28 @@ mconnect1 (node@(Node host port _ _))= do
         modify $ \s ->s{execMode=Serial,parseContext=pcontext}
         --modify $ \s ->s{execMode=Serial,parseContext=ParseContext (SMore . BL.fromStrict <$> recv sock 1000) mempty}
 
-        maybeClientTLSHandshake host sock input
+        when (isTLSIncluded && needTLS) $ maybeClientTLSHandshake host sock mempty
 
 
 
 
-    connectNode2Node host port= do
+    connectNode2Node host port needTLS= do
         -- onException $ \(e :: SomeException) -> empty
         return () !> "NODE 2 NODE"
-        connectSockTLS host port
+        connectSockTLS host port needTLS
 
 
         conn <- getSData <|> error "mconnect: no connection data"
         --mynode <- getMyNode
-        parseContext <- gets parseContext
+        parseContext <- gets parseContext 
         return $ Just(conn,parseContext)
         
 
-    connectWebSockets host port = connectWebSockets1 host port "/"
-    connectWebSockets1 host port verb= do
+    connectWebSockets host port needTLS= connectWebSockets1 host port "/" needTLS
+    connectWebSockets1 host port verb needTLS= do
          -- onException $ \(e :: SomeException) -> empty
          return () !> "WEBSOCKETS"
-         connectSockTLS host port  -- a new connection
+         connectSockTLS host port needTLS  -- a new connection
 
          never  <- liftIO $ newEmptyMVar :: TransIO (MVar ())
          conn   <- getSData <|> error "connectWebSockets: no connection"
@@ -1462,6 +1471,23 @@ mconnect1 (node@(Node host port _ _))= do
 
            _ -> do return () !> "RECEIVED CLOSE"; liftIO $ WS.sendClose wscon ("" ::BS.ByteString); return Nothing
 
+makeParseContext rec= liftIO $ do
+        done <- newIORef False
+        let receive= liftIO $ do 
+             d <- readIORef done
+             if d then return SDone 
+        
+             else (do
+                 r<- rec
+                 if BS.null r then liftIO $ do writeIORef done True; return SDone
+                              else return $ SMore r)
+
+                    `catch`  \(SomeException e) -> do liftIO $ writeIORef done True
+                                                      putStr "Parse: "
+                                                      print e
+                                                      return SDone
+
+        return $ ParseContext receive mempty done
 
     
 #else
@@ -1806,8 +1832,8 @@ listenNew port conn'=  do
    liftIO $ atomicModifyIORef connectionList $ \m -> (conn': m,()) -- TODO
 
    return () !> "BEFORE HANDSHAKE"
-   maybeTLSServerHandshake sock input
-
+   maybeTLSServerHandshake sock  input
+   liftIO $ print "AFTER"
 
 
    -- (method,uri, headers) <- receiveHTTPHead
@@ -2925,6 +2951,7 @@ rawHTTP node restmsg = do
   tr "after send"
   modify $ \s -> s{execMode=Serial}
   --try (do r <-tTake 10;liftIO  $ print "NOTPARSED"; liftIO $ print  r; empty) <|> return()
+  --showNext "NEXT" 10
   first@(vers,code,_) <- getFirstLineResp
   tr ("FIRST line",first)
   headers <- getHeaders
@@ -2935,8 +2962,10 @@ rawHTTP node restmsg = do
   
   guard (BC.head code== '2') 
      <|> do Raw body <- parseBody headers
-            error $ show (hdrs,body) -- TODO decode the body and print
-  
+            error $ show (hdrs,body) --  decode the body and print
+
+  result <- parseBody headers
+
   when (vers == http10                       ||
     --    BS.isPrefixOf http10 str             ||
         lookup "Connection" headers == Just "close" )
@@ -2948,18 +2977,7 @@ rawHTTP node restmsg = do
             liftIO $ takeMVar blocked
             return()
   
-
-  result <- parseBody headers
-
-  
-  
-
-  
-  
-  
-  tr ("result", result)
-  
-  
+  --tr ("result", result)
   
   
   --when (not $ null rest)  $ error "THERE WERE SOME REST"
@@ -2987,7 +3005,9 @@ rawHTTP node restmsg = do
                       msg <- tTake length
                       tr ("GOT", length)
                       withParseString msg deserialize
-                _ -> deserialize
+                _ -> do
+                  str <- notParsed   -- TODO: must be strict to avoid premature close
+                  BS.length str  `seq` withParseString str deserialize
   getFirstLineResp= do
 
       -- showNext "getFirstLineResp" 20

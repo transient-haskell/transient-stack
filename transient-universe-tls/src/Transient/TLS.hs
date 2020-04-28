@@ -51,19 +51,14 @@ import Debug.Trace
 
 -- | init TLS with the files "cert.pem" and "key.pem"
 initTLS :: MonadIO m => m ()
-initTLS =  do
-  c <- liftIO $ doesFileExist "cert.pem"
-  k <- liftIO $ doesFileExist "key.pem"
-  if not c || not k 
-     then error "cert.pem and key.pem must exist withing the current directory"
-     else initTLS' "cert.pem" "key.pem"
-
+initTLS =  initTLS' "cert.pem" "key.pem"
 
 -- | init TLS using  certificate.pem and a key.pem files
 initTLS' :: MonadIO m => FilePath -> FilePath -> m ()
 initTLS' certpath keypath = liftIO $ writeIORef
   tlsHooks
-  ( unsafeCoerce $ (TLS.sendData :: TLS.Context -> BL8.ByteString -> IO ())
+  ( True
+  , unsafeCoerce $ (TLS.sendData :: TLS.Context -> BL8.ByteString -> IO ())
   , unsafeCoerce $ (TLS.recvData :: TLS.Context -> IO BE.ByteString)
   , unsafeCoerce $ Transient.TLS.maybeTLSServerHandshake certpath keypath
   , unsafeCoerce $ Transient.TLS.maybeClientTLSHandshake
@@ -75,13 +70,22 @@ tlsClose ctx= bye ctx >> contextClose ctx
 maybeTLSServerHandshake
   :: FilePath -> FilePath -> Socket -> BL8.ByteString -> TransIO ()
 maybeTLSServerHandshake certpath keypath sock input= do
+ c <- liftIO $ doesFileExist "cert.pem"
+ k <- liftIO $ doesFileExist "key.pem"
+ when (not c || not k) $ error "cert.pem and key.pem must exist withing the current directory"
+ liftIO $ print "MAYBEEEEE"
  if ((not $ BL.null input) && BL.head input  == 0x16)
    then  do
         mctx <- liftIO $( do
+              print "ANTES"
+
               ctx <- makeServerContext (ssettings certpath keypath) sock  input
+              print "ANTES1"
               TLS.handshake ctx
+              print "DESPUES"
               return $Just ctx )
                `catch` \(e:: SomeException) -> do
+                     putStr "maybeTLSServerHandshake: "
                      print e
                      return Nothing               -- !> "after handshake"
 
@@ -94,7 +98,6 @@ maybeTLSServerHandshake certpath keypath sock input= do
                    
              modify $ \s -> s{ parseContext=ParseContext (TLS.recvData ctx >>= return . SMore . BL8.fromStrict)
                                ("" ::   BL8.ByteString) (unsafePerformIO $ newIORef False)}
-
              onException $ \(e:: SomeException) -> liftIO $ TLS.contextClose ctx
    else return ()
 
@@ -111,19 +114,21 @@ maybeClientTLSHandshake hostname sock input = do
            let sp= makeClientSettings global hostname
            ctx <- makeClientContext sp sock input
            TLS.handshake ctx
---           return () !> "after handshake"
            return $ Just ctx)
               `catch` \(e :: SomeException) -> return Nothing
    case mctx of
-     Nothing -> liftIO $ print "No TLS connection" >> return ()                   --  !> "NO TLS"
+     Nothing -> error $ hostname ++": no secure connection"                   --  !> "NO TLS"
      Just ctx -> do
-        liftIO $ print "TLS connection" >> return ()                           --  !> "TLS"
+        -- liftIO $ print "TLS connection" >> return ()                           --  !> "TLS"
         --modifyState $ \(Just c) -> Just  c{connData= Just $ TLSNode2Node $ unsafeCoerce ctx}
         conn <- getSData <|> error "TLS: no socket connection"
-        liftIO $ writeIORef (connData conn) $  Just $ TLSNode2Node $ unsafeCoerce ctx 
-        modify $ \st -> st{parseContext= ParseContext (TLS.recvData ctx >>= return . SMore . BL.fromChunks . (:[]))
-                               ("" ::   BL8.ByteString) (unsafePerformIO $ newIORef False)}
-        onException $ \(e:: SomeException) ->  liftIO $ TLS.contextClose ctx
+        liftIO $ writeIORef (connData conn) $  Just $ TLSNode2Node $ unsafeCoerce ctx
+        tctx <- makeParseContext $ TLS.recvData ctx  >>= return . BL.fromChunks . (:[])
+        -- let tctx= ParseContext (TLS.recvData ctx >>= return . SMore . BL.fromChunks . (:[]))
+        --                        mempty (unsafePerformIO $ newIORef False)
+        modify $ \st -> st{parseContext= tctx}
+        liftIO $ writeIORef (istream conn) tctx
+        onException $ \(_ :: SomeException) ->  liftIO $ TLS.contextClose ctx
 
 makeClientSettings global hostname= ClientParams{
          TLS.clientUseMaxFragmentLength= Nothing
@@ -198,7 +203,8 @@ ciphers =
     , TLSExtra.cipher_AES256_SHA1
     ]
 
-makeClientContext params sock input= do
+makeClientContext params sock _= do
+    input <-  liftIO $ SBSL.getContents sock
     inputBuffer <- newIORef input
     liftIO $ TLS.contextNew (backend inputBuffer) params
     where
@@ -206,7 +212,7 @@ makeClientContext params sock input= do
         TLS.backendFlush = return ()
       , TLS.backendClose = NSS.close sock
       , TLS.backendSend  = NS.sendAll sock
-      , TLS.backendRecv  = \n -> do
+      , TLS.backendRecv  =  \n -> do -- \n -> NS.recv sock n >>= \x -> print ("l=",B.length x) >> return x  `catch` \(SomeException _) -> error "EEEEEEERRRRRRRRRRRRRRRRRR"  --do
           input <- readIORef inputBuffer
 
           let (res,input')= BL.splitAt (fromIntegral n) input
@@ -232,7 +238,8 @@ makeServerContext params sock input= liftIO $ do
         TLS.backendFlush = return ()
       , TLS.backendClose = NSS.close sock
       , TLS.backendSend  = NS.sendAll sock
-      , TLS.backendRecv  =  \n -> do
+      , TLS.backendRecv  =  \n -> --NS.recv sock n 
+                              do
 
           input <- readIORef inputBuffer
           let (res,input')= BL.splitAt (fromIntegral n) input

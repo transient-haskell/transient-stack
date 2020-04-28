@@ -1,8 +1,8 @@
 #!/usr/bin/env execthirdlinedocker.sh
---  info: use sed -i 's/\r//g' file if report "/usr/bin/env: ‘execthirdlinedocker.sh\r’: No such file or directory"
--- LIB="/home/vsonline/workspace" && runghc   -DDEBUG  -i${LIB}/transient/src -i${LIB}/transient-universe/src -i${LIB}/transient-universe-tls/src -i${LIB}/axiom/src   $1  ${2} ${3}
+--  info: use "sed -i 's/\r//g' yourfile" if report "/usr/bin/env: ‘execthirdlinedocker.sh\r’: No such file or directory"
+-- LIB="/home/vsonline/workspace/transient-stack" && runghc    -i${LIB}/transient/src -i${LIB}/transient-universe/src -i${LIB}/transient/src -i${LIB}/transient-universe-tls/src -i${LIB}/axiom/src   $1  ${2} ${3}
 
--- LIB="/home/vsonline/workspace" && ghc     -i${LIB}/transient/src -i${LIB}/transient-universe/src -i${LIB}/transient-universe-tls/src -i${LIB}/axiom/src   $1 && ./`basename $1 .hs` ${2} ${3}
+-- LIB="/home/vsonline/workspace/transient-stack" && ghc  -DDEBUG   -i${LIB}/transient/src -i${LIB}/transient-universe/src    $1 && ./`basename $1 .hs` ${2} ${3}
 
 
 {-# LANGUAGE ScopedTypeVariables, OverloadedStrings   #-}
@@ -11,7 +11,7 @@ module Main where
 import Transient.Base
 import Transient.Move.Internals
 import Transient.Move.Services
-
+import Transient.TLS
 import Transient.Move.Utils
 import Control.Applicative
 import Data.Monoid
@@ -36,19 +36,43 @@ postRESTReq=  "POST /todos HTTP/1.1\r\n"
            <>"{\"id\": $1,\"userId\": $2,\"completed\": $3,\"title\":$4}"
 
 
-postRestService= [("service","post"),("type","HTTP")
+postRestService= [("service","post"),("type","HTTPS")
                  ,("nodehost","jsonplaceholder.typicode.com")
-                 ,("nodeport","80"),("HTTPstr",postRESTReq)]
-getRestService = [("service","get"),("type","HTTP")
+                 ,("HTTPstr",postRESTReq)]
+getRestService = [("service","get"),("type","HTTPS")
                  ,("nodehost","jsonplaceholder.typicode.com")
-                ,("nodeport","80"),("HTTPstr",getRESTReq)]
+                 ,("HTTPstr",getRESTReq)]
 
 
+
+
+getGoogleService = [("service","google"),("type","HTTPS")
+                   ,("nodehost","www.google.com")
+                   ,("HTTPstr",getGoogle)]
+
+getGoogle= "GET / HTTP/1.1\r\n"
+         <> "Host: $hostnode\r\n" 
+         <> "\r\n" :: String
 
 type Literal = BS.ByteString  -- appears with " "
 type Symbol= String  -- no "  when translated 
 
-main= keep $ initNode $ do
+main3= do
+    -- initTLS
+    keep$ initNode $ inputNodes <|> do
+        local $ option "go"  "go" :: Cloud String
+        nodes<- local $ getNodes
+        runAt (nodes !! 1) $localIO$print"hello"
+
+main2= keep' $ do
+    initTLS
+    r <-runCloud $ callService getGoogleService ():: TransIO Raw
+
+    liftIO $ print r
+
+main=  do
+    initTLS
+    keep $ initNode $ do
       local $ option ("go" ::String)  "go"
 
       

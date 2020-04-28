@@ -265,7 +265,7 @@ anyChar= withGetParseString $ \s -> if BS.null s then empty else  return (BS.hea
 tChar c= withGetParseString $ \s -> if BS.null s || BS.head s /= c then empty else return (BS.head s,BS.tail s)  -- !> ("tChar", BS.head s) 
    --  anyChar >>= \x -> if x == c then return c else empty !> ("tChar",x)
 
-
+{-
 withGetParseString2 :: (BS.ByteString -> TransIO (a,BS.ByteString)) -> TransIO a
 withGetParseString2 parser=  do
 
@@ -302,7 +302,7 @@ withGetParseString2 parser=  do
 -- Nothing
 --
 
-
+-}
 
 
 --
@@ -344,35 +344,34 @@ withGetParseString3 parser=  do
 
 withGetParseString ::   (BS.ByteString -> TransIO (a,BS.ByteString)) -> TransIO a
 withGetParseString parser=  Transient $ do
-
-  ParseContext readMore s done <- gets parseContext 
   
-  let loop = unsafeInterleaveIO $ do
-        r <-readIORef done
-        if r then return mempty else do
-           (mr,_) <- runTransient readMore  !> "READMORE"
-           case mr of 
-             Nothing -> mempty 
-             Just(SMore r) ->  return r <> do 
-                                             r <-readIORef done
-                                             tr ("readDone",r)
-                                             if r then mempty else loop
+    ParseContext readMore s done <- gets parseContext 
+ 
+    let loop = unsafeInterleaveIO $ do
+          r <-readIORef done
+          if r then return mempty else do
+            (mr,_) <- runTransient readMore
+            case mr of 
+              Nothing -> mempty 
+              Just(SMore r) ->  return r <> do 
+                                              d <- readIORef done
+                                              tr ("DONE",d)
+                                              if d then mempty else loop
 
-             Just(SLast r) -> do return() !> "DONE"; writeIORef done True ; return r
-             Just SDone -> do  return() !>  "DONE";writeIORef done True ; return mempty  -- !> "withGetParseString SDONE" 
+              Just(SLast r) -> do tr "LAST"; writeIORef done True ; return r
+              Just SDone -> do  tr  "DONE"; writeIORef done True ; return mempty  -- !> "withGetParseString SDONE" 
 
-  -- str <-  liftIO $ (s <> ) `liftM`  loop
-  str <- liftIO $ return s <> loop
-   
-  if BS.null str then return Nothing else do
-      --return () !> ("withGetParseString", BS.take 3 str)
-      mr <- runTrans $ parser str
-      case mr of
-                Nothing -> return Nothing    --  !> "NOTHING"
-                Just (v,str') -> do
-                      --return () !> (v,str') 
-                      modify $ \s-> s{parseContext= ParseContext readMore str' done}
-                      return $ Just v
+    -- str <-  liftIO $ (s <> ) `liftM`  loop
+    str <- liftIO $ return s <> loop
+    if BS.null str then return Nothing else do
+        --return () !> ("withGetParseString", BS.take 3 str)
+        mr <- runTrans $ parser str
+        case mr of
+                  Nothing -> return Nothing    --  !> "NOTHING"
+                  Just (v,str') -> do
+                        --return () !> (v,str') 
+                        modify $ \s-> s{parseContext= ParseContext readMore str' done}
+                        return $ Just v
 
 
 
@@ -405,11 +404,11 @@ giveParseString= (noTrans $ do
 
 tDropUntil cond= withGetParseString $ \s -> f s
   where 
-  f s= if cond s then return ((),s) else f $ BS.tail s
+  f s= if BS.null s then return ((),s) else if cond s then return ((),s) else f $ BS.tail s
 
 tTakeUntil cond= withGetParseString $ \s -> f s
   where 
-  f s= if cond s then return (s,s) else f $ BS.tail s
+  f s= if BS.null s then return (s,s) else if cond s then return (s,s) else f $ BS.tail s
 
 -- | True if the stream has finished
 isDone :: TransIO Bool
@@ -417,15 +416,15 @@ isDone=  noTrans $ do
     ParseContext _ _ done<- gets parseContext 
     liftIO $ readIORef done
 
-dropUntilDone= withGetParseString $ \s -> do
+dropUntilDone= (withGetParseString $ \s -> do
     tr "dropUntilDone"
     ParseContext _ _ done <- gets parseContext
     let loop s= do
-          if BS.null s then return((), s) else loop $ BS.tail s
-          -- end <- s `seq` liftIO $ readIORef   done
-          -- if end then return((), s) else loop $ BS.tail s
-    loop s
-    where
+            if (unsafePerformIO $ readIORef done)== True ||  BS.null s then return((), s) else loop $ BS.tail s
+            -- end <- s `seq` liftIO $ readIORef   done
+            -- if end then return((), s) else loop $ BS.tail s
+    loop s)
+   <|> return()
     
                
 
@@ -558,29 +557,19 @@ p |- q =  do
     ParseContext _ _ done <- gets parseContext
 
     let repeatIt= do
-
           pc <- liftIO $ readIORef pcontext
           if isNothing pc then tr "FINNNNNNNNNNNNNNNNNNNNNNNN" >> empty  else do
             d <- liftIO $ readIORef done
             if d then do  tr "sendDone";liftIO  $ putMVar v SDone; repeatIt else do
                 r <- p 
-              -- case r of
-              --  SDone -> do
-              --     liftIO $ tr "writedone" >> writeIORef done True
-              --     liftIO  $ putMVar v r
-              --     p <- gets parseContext
-              --     liftIO $ writeIORef pcontext $ Just p
-              --     repeatIt
-              --  _-> do
 
                 liftIO  $ putMVar v r  -- `catch` \(_ :: BlockedIndefinitelyOnMVar) -> return  False
-                
+
                 p <- gets parseContext
                 liftIO $ writeIORef pcontext $ Just p
                 case r of
                   SDone -> empty
                   SLast _ -> empty
                   SMore _ -> repeatIt
-                --if t then repeatIt  else empty
 
     repeatIt

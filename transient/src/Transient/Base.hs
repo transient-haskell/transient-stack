@@ -255,7 +255,7 @@ TransIO, TransientIO
 , threads,addThreads, freeThreads, hookedThreads,oneThread, killChilds
 
 -- * backtracking
-,undo,onUndo,retry,back,onBack,forward,backPoint,backPoint,onBackPoint,finish,onFinish
+,undo,onUndo,retry,back,onBack,forward,backPoint,onBackPoint,finish,onFinish
 
 -- * Exceptions
 

@@ -125,6 +125,7 @@ initService  service= loggedc $ cached  <|> installed  <|>  installIt
          --if has host-port key it has been installed manually
          host <- emptyIfNothing $ lookup "nodehost" service
          port <- emptyIfNothing $ lookup "nodeport" service
+         
          node <- liftIO $ createNodeServ host (read' port) service
          addNodes [node]
          return node
@@ -317,13 +318,15 @@ callService
     :: (Subst1 a String, Loggable a,Loggable b)
     => Service -> a  -> Cloud b
 callService service params = loggedc $ do 
-
-    node <-  initService  service      --  !> ("callservice initservice", service)
     let type1 = fromMaybe "" $ lookup "type" service
+
+        service'= case type1 of
+                 "HTTP" ->  service ++[("nodeport", "80")]
+                 "HTTPS" -> service ++[("nodeport", "443")]
+    node <-  initService  service'      --  !> ("callservice initservice", service)
+
     if take 4 type1=="HTTP" 
-      then do
-          callstr <- local $ emptyIfNothing $ lookup "HTTPstr" service
-          callHTTPService node callstr params
+      then callHTTPService node service' params
       else callService'  node params        --    !> ("NODE FOR SERVICE",node)
 #else
 callService
@@ -620,9 +623,13 @@ serve  serv= do
 
 
 -- callHTTPService :: (Subst1 a String, fromJSON b) =>  Node -> String -> a -> Cloud ( BS.ByteString)
-callHTTPService node callString vars=  local $ do
+callHTTPService node service vars=  local $ do
   newVar "hostnode"  $ nodeHost node
   newVar "hostport"  $ nodePort node
+  
+
+  callString <-  emptyIfNothing $ lookup "HTTPstr" service
+
   let calls = subst callString vars
   restmsg <- replaceVars calls
   return () !> ("restmsg",restmsg)
@@ -782,7 +789,7 @@ replaceVars ('$':str)= do
             then  break (\c -> c=='\r' || c =='\n' || c==' ') $ tailSafe rest'
             else  ("", rest')
 
-   if var== "port"&& null manifest then (++) <$> (show <$> freePort) <*> replaceVars rest   -- $host variable
+   if var== "port"&& null manifest then (++) <$> (show <$> freePort) <*> replaceVars rest   --  $host variable
    else if var== "host" && null manifest then (++) <$> (nodeHost <$> getMyNode) <*> replaceVars rest
    else if null manifest  then
       case M.lookup var localvars of

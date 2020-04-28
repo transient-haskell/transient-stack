@@ -187,7 +187,9 @@ instance Loggable SomeException
 newtype Raw= Raw BS.ByteString deriving (Read,Show)
 instance Loggable Raw where
   serialize (Raw str)= lazyByteString str
-  deserialize= Raw <$> notParsed
+  deserialize= Raw <$> do
+        s <- notParsed
+        BS.length s `seq` return s  --force the read till the end 
 
 data Log    = Log{ recover :: Bool, buildLog :: Builder, fulLog :: Builder, lengthFull:: Int, hashClosure :: Int}
 
