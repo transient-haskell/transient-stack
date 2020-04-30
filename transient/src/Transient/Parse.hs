@@ -355,7 +355,6 @@ withGetParseString parser=  Transient $ do
               Nothing -> mempty 
               Just(SMore r) ->  return r <> do 
                                               d <- readIORef done
-                                              tr ("DONE",d)
                                               if d then mempty else loop
 
               Just(SLast r) -> do tr "LAST"; writeIORef done True ; return r

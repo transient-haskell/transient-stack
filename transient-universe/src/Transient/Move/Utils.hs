@@ -119,7 +119,7 @@ initNodeDef host port app= do
 initNodeServ :: Loggable a => Service -> String -> Int -> Cloud a -> TransIO a
 initNodeServ services host port app= do
    node <- def <|> getNodeParams
-   let node'= node{nodeServices=services}
+   let node'= node{nodeServices=[services]}
    initWebApp node' $  app
    where
    def= do

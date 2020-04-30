@@ -11,7 +11,6 @@ module Main where
 import Transient.Base
 import Transient.Move.Internals
 import Transient.Move.Services
-import Transient.TLS
 import Transient.Move.Utils
 import Control.Applicative
 import Data.Monoid
@@ -57,21 +56,7 @@ getGoogle= "GET / HTTP/1.1\r\n"
 type Literal = BS.ByteString  -- appears with " "
 type Symbol= String  -- no "  when translated 
 
-main3= do
-    -- initTLS
-    keep$ initNode $ inputNodes <|> do
-        local $ option "go"  "go" :: Cloud String
-        nodes<- local $ getNodes
-        runAt (nodes !! 1) $localIO$print"hello"
-
-main2= keep' $ do
-    initTLS
-    r <-runCloud $ callService getGoogleService ():: TransIO Raw
-
-    liftIO $ print r
-
 main=  do
-    initTLS
     keep $ initNode $ do
       local $ option ("go" ::String)  "go"
 

@@ -107,7 +107,7 @@ withBlockingService serv proc= do
 reReturnInstances :: (String, Node, Int) -> Cloud [Node] 
 reReturnInstances (ident, node, num)=  do
       local $ delNodes [node]
-      returnInstances (ident, nodeServices node, num)
+      returnInstances (ident, head $ nodeServices node, num)
 
 -- | install and return n instances of a service, distributed
 -- among all the nodes which have monitoService executables running and connected 
@@ -149,7 +149,7 @@ returnInstances (ident, service, num)= withBlockingService service $ do
                 return () !> ("INSTALLED",n)
 
                 thisNode <- getMyNode
-                let node= Node (nodeHost thisNode)  port Nothing  (service ++ relayinfo thisNode)  -- node to be published
+                let node= Node (nodeHost thisNode)  port Nothing  ([service] ++ [relayinfo thisNode])  -- node to be published
                 addNodes [node] 
                 return node
           `catcht` \(e :: SomeException) ->  liftIO (putStr "INSTALL error: " >> print e) >> empty
@@ -238,7 +238,7 @@ installGit package  = liftIO $  do
 getLogIt :: GetLog -> Cloud BS.ByteString
 getLogIt (GetLog node)= do
     let program = fromMaybe (error "no Executable in service "++ show (nodeServices node)) $
-                             lookup "executable"  (nodeServices node)
+                             lookup2 "executable"  (nodeServices node)
     let expr = pathExe program (nodeHost node) (nodePort node)
     localIO $ BS.readFile $ logFileName expr
 
@@ -246,7 +246,7 @@ getLogIt (GetLog node)= do
 sendToNodeStandardInputIt :: (Node, String) -> Cloud ()
 sendToNodeStandardInputIt (node,inp)= do
     let program = fromMaybe (error "no Executable in service "++ show (nodeServices node)) $
-                             lookup "executable"  (nodeServices node)
+                             lookup2 "executable"  (nodeServices node)
         expr= pathExe program (nodeHost node) (nodePort node)
     return () !> ("SEND TO NODE STANDARD INPUT", program, expr)
     sendExecuteStreamIt1 (expr, inp)
@@ -261,7 +261,7 @@ sendToNodeStandardInputIt (node,inp)= do
 receiveFromNodeStandardOutputIt :: ReceiveFromNodeStandardOutput -> Cloud String
 receiveFromNodeStandardOutputIt (ReceiveFromNodeStandardOutput node ident) = local $ do
     let program = fromMaybe (error "no Executable in service "++ show (nodeServices node)) $
-                             lookup "executable"  (nodeServices node)
+                             lookup2 "executable"  (nodeServices node)
         expr= pathExe program (nodeHost node) (nodePort node)
     return () !> ("RECEIVE FROM STANDARD OUTPUT",expr)
     labelState ident

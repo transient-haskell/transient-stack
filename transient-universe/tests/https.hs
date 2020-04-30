@@ -1,6 +1,6 @@
 #!/usr/bin/env execthirdlinedocker.sh
 --  info: use "sed -i 's/\r//g' yourfile" if report "/usr/bin/env: ‘execthirdlinedocker.sh\r’: No such file or directory"
--- LIB="/home/vsonline/workspace/transient-stack" && runghc    -i${LIB}/transient/src -i${LIB}/transient-universe/src -i${LIB}/transient/src -i${LIB}/transient-universe-tls/src -i${LIB}/axiom/src   $1  ${2} ${3}
+-- LIB="/home/vsonline/workspace/transient-stack" && runghc    -i${LIB}/transient/src -i${LIB}/transient-universe/src  -i${LIB}/transient-universe-tls/src -i${LIB}/axiom/src   $1  ${2} ${3}
 
 -- LIB="/home/vsonline/workspace/transient-stack" && ghc  -DDEBUG   -i${LIB}/transient/src -i${LIB}/transient-universe/src    $1 && ./`basename $1 .hs` ${2} ${3}
 
@@ -9,21 +9,17 @@
 module Main where
 
 import Transient.Base
+import Transient.Parse
 import Transient.Move.Internals
 import Transient.Move.Services
 import Transient.TLS
-import Transient.Move.Utils
-import Control.Applicative
+import Data.List(nub,sort)
+import Data.Char(isNumber)
 import Data.Monoid
-
 import Control.Monad.State
-
-import Data.Aeson
-
-import qualified Data.ByteString as BS
-
-
-
+import qualified Data.ByteString.Lazy.Char8 as BS
+import Control.Applicative
+import Data.Typeable
 
 getGoogleService = [("service","google"),("type","HTTPS")
                    ,("nodehost","www.google.com")
@@ -33,13 +29,30 @@ getGoogle= "GET / HTTP/1.1\r\n"
          <> "Host: $hostnode\r\n" 
          <> "\r\n" :: String
 
-type Literal = BS.ByteString  -- appears with " "
-type Symbol= String  -- no "  when translated 
+getGoogleSearchService = [("service","google"),("type","HTTPS")
+        ,("nodehost","www.google.com")
+        ,("HTTPstr","GET /search?q=+$1+site:hackage.haskell.org HTTP/1.1\r\nHost: $hostnode\r\n\r\n" )]
 
 
+main=do
+  initTLS
 
-main= keep' $ do
-    initTLS
-    r <-runCloud $ callService getGoogleService ():: TransIO Raw
+  keep'  $ do
+    Raw r <-runCloud $ callService getGoogleService ()
 
-    liftIO $ print r
+    liftIO $ do putStr "100 chars of web page: "; print $ BS.take 100 r
+
+    Pack packages <- runCloud $ callService getGoogleSearchService ("Control.Monad.State" :: BS.ByteString) 
+
+    liftIO $ do putStr "Search results: " ; print packages
+
+newtype Pack= Pack [BS.ByteString] deriving (Read,Show,Typeable)
+instance Loggable Pack where
+    serialize (Pack p)= undefined
+    deserialize= do
+        Pack .reverse . sort . nub  <$>(many $ do
+        tDropUntilToken "hackage.haskell.org/package/" 
+        r <- tTakeWhile (\c -> not (isNumber c) && c /= '&' && c /= '/') 
+        let l= BS.length r -1
+        return $ if ( BS.index r l == '-') then BS.take l r else r)
+ 

@@ -117,7 +117,7 @@ maybeClientTLSHandshake hostname sock input = do
            return $ Just ctx)
               `catch` \(e :: SomeException) -> return Nothing
    case mctx of
-     Nothing -> error $ hostname ++": no secure connection"                   --  !> "NO TLS"
+     Nothing -> error $ hostname ++": No secure connection"                   --  !> "NO TLS"
      Just ctx -> do
         -- liftIO $ print "TLS connection" >> return ()                           --  !> "TLS"
         --modifyState $ \(Just c) -> Just  c{connData= Just $ TLSNode2Node $ unsafeCoerce ctx}
@@ -131,7 +131,8 @@ maybeClientTLSHandshake hostname sock input = do
         onException $ \(_ :: SomeException) ->  liftIO $ TLS.contextClose ctx
 
 makeClientSettings global hostname= ClientParams{
-         TLS.clientUseMaxFragmentLength= Nothing
+         TLS.clientEarlyData= Nothing
+      ,  TLS.clientUseMaxFragmentLength= Nothing
       ,  TLS.clientServerIdentification= (hostname,"")
       ,  TLS.clientUseServerNameIndication = False
       ,  TLS.clientWantSessionResume = Nothing

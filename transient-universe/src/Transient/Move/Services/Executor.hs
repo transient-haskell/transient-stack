@@ -14,6 +14,7 @@ import Data.Typeable
 import Control.Applicative
 import Control.Monad
 import Control.Monad.State (liftIO)
+import Data.Maybe(mapMaybe)
     
 executorService = [("service","executor")
                   ,("executable", "executor")
@@ -194,7 +195,7 @@ nodeForProcess process= do
       squeeze :: Node -> Cloud [Node]
       squeeze  node= do
 
-          case lookup "service" $ nodeServices node of
+          case lookup2 "service" $ nodeServices node of
            
                 Just "monitor" -> squeezeMonitor (nod:exc)  node
 

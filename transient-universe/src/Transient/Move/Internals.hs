@@ -87,7 +87,7 @@ import Control.Concurrent.MVar
 
 import Data.Monoid
 import qualified Data.Map as M
-import Data.List (partition,union,(\\),length) -- (nub,(\\),intersperse, find, union, length, partition)
+import Data.List (partition,union,(\\),length, nubBy) -- (nub,(\\),intersperse, find, union, length, partition)
 --import qualified Data.List(length)
 import Data.IORef
 
@@ -111,7 +111,7 @@ newtype PortID = PortNumber Int deriving (Read, Show, Eq, Typeable)
 data Node= Node{ nodeHost   :: HostName
                , nodePort   :: Int
                , connection :: Maybe (MVar Pool)
-               , nodeServices   :: Service
+               , nodeServices   :: [Service]
                }
 
          deriving (Typeable)
@@ -455,7 +455,7 @@ wormhole node comp=  do
                   nodes <- local getNodes
                   let thenode= filter (== node) nodes
                   if not (null  thenode) && isJust(connection $ Prelude.head thenode )  then return $ Prelude.head nodes else empty
-       local $ addNodes [node{nodeServices= nodeServices node ++ [("relay", show (nodeHost (relaynode :: Node),nodePort relaynode ))]}]
+       local $ addNodes [node{nodeServices= {-nodeServices node ++ -} [[("relay", show (nodeHost (relaynode :: Node),nodePort relaynode ))]]}]
 
 
 -- | wormhole without searching for relay nodes.
@@ -1273,7 +1273,7 @@ exclusiveCon mx=  do
    return r
 
 mconnect' :: Node -> TransIO  Connection
-mconnect'  node'=  exclusiveCon $ do
+mconnect'  node'=  exclusiveCon $ do 
   conn <- do    
       node <-  fixNode node'
       nodes <- getNodes
@@ -1314,12 +1314,18 @@ mconnect1 (node@(Node host port _ services ))= do
                  continue
                  empty
         -}
-     needTLS <- case lookup "type" services  of
-                       Just "HTTP" -> return False;
-                       Just "HTTPS" -> 
-                              if not isTLSIncluded then error "no 'initTLS'. This is necessary for https connections. Please include it: main= do{ initTLS; keep ...."
-                                                   else return True
-                       _ -> return isTLSIncluded 
+     let types=mapMaybe (lookup "type") services 
+     needTLS <- if "HTTP" `elem` types then return False
+                else if "HTTPS"  `elem` types then
+                     if not isTLSIncluded then error "no 'initTLS'. This is necessary for https connections. Please include it: main= do{ initTLS; keep ...."
+                                          else return True
+                else return isTLSIncluded
+      -- case lookup "type" services  of
+      --                  Just "HTTP" -> return False;
+      --                  Just "HTTPS" -> 
+      --                         if not isTLSIncluded then error "no 'initTLS'. This is necessary for https connections. Please include it: main= do{ initTLS; keep ...."
+      --                                              else return True
+      --                  _ -> return isTLSIncluded 
 
      (conn,parseContext) <- checkSelf node                                         <|>
                             timeout 1000000 (connectNode2Node host port needTLS)   <|>
@@ -1375,7 +1381,7 @@ mconnect1 (node@(Node host port _ services ))= do
              Just r -> return r
 
     checkRelay needTLS= do
-        case lookup "relay" $ nodeServices node of
+        case lookup "relay" $ map head (nodeServices node) of
                     Nothing -> empty  -- !> "NO RELAY"
                     Just relayinfo -> do
                        let (h,p)= read relayinfo
@@ -2412,12 +2418,15 @@ listen node = onAll $ do
 #endif
 
 type Pool= [Connection]
-type Package= String
-type Program= String
-type Service= [(Package, Program)]
+type SKey= String
+type SValue= String
+type Service= [(SKey, SValue)]
 
+lookup2 key doubleList= 
+   let r= mapMaybe(lookup key ) doubleList
+   in if null r then Nothing else Just $ head r
 
-
+filter2 key doubleList= mapMaybe(lookup key ) doubleList
 
 
 --------------------------------------------
@@ -2655,7 +2664,7 @@ emptyPool= liftIO $ newMVar  []
 
 -- | Create a node from a hostname (or IP address), port number and a list of
 -- services.
-createNodeServ ::  HostName -> Int -> Service -> IO Node
+createNodeServ ::  HostName -> Int -> [Service] -> IO Node
 createNodeServ h p svs=  return $ Node h  p Nothing svs
 
 
@@ -2666,7 +2675,7 @@ createWebNode :: IO Node
 createWebNode= do
   pool <- emptyPool
   port <- randomIO
-  return $ Node "webnode"  port (Just pool)  [("webnode","")]
+  return $ Node "webnode"  port (Just pool)  [[("webnode","")]]
 
 
 instance Eq Node where
@@ -2731,13 +2740,30 @@ matchNodes f = do
       return $ Prelude.map (\n -> filter f $ nodeServices n) nodes
 
 -- | Add a list of nodes to the list of existing nodes know locally.
+-- If the node is already present, It add his services to the already present node
+-- services which have the first element equal (usually the "name" field) will be substituted if the match
 addNodes :: [Node] -> TransIO ()
-addNodes   nodes=  do
---  my <- getMyNode    -- mynode must be first
+addNodes   nodes=  liftIO $ do
+  -- the local node should be the first
   nodes' <- mapM fixNode nodes
-  liftIO . atomically $ do
+  atomically $ mapM_ insert nodes'
+  where
+  insert node= do
     prevnodes <- readTVar nodeList  -- !> ("ADDNODES", nodes)
-    writeTVar nodeList $  (prevnodes \\ nodes') ++ nodes'
+
+    let mn = filter(==node) prevnodes
+
+    case mn of
+      [] -> do tr "NUEVOOOOOOOOOOOO"; writeTVar nodeList $  (prevnodes) ++ [node]
+
+
+      [n] ->do
+             let nservices= nubBy  (\s s' -> head s== head s')     $ nodeServices node++ nodeServices n
+             writeTVar nodeList $ ((prevnodes) \\ [node]) ++ [n{nodeServices=nservices}]
+
+      _ -> error $ "duplicated node: " ++ show node
+    
+    --writeTVar nodeList $  (prevnodes \\ nodes') ++ nodes'
 
 delNodes nodes= liftIO $ atomically $ do
   nodes' <-  readTVar nodeList
@@ -2931,7 +2957,6 @@ rawHTTP :: Loggable a => Node -> String -> TransIO  a
 rawHTTP node restmsg = do
   abduce   -- is a parallel operation
   tr ("***********************rawHTTP",nodeHost node, restmsg)
-  liftIO $ putStrLn restmsg
 
   --sock <- liftIO $ connectTo' 8192 (nodeHost node) (PortNumber $ fromIntegral $ nodePort node)
   mcon <- getData :: TransIO (Maybe Connection)
@@ -3025,7 +3050,7 @@ lprint x= tr x
 dechunk=  do
 
            n<- numChars
-           if n== 0 then do  showNext  "CHUNK 0" 2; string "\r\n";    return SDone else do
+           if n== 0 then do string "\r\n";  return SDone else do
                r <- tTake $ fromIntegral n   !> ("numChars",n)
                --return () !> ("message", r)
                trycrlf

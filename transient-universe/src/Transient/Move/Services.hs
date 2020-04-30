@@ -78,8 +78,6 @@ import qualified Data.ByteString.Lazy.Char8 as BS
 
 #ifndef ghcjs_HOST_OS
 import System.Directory
-import Data.ByteString.Builder
-import Transient.Parse
 import GHC.IO.Handle
 #else
 import qualified Data.JSString as JS 
@@ -106,7 +104,7 @@ reInitService ::  Node -> Cloud Node
 reInitService   node= loggedc $ cached <|> installIt
     where
     cached= local $ do
-        ns <- findInNodes $ nodeServices node 
+        ns <- findInNodes $ head $ nodeServices node 
         if null ns then  empty
          else do
           ind <- liftIO $ randomRIO(0,length ns-1)
@@ -126,7 +124,7 @@ initService  service= loggedc $ cached  <|> installed  <|>  installIt
          host <- emptyIfNothing $ lookup "nodehost" service
          port <- emptyIfNothing $ lookup "nodeport" service
          
-         node <- liftIO $ createNodeServ host (read' port) service
+         node <- liftIO $ createNodeServ host (read' port) [service]
          addNodes [node]
          return node
          
@@ -163,7 +161,7 @@ requestInstanceHost :: String -> Service -> Cloud Node
 requestInstanceHost hostname service= do
     monitorHost <- localIO $ createNodeServ hostname
             (fromIntegral monitorPort)
-            monitorService
+            [monitorService]
             
 
     nodes@[node] <- callService'  monitorHost  ("",service, 1::Int)
@@ -217,11 +215,24 @@ findInNodes service =  do
       return () !> "FINDINNODES"
       nodes <-  getNodes
 
-      return $ filter (\node  -> head service == head1  (nodeServices node)) nodes
+      return $ filter (hasService service) nodes
      
       where
-      head1 []= ("","")
+      head1 []= (mempty,mempty)
       head1 x= head x
+      hasService  service node= not $ null $ filter (\s -> head s==head service) $ nodeServices node
+
+-- >>> :t  head $ nodeServices(undefined :: Node) 
+-- head $ nodeServices(undefined :: Node) :: (Package, Program)
+--
+
+-- nodeServices :: Node -> Service
+--
+
+
+
+
+
 
 
 rfriends        =   unsafePerformIO $ newIORef ([] ::[String])
@@ -299,7 +310,7 @@ runEmbeddedService :: (Loggable a, Loggable b) =>  Service -> (a -> Cloud b) -> 
 runEmbeddedService servname serv =  do
    node <- localIO $ do
           port <- freePort
-          createNodeServ "localhost" (fromIntegral port) servname
+          createNodeServ "localhost" (fromIntegral port) [servname]
    listen node
    wormhole' (notused 4) $ loggedc $ do
       x <- local $ return (notused 0)
@@ -373,7 +384,8 @@ callServiceFail  node params = local empty
 
 monitorNode= unsafePerformIO $ createNodeServ "localhost"
             (fromIntegral monitorPort)
-            monitorService
+            [monitorService]
+
 
 
 -- | call a service located in a node
@@ -536,7 +548,7 @@ runService' servDesc defPort servAll proc=  do
 
        initNodeServ servs=do
           (mynode,serverNode) <- onAll $ do
-            node <- getNode "localhost" defPort servDesc 
+            node <- getNode "localhost" defPort [servDesc] 
             addNodes  [node]
             serverNode <- getWebServerNode 
             mynode <- if isBrowserInstance
@@ -592,10 +604,10 @@ sendToNodeStandardInput node cmd= callService' (monitorOfNode node) (node,cmd) :
    
 -- | monitor for a node is the monitor process that is running in his host
 monitorOfNode node= 
-  case lookup "relay" $ nodeServices node of
-      Nothing -> node{nodePort= 3000, nodeServices=monitorService}
+  case lookup "relay" $ map head (nodeServices node) of
+      Nothing -> node{nodePort= 3000, nodeServices=[monitorService]}
       Just info ->  let (h,p)= read info 
-                    in Node h p Nothing monitorService
+                    in Node h p Nothing [monitorService]
   
 data ReceiveFromNodeStandardOutput= ReceiveFromNodeStandardOutput Node BSS.ByteString deriving (Read,Show,Typeable)
 instance Loggable ReceiveFromNodeStandardOutput

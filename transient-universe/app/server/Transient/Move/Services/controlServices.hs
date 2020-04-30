@@ -69,7 +69,7 @@ distrib= do
   local $ option "dis" "request another instance of this program and call it"
   this <- local getMyNode
   localIO $ print this
-  [node] <- requestInstance (nodeServices this) 1
+  [node] <- requestInstance (head $ nodeServices this) 1
   local $ option "launch" "launch"
   r <- runAt node $ return "hello world"
   localIO $ print r
@@ -100,7 +100,7 @@ cloudControl= do
               putChar ':'
               putStr $ show $ nodePort monitorNode
               putChar '/'
-              putStrLn $ fromJust $ lookup "service" $ nodeServices monitorNode
+              print $ filter2 "service" $ nodeServices monitorNode
   squeezeMonitor 4 monitorNode
   where
 
@@ -131,11 +131,11 @@ cloudControl= do
               putChar ':'
               putStr $ show $ nodePort node
               putChar '/'
-              putStrLn $ fromJust $ lookup "service" $ nodeServices node
+              print $ filter2 "service" $ nodeServices node
 
 
               
-           case lookup "service" $ nodeServices node of
+           case lookup2 "service" $ nodeServices node of
            
                 Just "monitor" -> do 
                         spawn $ controlMonitor node
