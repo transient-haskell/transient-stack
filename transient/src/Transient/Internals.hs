@@ -1320,16 +1320,18 @@ inputf remove ident message mv cond = do
             --   else do 
                 let rr = read1 str 
             
-                case   rr  of
-                  Just x -> if cond x 
-                                then liftIO $ do
+                case   (rr,str)  of
+                  (Nothing,_) -> do (liftIO $ when (isJust mv) $ putStrLn ""); returnm mv 
+                  (Just x,"") -> do (liftIO $ do writeIORef rconsumed True; print x); returnm mv 
+                  (Just x,_)  -> if cond x 
+                                   then liftIO $ do
                                       writeIORef rconsumed True  
                                       print x
                                       -- hFlush stdout
                                       return x
                             
-                                else do liftIO $  when (isJust mv) $ putStrLn "";  returnm mv
-                  _      -> do liftIO $  when (isJust mv) $ putStrLn ""; returnm mv 
+                                   else do liftIO $  when (isJust mv) $ putStrLn ""
+                                           returnm mv
   loop
   where
     returnm (Just x)= return x
@@ -1385,13 +1387,14 @@ read1 s= let [(x,"")]= reads1 s  in x
 
 rprompt= unsafePerformIO $ newIORef "> "
 inputLoop= do
+    prompt <- readIORef rprompt
+    when (not $ null prompt) $ do putStr prompt ; hFlush stdout
     line <- getLine
     --threadDelay 1000000
 
     processLine line
 
-    prompt <- readIORef rprompt
-    when (not $ null prompt) $ do putStr prompt ; hFlush stdout
+    
     inputLoop
 
 
@@ -1515,7 +1518,7 @@ keep mx = do
            liftIO $ removeFile logFile `catch`  \(e :: IOError) -> return ()
            onException $ \(e :: SomeException) -> do
               top <- topState
-              let exc = (do showThreads top ; print e;  appendFile logFile $ show e ++ "\n") `catch` \(e:: IOError) -> exc
+              let exc = (do print e;showThreads top ;  appendFile logFile $ show e ++ "\n") `catch` \(e:: IOError) -> exc
               liftIO exc >> empty
            -- onException $ \(e :: SomeException ) -> liftIO $ putStr  "keep: " >> print e 
            
@@ -1621,8 +1624,8 @@ execCommandLine= do
          let i= fromJust mindex +1
          when (length  args >= i) $ do
            let path=  args !! i 
-           print $ drop (i-1) args
-           putStr "Executing: " >> print  path
+           --print $ drop (i-1) args
+           --putStr "Executing: " >> print  path
            processLine  path
 
 
@@ -1768,11 +1771,11 @@ back reason =  do
   goBackt (Backtrack _ [] )= empty
   goBackt (Backtrack b (stack@(first : bs)) )= do
         setData $ Backtrack (Just reason) stack
-        x <-  runClosure first                                      !> ("RUNCLOSURE",length stack)
+        x <-  runClosure first                                  --    !> ("RUNCLOSURE",length stack)
         Backtrack back bs' <- getData `onNothing`  return (backStateOf  reason)
 
         case back of
-                 Nothing    -> runContinuation first x             !> "FORWARD EXEC"
+                 Nothing    -> runContinuation first x         --    !> "FORWARD EXEC"
                  justreason -> do
                         setData $ Backtrack justreason bs
                         goBackt $ Backtrack justreason bs      -- !> ("BACK AGAIN",back)

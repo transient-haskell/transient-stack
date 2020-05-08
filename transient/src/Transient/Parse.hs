@@ -77,7 +77,7 @@ tTakeUntilToken token= withGetParseString $ \str -> takeit mempty str
   where 
   takeit :: Builder -> BS.ByteString -> TransIO ( BS.ByteString, BS.ByteString)
   takeit res str= 
-   if BS.null str then return (toLazyByteString res,str) else 
+   if BS.null str then empty else 
       if token `BS.isPrefixOf` str 
           then  return (toLazyByteString res ,BS.drop (BS.length token) str)
           else  if not $ BS.null str then takeit (  res <> (lazyByteString $ BS.singleton $ BS.head str)) $ BS.tail str else empty
@@ -476,50 +476,50 @@ showNext msg n= try (do r <- tTake n; liftIO $ print (msg,r); empty) <|> return 
 -- The output is nondeterministic: it can return 0, 1 or more results
 --
 -- example: https://t.co/fmx1uE2SUd
-(|--) :: TransIO (StreamData BS.ByteString) -> TransIO b -> TransIO b
-p |-- q =  do
-  --addThreads 1
-  v  <- liftIO $ newIORef undefined -- :: TransIO (MVar (StreamData BS.ByteString -> IO ()))
-  initq v <|> initp v
-    -- `catcht`  \(_ :: BlockedIndefinitelyOnMVar) -> empty
--- TODO #2 use react instrad of MVar's? need buffering-contention
-  where
-  initq v= do
-    --abduce
-    r <-withParseStream (takev v ) q
-    liftIO $ print "AFGRT WITH"
-    return r
+-- (|--) :: TransIO (StreamData BS.ByteString) -> TransIO b -> TransIO b
+-- p |-- q =  do
+--   --addThreads 1
+--   v  <- liftIO $ newIORef undefined -- :: TransIO (MVar (StreamData BS.ByteString -> IO ()))
+--   initq v <|> initp v
+--     -- `catcht`  \(_ :: BlockedIndefinitelyOnMVar) -> empty
+-- -- TODO #2 use react instrad of MVar's? need buffering-contention
+--   where
+--   initq v= do
+--     --abduce
+--     r <-withParseStream (takev v ) q
+--     liftIO $ print "AFGRT WITH"
+--     return r
 
-  initp v= do
-    --abduce
+--   initp v= do
+--     --abduce
 
-    return () !> "INITP"
-    repeatIt
-    where
-    repeatIt= do 
-        r <- p
-        putv  v r
-        return () !> "AFTER PUTV"
-        repeatIt
-        empty
-        -- return () !> ("putMVar")
-        -- t <-liftIO  $ (putv v r >> return True)  `catcht` \(_ :: BlockedIndefinitelyOnMVar) -> return  False
-        -- if t then repeatIt  else empty
+--     return () !> "INITP"
+--     repeatIt
+--     where
+--     repeatIt= do 
+--         r <- p
+--         putv  v r
+--         return () !> "AFTER PUTV"
+--         repeatIt
+--         empty
+--         -- return () !> ("putMVar")
+--         -- t <-liftIO  $ (putv v r >> return True)  `catcht` \(_ :: BlockedIndefinitelyOnMVar) -> return  False
+--         -- if t then repeatIt  else empty
 
-  takev v= do 
-       return () !> "BEFORE TAKEV"
-       --modify $ \s -> s{execMode= Remote}
-       r <- react (writeIORef v) (return()) 
-       return () !> ("TAKEV",r)
-       liftIO $ threadDelay 5000000
-       return r
+--   takev v= do 
+--        return () !> "BEFORE TAKEV"
+--        --modify $ \s -> s{execMode= Remote}
+--        r <- react (writeIORef v) (return()) 
+--        return () !> ("TAKEV",r)
+--        liftIO $ threadDelay 5000000
+--        return r
            
 
   
-  putv v s= liftIO $ do
-     proc <-   readIORef v -- :: TransIO (StreamData BS.ByteString -> IO())
-     return  () !> ("PUTV", s)
-     proc s
+--   putv v s= liftIO $ do
+--      proc <-   readIORef v -- :: TransIO (StreamData BS.ByteString -> IO())
+--      return  () !> ("PUTV", s)
+--      proc s
 
 
 

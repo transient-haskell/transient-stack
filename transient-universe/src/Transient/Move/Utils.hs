@@ -92,7 +92,7 @@ getNodeParams  =
         do
           oneThread $ option "start" "re/start node"
 
-          host <- input (const True) "hostname of this node. (Must be reachable)? "
+          host <- input' (Just "localhost") (const True) "hostname of this node. (Must be reachable, default:localhost)? "
           retry <-input' (Just "n") (== "retry") "if you want to retry with port+1 when fail, write 'retry': "
           when (retry == "retry") $ liftIO $ writeIORef rretry True
           port <- input  (const True) "port to listen? "
