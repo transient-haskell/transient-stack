@@ -35,9 +35,10 @@ postRESTReq=  "POST /todos HTTP/1.1\r\n"
            <>"{\"id\": $1,\"userId\": $2,\"completed\": $3,\"title\":$4}"
 
 
-postRestService= [("service","post"),("type","HTTP")
+postRestService= [("service","post"),("type","HTTPS")
                  ,("nodehost","jsonplaceholder.typicode.com")
                  ,("HTTPstr",postRESTReq)]
+
 getRestService = [("service","get"),("type","HTTP")
                  ,("nodehost","jsonplaceholder.typicode.com")
                  ,("HTTPstr",getRESTReq)]
@@ -45,13 +46,6 @@ getRestService = [("service","get"),("type","HTTP")
 
 
 
-getGoogleService = [("service","google"),("type","HTTPS")
-                   ,("nodehost","www.google.com")
-                   ,("HTTPstr",getGoogle)]
-
-getGoogle= "GET / HTTP/1.1\r\n"
-         <> "Host: $hostnode\r\n" 
-         <> "\r\n" :: String
 
 type Literal = BS.ByteString  -- appears with " "
 type Symbol= String  -- no "  when translated 
