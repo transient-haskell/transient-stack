@@ -39,6 +39,7 @@ library
             random -any
     else
         build-depends:
+            base64-bytestring,
             HTTP -any,
             TCache >= 0.12,
             case-insensitive -any,
@@ -169,6 +170,7 @@ executable test-transient1
             directory -any,
             filepath -any,
             stm -any,
+            base64-bytestring,
             HTTP -any,
             network >=2.8.0.0 && < 3.0.0.0,
             transformers -any,
@@ -206,6 +208,7 @@ test-suite test-transient
             directory -any,
             filepath -any,
             stm -any,
+            base64-bytestring,
             HTTP -any,
             network >=2.8.0.0 && < 3.0.0.0,
             transformers -any,

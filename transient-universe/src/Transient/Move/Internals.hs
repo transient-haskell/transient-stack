@@ -1314,7 +1314,7 @@ mconnect1 (node@(Node host port _ services ))= do
                  continue
                  empty
         -}
-     let types=mapMaybe (lookup "type") services 
+     let types=mapMaybe (lookup "type") services -- need to look in all services
      needTLS <- if "HTTP" `elem` types then return False
                 else if "HTTPS"  `elem` types then
                      if not isTLSIncluded then error "no 'initTLS'. This is necessary for https connections. Please include it: main= do{ initTLS; keep ...."

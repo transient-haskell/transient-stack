@@ -73,12 +73,14 @@ import Data.List(isPrefixOf)
 import Unsafe.Coerce
 import Data.Monoid 
 import Data.String
+import Data.Char
 import qualified Data.ByteString.Char8 as BSS
 import qualified Data.ByteString.Lazy.Char8 as BS
 
 #ifndef ghcjs_HOST_OS
 import System.Directory
 import GHC.IO.Handle
+import Data.ByteString.Base64.Lazy
 #else
 import qualified Data.JSString as JS 
 #endif
@@ -331,9 +333,10 @@ callService
 callService service params = loggedc $ do 
     let type1 = fromMaybe "" $ lookup "type" service
 
-        service'= case type1 of
+        service'= case map toUpper type1 of
                  "HTTP" ->  service ++[("nodeport", "80")]
                  "HTTPS" -> service ++[("nodeport", "443")]
+
     node <-  initService  service'      --  !> ("callservice initservice", service)
 
     if take 4 type1=="HTTP" 
@@ -645,7 +648,35 @@ callHTTPService node service vars=  local $ do
   let calls = subst callString vars
   restmsg <- replaceVars calls
   return () !> ("restmsg",restmsg)
-  rawHTTP node  restmsg
+  prox <- getProxyNode node $ map toLower $ fromJust $ lookup "type" service
+  rawHTTP prox  restmsg
+  where
+  getProxyNode nod t= do
+    let var= t ++ "_proxy"
+
+    p<- liftIO $ lookupEnv var
+    tr ("proxy",p)
+    case p of
+      Nothing -> return nod
+      Just hp -> do 
+        (upass,h,p )<- withParseString (BS.pack hp) $ do
+                tDropUntilToken (BS.pack "//") <|> return ()
+                (,,) <$> tTakeWhile' (/= '@') <*> tTakeWhile' (/=':') <*> int
+        nod<- liftIO $ createNodeServ (BS.unpack h) p [[("type","HTTP")]] 
+        tr upass
+        when (t == "https") $ do 
+              connect <- replaceVars$ subst
+                ("CONNECT $hostnode:$hostport  HTTP/1.1\r\n"
+                <> "Host: $hostnode:$hostport\r\n" 
+                <> "Proxy-Authorization: Basic "++ BS.unpack(encode upass)++"\r\n"
+                <> "\r\n" :: String) vars
+              con <- mconnect' nod
+              sendRaw con $ BS.pack connect
+              resp <- tTakeUntilToken (BS.pack "\r\n")
+              tr resp
+
+
+        return nod
 
 controlNodeService node=  send <|> receive
       where
@@ -796,7 +827,7 @@ replaceVars :: String -> TransIO String
 replaceVars []= return []
 replaceVars ('$':str)= do
    LocalVars localvars <- getState <|> return (LocalVars M.empty)
-   let (var,rest')= break (\c -> c=='-' || c==' ' ||  c=='\r' || c == '\n' ) str
+   let (var,rest')= break (\c -> c=='-' || c==':' || c==' ' ||  c=='\r' || c == '\n' ) str
        (manifest, rest)= if null rest' || head rest'=='-' 
             then  break (\c -> c=='\r' || c =='\n' || c==' ') $ tailSafe rest'
             else  ("", rest')
