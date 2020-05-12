@@ -77,11 +77,7 @@ initNode app= do
    return () !> ("NODE", node')
    initWebApp node' app
 
---maybeRetry= do
---   option "retry"  "before start, set node to retry sucessive ports if fail"
---   liftIO $ print "retry set"
---   liftIO $ writeIORef rretry True
---   empty
+
 
 getNodeParams  :: TransIO Node
 getNodeParams  =

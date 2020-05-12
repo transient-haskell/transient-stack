@@ -80,7 +80,6 @@ import qualified Data.ByteString.Lazy.Char8 as BS
 #ifndef ghcjs_HOST_OS
 import System.Directory
 import GHC.IO.Handle
-import Data.ByteString.Base64.Lazy
 #else
 import qualified Data.JSString as JS 
 #endif
@@ -648,9 +647,11 @@ callHTTPService node service vars=  local $ do
   let calls = subst callString vars
   restmsg <- replaceVars calls
   return () !> ("restmsg",restmsg)
-  prox <- getProxyNode node $ map toLower $ fromJust $ lookup "type" service
-  rawHTTP prox  restmsg
+  --prox <- getProxyNode node $ map toLower $ fromJust $ lookup "type" service
+  rawHTTP node  restmsg
+  {-
   where
+
   getProxyNode nod t= do
     let var= t ++ "_proxy"
 
@@ -677,6 +678,7 @@ callHTTPService node service vars=  local $ do
 
 
         return nod
+-}
 
 controlNodeService node=  send <|> receive
       where

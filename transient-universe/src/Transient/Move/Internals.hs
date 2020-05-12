@@ -56,6 +56,7 @@ import qualified Network.Socket.ByteString.Lazy         as SBSL
 import           Data.CaseInsensitive(mk,CI)
 import           Data.Char
 import           Data.Aeson
+import qualified Data.ByteString.Base64.Lazy            as B64
 
 -- import System.Random
 
@@ -95,13 +96,15 @@ import Control.Concurrent
 
 import System.Mem.StableName
 import Unsafe.Coerce
-import System.Mem.StableName
+import System.Environment
 
 {- TODO
   timeout for closures: little smaller in sender than in receiver
 -}
 
 --import System.Random
+pk= BS.pack
+up= BS.unpack
 
 #ifdef ghcjs_HOST_OS
 type HostName  = String
@@ -175,6 +178,35 @@ instance Applicative Cloud where
               return $ f x
 -}
 
+
+type UPassword= BS.ByteString
+type Host= BS.ByteString
+
+type ProxyData= (UPassword,Host,Int)
+rHTTPProxy= unsafePerformIO $ newIORef  (Nothing ::  Maybe (Maybe ProxyData, Maybe ProxyData))
+
+
+getHTTProxyParams t= do
+    mp <- liftIO $ readIORef rHTTPProxy
+    case mp of
+       Just (p1,p2) -> return $ if t then p2 else p1
+       Nothing -> do 
+          ps <- (,) <$> getp "http" <*> getp "https"
+          liftIO $ writeIORef rHTTPProxy $ Just ps
+          getHTTProxyParams t
+    where
+    getp t= do
+         let var= t ++ "_proxy"
+
+         p<- liftIO $ lookupEnv var
+         tr ("proxy",p)
+         case p of
+            Nothing -> return Nothing
+            Just hp -> do 
+                pr<- withParseString (BS.pack hp) $ do
+                          tDropUntilToken (BS.pack "//") <|> return ()
+                          (,,) <$> tTakeWhile' (/= '@') <*>  tTakeWhile' (/=':') <*> int
+                return $ Just pr
 
 
 -- | Execute a distributed computation inside a TransIO computation.
@@ -1272,6 +1304,7 @@ exclusiveCon mx=  do
    liftIO $ putMVar conSection ()
    return r
 
+-- check for cached connection and return it, otherwise tries to connect with connect1 without cookie check
 mconnect' :: Node -> TransIO  Connection
 mconnect'  node'=  exclusiveCon $ do 
   conn <- do    
@@ -1302,6 +1335,7 @@ mconnect'  node'=  exclusiveCon $ do
 
 
 #ifndef ghcjs_HOST_OS
+-- effective connect trough different methods
 mconnect1 (node@(Node host port _ services ))= do
 
      return ()  !> ("MCONNECT1",host,port,nodeServices node,isTLSIncluded)
@@ -1326,6 +1360,7 @@ mconnect1 (node@(Node host port _ services ))= do
       --                         if not isTLSIncluded then error "no 'initTLS'. This is necessary for https connections. Please include it: main= do{ initTLS; keep ...."
       --                                              else return True
       --                  _ -> return isTLSIncluded 
+    
 
      (conn,parseContext) <- checkSelf node                                         <|>
                             timeout 1000000 (connectNode2Node host port needTLS)   <|>
@@ -1431,10 +1466,40 @@ mconnect1 (node@(Node host port _ services ))= do
     connectNode2Node host port needTLS= do
         -- onException $ \(e :: SomeException) -> empty
         return () !> "NODE 2 NODE"
-        connectSockTLS host port needTLS
+        mproxy <- getHTTProxyParams needTLS
+        let (upass,h',p) = case (mproxy) of
+                            Just p ->   p
+                            _ ->  ("",BS.pack host,port)
+            h= BS.unpack h'
 
+        tr (upass,h',p)
+        if (h == host || p == port) then
+            connectSockTLS h p needTLS
 
+           
+          else  do
+              let connect = 
+                    "CONNECT "<> pk host <> ":" <> pk (show port) <> " HTTP/1.1\r\n" <>
+                    "Host: "<> pk host <> ":" <> BS.pack (show port) <>  "\r\n" <> 
+                    "Proxy-Authorization: Basic " <> (B64.encode upass) <> "\r\n\r\n" 
+              connectSockTLS h p False
+              conn <- getSData <|> error "mconnect: no connection data"
+
+              sendRaw conn $  connect
+              resp <- tTakeUntilToken (BS.pack "\r\n")
+              tr resp
+            -- else do
+            --   let req= 
+            --         "GET / HTTP/1.1\r\n"
+            --         <> "Host: google.es\r\n" 
+            --         <> "Proxy-Authorization: Basic " <> (B64.encode upass) <> "\r\n\r\n" 
+
+            --         <> "\r\n"
+            --   sendRaw conn req
+            --   resp <- notParsed
+            --   tr resp 
         conn <- getSData <|> error "mconnect: no connection data"
+
         --mynode <- getMyNode
         parseContext <- gets parseContext 
         return $ Just(conn,parseContext)
@@ -1527,6 +1592,7 @@ data ConnectionError= ConnectionError String Node deriving (Show , Read)
 
 instance Exception ConnectionError
 
+-- check for cached connect, if not, it connects and check cookie with mconnect2
 mconnect node'= do
   node <-  fixNode node'
   nodes <- getNodes
@@ -1548,6 +1614,7 @@ mconnect node'= do
               delNodes [node]
               mconnect2 node
   where
+  -- connect and check for connection cookie among nodes
   mconnect2 node= do
     conn <- mconnect1 node
 --  `catcht` \(e :: SomeException) -> empty
@@ -1839,7 +1906,6 @@ listenNew port conn'=  do
 
    return () !> "BEFORE HANDSHAKE"
    maybeTLSServerHandshake sock  input
-   liftIO $ print "AFTER"
 
 
    -- (method,uri, headers) <- receiveHTTPHead

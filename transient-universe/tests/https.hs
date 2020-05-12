@@ -1,8 +1,6 @@
 #!/usr/bin/env execthirdlinedocker.sh
 --  info: use "sed -i 's/\r//g' yourfile" if report "/usr/bin/env: ‘execthirdlinedocker.sh\r’: No such file or directory"
--- LIB="/home/vsonline/workspace/transient-stack" && runghc    -i${LIB}/transient/src -i${LIB}/transient-universe/src  -i${LIB}/transient-universe-tls/src -i${LIB}/axiom/src   $1  ${2} ${3}
-
--- LIB="/home/vsonline/workspace/transient-stack" && ghc  -DDEBUG   -i${LIB}/transient/src -i${LIB}/transient-universe/src    $1 && ./`basename $1 .hs` ${2} ${3}
+-- LIB="/home/vsonline/workspace/transient-stack" && runghc  -i${LIB}/transient/src -i${LIB}/transient-universe/src  -i${LIB}/transient-universe-tls/src -i${LIB}/axiom/src   $1  ${2} ${3}
 
 
 {-# LANGUAGE ScopedTypeVariables, OverloadedStrings   #-}
@@ -22,10 +20,10 @@ import Control.Applicative
 import Data.Typeable
 
 getGoogleService = [("service","google"),("type","HTTPS")
-                   ,("nodehost","www.google.com")
+                   ,("nodehost","196afd4719a752aec453ca57f57623aa4cf6-3000.app.online.visualstudio.com")
                    ,("HTTPstr",getGoogle)]
 
-getGoogle= "GET / HTTP/1.1\r\n"
+getGoogle= "GET /0/0/e/f/w/\"r\"/(\"localhost\",3000,[])/e/e/e/e/ HTTP/1.1\r\n"
          <> "Host: $hostnode\r\n" 
          <> "\r\n" :: String
 
@@ -49,8 +47,8 @@ main=do
 newtype Pack= Pack [BS.ByteString] deriving (Read,Show,Typeable)
 instance Loggable Pack where
     serialize (Pack p)= undefined
-    deserialize= do
-        Pack .reverse . sort . nub  <$>(many $ do
+    
+    deserialize= Pack . reverse . sort . nub  <$> (many $ do
         tDropUntilToken "hackage.haskell.org/package/" 
         r <- tTakeWhile (\c -> not (isNumber c) && c /= '&' && c /= '/') 
         let l= BS.length r -1

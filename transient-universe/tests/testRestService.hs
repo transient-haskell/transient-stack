@@ -9,6 +9,7 @@
 module Main where
 
 import Transient.Base
+import Transient.TLS
 import Transient.Move.Internals
 import Transient.Move.Services
 import Transient.Move.Utils
@@ -39,7 +40,7 @@ postRestService= [("service","post"),("type","HTTPS")
                  ,("nodehost","jsonplaceholder.typicode.com")
                  ,("HTTPstr",postRESTReq)]
 
-getRestService = [("service","get"),("type","HTTP")
+getRestService = [("service","get"),("type","HTTPS")
                  ,("nodehost","jsonplaceholder.typicode.com")
                  ,("HTTPstr",getRESTReq)]
 
@@ -51,6 +52,7 @@ type Literal = BS.ByteString  -- appears with " "
 type Symbol= String  -- no "  when translated 
 
 main=  do
+    initTLS
     keep $ initNode $ do
       local $ option ("go" ::String)  "go"
 

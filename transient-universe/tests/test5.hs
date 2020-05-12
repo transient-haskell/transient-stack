@@ -28,11 +28,12 @@ import Control.Concurrent.STM.TChan
 import Transient.EVars
 import Data.Monoid
 import Transient.Move.Services
+import Transient.Mailboxes
 import Transient.Indeterminism
 import Data.IORef
 
 
-main= keep $ do 
+main2= keep $ do 
      i <- threads 0 $ choose[0..]
      abduce
      liftIO $ threadDelay 1000000
@@ -92,7 +93,7 @@ test10= do
     local $ return (42 :: Int)
     teleport
 
-main2 = do 
+main = do 
   --initTLS
   keep $ initNode $ inputNodes <|>  do
     local $ option "r" "run"
