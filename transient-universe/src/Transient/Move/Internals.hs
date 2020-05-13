@@ -1473,7 +1473,7 @@ mconnect1 (node@(Node host port _ services ))= do
             h= BS.unpack h'
 
         tr (upass,h',p)
-        if (h == host || p == port) then
+        if (h == host && p == port) then
             connectSockTLS h p needTLS
 
            
@@ -1486,7 +1486,7 @@ mconnect1 (node@(Node host port _ services ))= do
               conn <- getSData <|> error "mconnect: no connection data"
 
               sendRaw conn $  connect
-              resp <- tTakeUntilToken (BS.pack "\r\n")
+              resp <- tTakeUntilToken (BS.pack "\r\n\r\n")
               tr resp
             -- else do
             --   let req= 
@@ -1906,8 +1906,8 @@ listenNew port conn'=  do
 
    return () !> "BEFORE HANDSHAKE"
    maybeTLSServerHandshake sock  input
-
-
+   tr "AFTER HANDSHAKE"
+   showNext "head" 20
    -- (method,uri, headers) <- receiveHTTPHead
 
    firstLine@(method, uri, vers) <- getFirstLine
