@@ -205,9 +205,9 @@ getHTTProxyParams t= do
             Just hp -> do 
                 pr<- withParseString (BS.pack hp) $ do
                           tDropUntilToken (BS.pack "//") <|> return ()
-                          (,,) <$> tTakeWhile' (/= '@') <*>  tTakeWhile' (/=':') <*> int
+                          (,,) <$> getUPass <*>  tTakeWhile' (/=':') <*> int
                 return $ Just pr
-
+    getUPass= tTakeUntilToken "@" <|> return ""
 
 -- | Execute a distributed computation inside a TransIO computation.
 -- All the  computations in the TransIO monad that enclose the cloud computation must be `logged`
@@ -1363,7 +1363,7 @@ mconnect1 (node@(Node host port _ services ))= do
     
 
      (conn,parseContext) <- checkSelf node                                         <|>
-                            timeout 1000000 (connectNode2Node host port needTLS)   <|>
+                            timeout 10000000 (connectNode2Node host port needTLS)   <|>
                             timeout 1000000 (connectWebSockets host port needTLS)  <|>
                             timeout 1000000 (checkRelay needTLS)                   <|>
                             (throw $ ConnectionError "no connection" node)
@@ -1472,7 +1472,7 @@ mconnect1 (node@(Node host port _ services ))= do
                             _ ->  ("",BS.pack host,port)
             h= BS.unpack h'
 
-        tr (upass,h',p)
+        tr ("PROXY",upass,h',p)
         if (h == host && p == port) then
             connectSockTLS h p needTLS
 
@@ -1481,13 +1481,18 @@ mconnect1 (node@(Node host port _ services ))= do
               let connect = 
                     "CONNECT "<> pk host <> ":" <> pk (show port) <> " HTTP/1.1\r\n" <>
                     "Host: "<> pk host <> ":" <> BS.pack (show port) <>  "\r\n" <> 
-                    "Proxy-Authorization: Basic " <> (B64.encode upass) <> "\r\n\r\n" 
+
+                    "User-Agent: transient\r\n" <>
+                    (if BS.null upass then "" else "Proxy-Authorization: Basic " <> (B64.encode upass)<> "\r\n") <>
+                    "Proxy-Connection: Keep-Alive\r\n" <>
+                    "\r\n" 
+              tr connect
               connectSockTLS h p False
               conn <- getSData <|> error "mconnect: no connection data"
 
               sendRaw conn $  connect
               resp <- tTakeUntilToken (BS.pack "\r\n\r\n")
-              tr resp
+              tr ("PROXY RESPONSE=",resp)
             -- else do
             --   let req= 
             --         "GET / HTTP/1.1\r\n"

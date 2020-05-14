@@ -1,6 +1,6 @@
 #!/usr/bin/env execthirdlinedocker.sh
 --  info: use "sed -i 's/\r//g' yourfile" if report "/usr/bin/env: ‘execthirdlinedocker.sh\r’: No such file or directory"
--- LIB="/home/vsonline/workspace/transient-stack" && runghc  -i${LIB}/transient/src -i${LIB}/transient-universe/src  -i${LIB}/transient-universe-tls/src -i${LIB}/axiom/src   $1  ${2} ${3}
+-- LIB="/home/vsonline/workspace/transient-stack" && runghc -DDEBUG -i${LIB}/transient/src -i${LIB}/transient-universe/src  -i${LIB}/transient-universe-tls/src -i${LIB}/axiom/src   $1  ${2} ${3}
 
 
 {-# LANGUAGE ScopedTypeVariables, OverloadedStrings   #-}
@@ -19,15 +19,15 @@ import qualified Data.ByteString.Lazy.Char8 as BS
 import Control.Applicative
 import Data.Typeable
 
-getGoogleService = [("service","google"),("type","HTTPS")
-                   ,("nodehost","196afd4719a752aec453ca57f57623aa4cf6-3000.app.online.visualstudio.com")
+getGoogleService = [("service","google"),("type","HTTP")
+                   ,("nodehost","google.es")
                    ,("HTTPstr",getGoogle)]
 
 getGoogle= "GET /0/0/e/f/w/\"r\"/(\"localhost\",3000,[])/e/e/e/e/ HTTP/1.1\r\n"
          <> "Host: $hostnode\r\n" 
          <> "\r\n" :: String
 
-getGoogleSearchService = [("service","google"),("type","HTTPS")
+getGoogleSearchService = [("service","google"),("type","HTTP")
         ,("nodehost","www.google.com")
         ,("HTTPstr","GET /search?q=+$1+site:hackage.haskell.org HTTP/1.1\r\nHost: $hostnode\r\n\r\n" )]
 
@@ -39,7 +39,7 @@ main=do
     Raw r <-runCloud $ callService getGoogleService ()
 
     liftIO $ do putStr "100 chars of web page: "; print $ BS.take 100 r
-
+    empty
     Pack packages <- runCloud $ callService getGoogleSearchService ("Control.Monad.State" :: BS.ByteString) 
 
     liftIO $ do putStr "Search results: " ; print packages
