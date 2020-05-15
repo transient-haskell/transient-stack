@@ -73,16 +73,12 @@ maybeTLSServerHandshake certpath keypath sock input= do
  c <- liftIO $ doesFileExist "cert.pem"
  k <- liftIO $ doesFileExist "key.pem"
  when (not c || not k) $ error "cert.pem and key.pem must exist withing the current directory"
- liftIO $ print "MAYBEEEEE"
  if ((not $ BL.null input) && BL.head input  == 0x16)
    then  do
         mctx <- liftIO $( do
-              print "ANTES"
 
               ctx <- makeServerContext (ssettings certpath keypath) sock  input
-              print "ANTES1"
               TLS.handshake ctx
-              print "DESPUES"
               return $Just ctx )
                `catch` \(e:: SomeException) -> do
                      putStr "maybeTLSServerHandshake: "
@@ -92,12 +88,12 @@ maybeTLSServerHandshake certpath keypath sock input= do
         case mctx of
           Nothing -> return ()
           Just ctx -> do
+             tr "TLS CONNECTION"
              -- modifyState $ \(Just c) -> Just  c{connData= Just $ TLSNode2Node $ unsafeCoerce ctx}
              conn <- getSData <|> error "TLS: no socket connection"
              liftIO $ writeIORef (connData conn) $  Just $ TLSNode2Node $ unsafeCoerce ctx 
-                   
              modify $ \s -> s{ parseContext=ParseContext (TLS.recvData ctx >>= return . SMore . BL8.fromStrict)
-                               ("" ::   BL8.ByteString) (unsafePerformIO $ newIORef False)}
+                               "" (unsafePerformIO $ newIORef False)}
              onException $ \(e:: SomeException) -> liftIO $ TLS.contextClose ctx
    else return ()
 
@@ -228,6 +224,7 @@ makeClientContext params sock _= do
 
 -- | Make a server-side TLS 'Context' for the given settings, on top of the
 -- given TCP `Socket` connected to the remote end.
+
 makeServerContext :: MonadIO m => TLS.ServerParams -> Socket -> BL.ByteString  -> m Context
 makeServerContext params sock input= liftIO $ do
     inputBuffer <- newIORef input
