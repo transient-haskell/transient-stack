@@ -645,7 +645,7 @@ teleport  =  do
               -- for synchronous streaming
               Just (chs,clos,mvar,_) -> do
                  when synchronous $ liftIO $ takeMVar mvar
-                 return()  !> ("TELEPORT removing", (length $unsafePerformIO $  readMVar chs)-1)
+                 return()  !> ("TELEPORT removing", (Data.List.length $unsafePerformIO $  readMVar chs)-1)
                  --ths <- liftIO $  readMVar (children cont)
                  --liftIO $ when (length ths > 1)$  mapM_ (killChildren . children) $ tail ths
                  --runTrans  $  msend conn $ SLast (ClosureData closRemote' closLocal  mempty)
@@ -1280,7 +1280,7 @@ mclose (Connection _ _ _
 
 mclose con= do
    --c <- liftIO $ readIORef $ connData con
-   c <- atomicModifyIORef (connData con) $ \c  -> (Nothing,c)
+   c <- liftIO $ atomicModifyIORef (connData con) $ \c  -> (Nothing,c)
 
    case c of
      Just (Web2Node sconn)->
@@ -1568,7 +1568,8 @@ makeParseContext rec= liftIO $ do
 
     
 #else
-  mconnect1 (node@(Node host port (Just pool) _))= do
+  
+mconnect1 (node@(Node host port (Just pool) _))= do
      conn <- getSData <|> error "connect: listen not set for this node"
      if nodeHost node== "webnode"
       then  do
@@ -1626,6 +1627,7 @@ mconnect node'= do
 --  `catcht` \(e :: SomeException) -> empty
     cd <- liftIO $ readIORef $ connData conn
     case cd of
+#ifndef ghcjs_HOST_OS
         Just Self -> return()
         Just (TLSNode2Node _ ) -> do
                   checkCookie conn
@@ -1633,10 +1635,10 @@ mconnect node'= do
         Just (Node2Node _ _ _) -> do
                   checkCookie conn
                   watchConnection conn node
-
+#endif
         _         -> watchConnection conn node
     return conn
-   
+#ifndef ghcjs_HOST_OS   
   checkCookie conn= do 
       cookie <- liftIO $ readIORef rcookie
       mynode <- getMyNode
@@ -1655,6 +1657,7 @@ mconnect node'= do
                     Just(Node2Node _ s _) ->  liftIO $ NS.close s -- since the HTTP firewall closes the connection
                     Just(TLSNode2Node c) -> liftIO $ tlsClose c
               empty
+#endif
 
   watchConnection conn node= do
         liftIO $ atomicModifyIORef connectionList $ \m -> (conn:m,())
@@ -2477,7 +2480,7 @@ listen node = onAll $ do
 
         events <- liftIO $ newIORef M.empty
         rnode  <- liftIO $ newIORef node
-        conn <-  defConnection >>= \c -> return c{myNode=rnode,comEvent=events}
+        conn <-  defConnection >>= \c -> return c{myNode=rnode} -- ,comEvent=events}
         liftIO $ atomicModifyIORef connectionList $ \m ->  (conn: m,())
 
         setData conn

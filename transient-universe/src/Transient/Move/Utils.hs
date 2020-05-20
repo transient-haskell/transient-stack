@@ -25,7 +25,6 @@ import Control.Monad.State
 import Data.IORef
 import System.Environment
 import System.IO.Error
-import System.Directory(removeFile)
 import Data.Typeable
 import Data.List((\\), isPrefixOf)
 import qualified Data.ByteString.Char8 as BS
