@@ -1,6 +1,6 @@
 #!/usr/bin/env execthirdlinedocker.sh
 --  info: use sed -i 's/\r//g' file if report "/usr/bin/env: ‘execthirdlinedocker.sh\r’: No such file or directory"
--- LIB=~/workspace/transient-stack/ && ghc  -DDEBUG   -i${LIB}/transient/src -i${LIB}/transient-universe/src -i${LIB}/transient-universe-tls/src -i${LIB}/axiom/src   $1 && ./`basename $1 .hs` ${2} ${3}
+-- LIB=~/workspace/transient-stack/ && ghc     -i${LIB}/transient/src -i${LIB}/transient-universe/src -i${LIB}/transient-universe-tls/src -i${LIB}/axiom/src   $1 && ./`basename $1 .hs` ${2} ${3}
 
 -- mkdir -p ./static && ghcjs --make   -i../transient/src -i../transient-universe/src -i../transient-universe-tls/src  -i../axiom/src   $1 -o static/out && runghc   -i../transient/src -i../transient-universe/src -i../axiom/src   $1 ${2} ${3}
 -- 
@@ -94,14 +94,14 @@ test10= do
     teleport
 
 main = do 
-  --initTLS
+  initTLS
   keep $ initNode $ inputNodes <|>  do
     local $ option "r" "run"
     i <- atOtherNode $ do 
        showURL
        localIO $ print "hello"
        
-       i <- local $ return "RESPONSE" -- threads 0 $ choose[1:: Int ..]
+       i <- local $  threads 0 $ choose[1:: Int ..]
        localIO $ threadDelay 1000000
        return i
     localIO $ print i
