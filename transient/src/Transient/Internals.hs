@@ -1538,7 +1538,7 @@ keep mx = do
 
                    d <- input' (Just "n") (\x -> x=="y" || x =="n" || x=="Y" || x=="N") "\nDetails? N/y "
                    when  (d == "y") $
-                       let line (x,y,_)= putStrLn y  -- do putStr x; putStr "\t\t"; putStrLn y
+                       let line (x,y,_)= putStr y  -- do putStr x; putStr "\t\t"; putStrLn y
                        in liftIO $ mapM_ line  mbs
                    liftIO $ putStrLn ""
                    empty
@@ -1743,6 +1743,11 @@ forward reason= noTrans $ do
     Backtrack _ stack <- getData `onNothing`  ( return $ backStateOf reason)
     setData $ Backtrack(Nothing `asTypeOf` Just reason)  stack
 
+-- | put at the end of an backtrack handler intended to backtrack to other previous handlers.
+-- This is the default behaviour in transient. `backtrack` is in order to keep the type compiler happy
+backtrack :: TransIO a
+backtrack= return $ error "backtrack should be called at the end of an exception handler with no `forward`, `continue` or `retry` on it"
+
 -- | 'forward' for the default undo track; equivalent to @forward ()@.
 retry= forward ()
 
@@ -1893,7 +1898,7 @@ onExceptionPoint= onBackPoint
 
 onException' :: Exception e => TransIO a -> (e -> TransIO a) -> TransIO a 
 onException' mx f= onAnyException mx $ \e -> do
-            return () !>  "EXCEPTION HANDLER EXEC" 
+            --return () !>  "EXCEPTION HANDLER EXEC" 
             case fromException e of
                Nothing -> do
                   Backtrack r stack <- getData  `onNothing`  return (backStateOf  e)      
