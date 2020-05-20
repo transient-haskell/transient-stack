@@ -575,12 +575,11 @@ teleport  =  do
   local $ do
     conn@Connection{connData=contype, synchronous=synchronous, localClosures= localClosures,calling= calling} <- getData
                              `onNothing` error "teleport: No connection defined: use wormhole"
-    onException $ \(e :: IOException ) -> do
-         tr ("teleport:", e)    -- should be three tries at most
-         liftIO $ writeIORef contype Nothing
-         mclose conn  -- msend will open a new connection. move that open here?
-
-         continue
+    -- onException $ \(e :: IOException ) -> do -- to retry the connection in case of failure
+    --      tr ("teleport:", e)    -- should be three tries at most
+    --      liftIO $ writeIORef contype Nothing
+    --      mclose conn  -- msend will open a new connection. move that open here?
+    --      continue
 
     Transient $ do
      labelState  "teleport"
@@ -966,7 +965,7 @@ msend con r=  do
               let bs = toLazyByteString $ serialize r
               WS.sendTextData sconn $ toLazyByteString $ int64Dec $ BS.length bs
               WS.sendTextData sconn bs   -- !> ("N2N SEND", bd)
-
+      Just Self -> error "connection to the same node shouldn't happen, file  a bug please"
       _ -> error "msend out of connection context: use wormhole to connect"
 
     TOD time _ <- getClockTime
@@ -1214,7 +1213,7 @@ parallelReadHandler conn= do
     many' extractPacket
     where
     extractPacket= do
-        len <- integer <|> (do s <- getParseBuffer; error $ show $ ("malformed data received: expected Int, received: ", BS.take 5 s))
+        len <- integer <|> (do s <- getParseBuffer; if BS.null s then empty else error $ show $ ("malformed data received: expected Int, received: ", BS.take 10 s))
         str <- tTake (fromIntegral len)
         tr ("MREAD  <-------<-------",str)
         TOD t _ <- liftIO $ getClockTime
@@ -2824,7 +2823,7 @@ addNodes   nodes=  liftIO $ do
     let mn = filter(==node) prevnodes
 
     case mn of
-      [] -> do tr "NUEVOOOOOOOOOOOO"; writeTVar nodeList $  (prevnodes) ++ [node]
+      [] -> do tr "NUEVO NODO"; writeTVar nodeList $  (prevnodes) ++ [node]
 
 
       [n] ->do
