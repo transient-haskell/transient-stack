@@ -19,11 +19,11 @@ import qualified Data.ByteString.Lazy.Char8 as BS
 import Control.Applicative
 import Data.Typeable
 
-getGoogleService = [("service","google"),("type","HTTP")
-                   ,("nodehost","google.es")
+getGoogleService = [("service","google"),("type","HTTPS")
+                   ,("nodehost","www.google.com")
                    ,("HTTPstr",getGoogle)]
 
-getGoogle= "GET /0/0/e/f/w/\"r\"/(\"localhost\",3000,[])/e/e/e/e/ HTTP/1.1\r\n"
+getGoogle= "GET / HTTP/1.1\r\n"
          <> "Host: $hostnode\r\n" 
          <> "\r\n" :: String
 
