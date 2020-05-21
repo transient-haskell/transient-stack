@@ -1360,7 +1360,7 @@ mconnect1 (node@(Node host port _ services ))= do
       --                                              else return True
       --                  _ -> return isTLSIncluded 
     
-
+     tr ("NEED TLS",needTLS)
      (conn,parseContext) <- checkSelf node                                         <|>
                             timeout 10000000 (connectNode2Node host port needTLS)   <|>
                             timeout 1000000 (connectWebSockets host port needTLS)  <|>
@@ -1485,22 +1485,16 @@ mconnect1 (node@(Node host port _ services ))= do
                     "Proxy-Connection: Keep-Alive\r\n" <>
                     "\r\n" 
               tr connect
-              connectSockTLS h p False
+              connectSockTLS h p  False
               conn <- getSData <|> error "mconnect: no connection data"
 
               sendRaw conn $  connect
               resp <- tTakeUntilToken (BS.pack "\r\n\r\n")
               tr ("PROXY RESPONSE=",resp)
-            -- else do
-            --   let req= 
-            --         "GET / HTTP/1.1\r\n"
-            --         <> "Host: google.es\r\n" 
-            --         <> "Proxy-Authorization: Basic " <> (B64.encode upass) <> "\r\n\r\n" 
+              when (isTLSIncluded && needTLS) $ do
+                Just(Node2Node{socket=sock}) <- liftIO $ readIORef $ connData conn
+                maybeClientTLSHandshake h sock mempty
 
-            --         <> "\r\n"
-            --   sendRaw conn req
-            --   resp <- notParsed
-            --   tr resp 
         conn <- getSData <|> error "mconnect: no connection data"
 
         --mynode <- getMyNode
