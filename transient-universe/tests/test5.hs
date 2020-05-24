@@ -1,13 +1,13 @@
 #!/usr/bin/env execthirdlinedocker.sh
 --  info: use sed -i 's/\r//g' file if report "/usr/bin/env: ‘execthirdlinedocker.sh\r’: No such file or directory"
--- LIB=~/workspace/transient-stack/ && ghc     -i${LIB}/transient/src -i${LIB}/transient-universe/src -i${LIB}/transient-universe-tls/src -i${LIB}/axiom/src   $1 && ./`basename $1 .hs` ${2} ${3}
+-- LIB=/projects/transient-stack/ && ghc  -DDEBUG -threaded  -i${LIB}/transient/src -i${LIB}/transient-universe/src -i${LIB}/transient-universe-tls/src -i${LIB}/axiom/src   $1 && ./`basename $1 .hs` ${2} ${3}
 
 -- mkdir -p ./static && ghcjs --make   -i../transient/src -i../transient-universe/src -i../transient-universe-tls/src  -i../axiom/src   $1 -o static/out && runghc   -i../transient/src -i../transient-universe/src -i../axiom/src   $1 ${2} ${3}
 -- 
 
 -- cd /projects/transient && cabal install -f debug --force-reinstalls && cd ../transient-universe && cabal install --force-reinstalls &&  runghc $1 $2 $3 $4
 
-{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE ScopedTypeVariables, FlexibleInstances #-}
 module Main where
 
 import Transient.Base
@@ -17,20 +17,14 @@ import Transient.TLS
 import Transient.Move.Utils
 import Control.Applicative
 import Control.Monad.IO.Class
-import Data.String
 import Control.Monad.State
-import qualified Data.Map as M
 import qualified Data.Vector as V hiding (empty)
 import Transient.MapReduce 
-import Data.TCache
 import Control.Concurrent
-import Control.Concurrent.STM.TChan
 import Transient.EVars
-import Data.Monoid
 import Transient.Move.Services
 import Transient.Mailboxes
 import Transient.Indeterminism
-import Data.IORef
 
 
 main2= keep $ do 
@@ -85,7 +79,6 @@ main4 = do initTLS; keep $ initNode $ inputNodes <|> hi
       
 
 
-
   
 test11= localIO $ print "hello world"
 test10= do
@@ -94,23 +87,29 @@ test10= do
     teleport
 
 main = do 
-  initTLS
-  keep $ initNode $ inputNodes <|>  do
-    local $ option "r" "run"
-    i <- atOtherNode $ do 
-       showURL
-       localIO $ print "hello"
-       
-       i <- local $  threads 0 $ choose[1:: Int ..]
-       localIO $ threadDelay 1000000
-       return i
-    localIO $ print i
+  --initTLS
+  keep $  initNode $ inputNodes <|>  do
+    void $ local $ option "r" "init"
+
+    node <- otherNode
+
+    wormhole node $ local $  do
+        void $ local $ option "r" "run"
+        i <-  atRemote $ do 
+                showURL
+                localIO $ print "hello"
+                
+                i <- local $   threads 0 $ choose[1:: Int ..]
+                localIO $ threadDelay 1000000
+                return i
+        localIO $ print i
    where
-   atOtherNode doit= do
-     node <- local $ do
+   otherNode= local $ do
            nodes <-  getNodes
            guard $ length nodes > 1
            return $ nodes !! 1
+   atOtherNode doit= do
+     node <- otherNode
      runAt node  doit
 
 test8 =  do
