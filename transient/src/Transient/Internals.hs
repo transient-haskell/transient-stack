@@ -613,7 +613,7 @@ oneThread comp = do
 labelState :: (MonadIO m,TransMonad m) => BS.ByteString -> m ()
 labelState l =  do
   st <- get
-  liftIO $ atomicModifyIORef (labelth st) $ \(status,_) -> ((status,  l), ())
+  liftIO $ atomicModifyIORef (labelth st) $ \(status,prev) -> ((status,  prev <> BS.pack "," <> l), ())
 
 -- | return the threadId associated with an state (you can see all of them with the console option 'ps')
 threadState thid= do   
@@ -929,7 +929,6 @@ newRState x= do
 setRState:: (MonadIO m,TransMonad m, Typeable a) => a -> m ()
 setRState x= do
     Ref ref <- getData `onNothing` do
-                            return () !> "SETRSTATE NOTHING"
                             ref <- Ref <$> liftIO (newIORef x)
                             setData  ref
                             return  ref
@@ -1396,6 +1395,7 @@ inputLoop= do
 
     
     inputLoop
+   `catch`  \(SomeException _) -> myThreadId >>= killThread 
 
 
 {-# NOINLINE rconsumed #-}
@@ -1510,17 +1510,18 @@ keep :: Typeable a => TransIO a -> IO (Maybe a)
 keep mx = do
    liftIO $ hSetBuffering stdout LineBuffering
    rexit <- newEmptyMVar
-   forkIO $ do
+   void $ forkIO $ do
 --       liftIO $ putMVar rexit  $ Right Nothing
        let logFile= "trans.log"
 
-       runTransient $ do
+       void $ runTransient $ do
            liftIO $ removeFile logFile `catch`  \(e :: IOError) -> return ()
            onException $ \(e :: SomeException) -> do
-              top <- topState
-              let exc = (do print e;showThreads top ;  appendFile logFile $ show e ++ "\n") `catch` \(e:: IOError) -> exc
-              liftIO exc >> empty
-           -- onException $ \(e :: SomeException ) -> liftIO $ putStr  "keep: " >> print e 
+              --top <- topState
+              liftIO $ print e
+              --showThreads top`
+              --liftIO $ appendFile logFile $ show e ++ "\n" -- `catch` \(e:: IOError) -> exc
+              empty
            
            onException $ \(e :: IOException) -> do
              when (ioeGetErrorString e ==  "resource busy") $ do
@@ -1590,8 +1591,8 @@ keep' :: Typeable a => TransIO a -> IO  (Maybe a)
 keep' mx  = do
    liftIO $ hSetBuffering stdout LineBuffering
    rexit <- newEmptyMVar 
-   forkIO $ do
-           runTransient $ do
+   void $ forkIO $ do
+           void $ runTransient $ do
               onException $ \(e :: SomeException ) -> do
                  top <- topState
                  liftIO $ do
@@ -1688,7 +1689,7 @@ onBack ac bac = registerBack (typeof bac) $ Transient $ do
                   Nothing     -> ac                     -- !>  "ONBACK NOTHING"
                   Just reason -> do
 
-                      -- setState $ Backtrack mreason $ tail stack -- to avoid recursive call tot he same handler
+                      -- setState $ Backtrack mreason $ tail stack -- to avoid recursive call to the same handler
                       bac reason                        -- !> ("ONBACK JUST",reason)
      where
      typeof :: (b -> TransIO a) -> b
@@ -1714,11 +1715,8 @@ registerBack witness f  = Transient $ do
    case md of
         Just (Backtrack b []) ->  setData $ Backtrack b  [cont] 
         Just (bss@(Backtrack b (bs@((EventF _ x'  _ _ _ _ _ _ _ _ _ _ _):_)))) ->
-          when (isNothing b) $ do
-                -- addrx  <- addr x -- not needed that shit in principle, since the state is pure
-                -- addrx' <- addr x'         -- to avoid duplicate backtracking points
-                -- setData $ Backtrack b  $ if addrx == addrx' then (cont:tail bs) else  (cont:bs)
-               setData $ Backtrack b (cont:bs)
+          when (isNothing b) $ 
+                setData $ Backtrack b (cont:bs)
 
         Nothing ->  setData $ Backtrack mwit [cont]
 
