@@ -394,6 +394,8 @@ giveParseString= (noTrans $ do
 
    let loop = unsafeInterleaveIO $ do
            (mr,_) <-  runTransient readMore
+           tr ("read",mr)
+
            case mr of 
             Nothing -> mempty
             Just(SMore r) ->  (r <>) `liftM` loop
@@ -449,7 +451,10 @@ clearParseBuffer=
    modify$ \s -> s{parseContext= let ParseContext readMore _ d= parseContext s in ParseContext readMore mempty d}
 
 -- | Used for debugging. It shows the next N characters in the parse buffer 
-showNext msg n= try (do r <- tTake n; liftIO $ print (msg,r); empty) <|> return ()
+showNext msg n= do 
+   r <- tTake n
+   liftIO $ print (msg,r);
+   modify $ \s -> s{parseContext= (parseContext s){buffer= r <>buffer(parseContext s)}}
 
         
         
