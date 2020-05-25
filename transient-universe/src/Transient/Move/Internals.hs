@@ -1564,7 +1564,7 @@ mconnect1 (node@(Node host port _ services ))= do
 isLocal:: String ->Bool
 isLocal  host= host=="localhost" || 
               (or $ map  (flip isPrefixOf host)  
-                    ["0.0","10.0","100", "127", "169", "172", "192", "198", "203"]) ||
+                    ["0.0","10.","100", "127", "169", "172", "192", "198", "203"]) ||
               isAlphaNum (head host) && not ('.' `elem` host)  -- is not a host address with dot inside: www.host.com
 
 --  >>> isLocal "titan"
