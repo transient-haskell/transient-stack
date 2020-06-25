@@ -259,7 +259,7 @@ TransIO, TransientIO
 
 -- * Exceptions
 
-,onException, onException', cutExceptions, continue, catcht, throwt,exceptionPoint, onExceptionPoint
+,onException, onException',whileException, cutExceptions, continue, catcht, throwt,exceptionPoint, onExceptionPoint
 
 -- * Utilities
 ,genId

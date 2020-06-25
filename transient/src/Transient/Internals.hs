@@ -366,6 +366,7 @@ instance MonadPlus TransIO where
     mx <- runTrans x
 
     was <- gets execMode -- getData `onNothing` return Serial
+    
     if was == Remote
 
       then return Nothing
@@ -1309,14 +1310,7 @@ inputf remove ident message mv cond = do
         when remove $  do removeChild; liftIO $ delConsoleAction ident 
         c <- liftIO $ readIORef rconsumed
         if c then returnm mv else do
-            -- if null str 
-            --   then
-                  
-            --       if retry then do
-            --           liftIO $ writeIORef rconsumed True; 
-            --           loop
-            --       else do liftIO $ writeIORef rconsumed True; returnm mv  
-            --   else do 
+
                 let rr = read1 str 
             
                 case   (rr,str)  of
@@ -1395,7 +1389,7 @@ inputLoop= do
 
     
     inputLoop
-   `catch`  \(SomeException _) -> myThreadId >>= killThread 
+   `catch`  \(SomeException _) -> inputLoop -- myThreadId >>= killThread 
 
 
 {-# NOINLINE rconsumed #-}
@@ -1420,7 +1414,7 @@ processLine r = do
        mbs <- readIORef rcb
        mapM_ (\cb -> cb x) $ map (\(_,_,p)-> p) mbs
        
-    mapM' f []= return ()
+    mapM' _ []= return ()
     mapM' f (xss@(x:xs)) =do
         f x
         r <- readIORef rconsumed
@@ -1434,7 +1428,7 @@ processLine r = do
           else do
             threadDelay 1000
             n <- atomicModifyIORef riterloop $ \n -> (n+1,n)
-            if n==100
+            if n==1
               then do
                 when (not $ null x) $ hPutStr  stderr x >> hPutStrLn stderr ": can't read, skip"
                 writeIORef riterloop 0
@@ -1530,8 +1524,8 @@ keep mx = do
                  
            st <- get
            setData $ Exit rexit
-           (abduce >> labelState (fromString "input") >> liftIO inputLoop >> empty)
-            <|> do
+           
+           do
                    option "options" "show all options"
                    mbs <- liftIO $ readIORef rcb
 
@@ -1569,9 +1563,14 @@ keep mx = do
                    empty
 
             <|>    mx
+            <|> do 
+                  abduce 
+                  liftIO $ execCommandLine
+                  labelState (fromString "input") 
+                  liftIO inputLoop 
+                  empty
        return ()
-   threadDelay 10000
-   execCommandLine
+
    stay rexit
 
    where
@@ -1579,11 +1578,11 @@ keep mx = do
    type1= undefined
 
 -- | Same as `keep` but does not read from the standard input, and therefore
--- the async input APIs ('option' and 'input') cannot be used in the monad.
--- However, keyboard input can still be passed via command line arguments as
+-- the async input APIs ('option' and 'input') cannot respond interactively.
+-- However, input can still be passed via command line arguments as
 -- described in 'keep'.  Useful for debugging or for creating background tasks,
 -- as well as to embed the Transient monad inside another computation. It
--- returns either the value returned by `exit`.  or Nothing, when there are no
+-- returns either the value returned by `exit` or Nothing, when there are no
 -- more threads running
 --
 
@@ -1687,10 +1686,7 @@ onBack ac bac = registerBack (typeof bac) $ Transient $ do
      Backtrack mreason stack  <- getData `onNothing` (return $ backStateOf (typeof bac))
      runTrans $ case mreason of
                   Nothing     -> ac                     -- !>  "ONBACK NOTHING"
-                  Just reason -> do
-
-                      -- setState $ Backtrack mreason $ tail stack -- to avoid recursive call to the same handler
-                      bac reason                        -- !> ("ONBACK JUST",reason)
+                  Just reason -> bac reason                        -- !> ("ONBACK JUST",reason)
      where
      typeof :: (b -> TransIO a) -> b
      typeof = undefined
@@ -1708,6 +1704,7 @@ onUndo x y= onBack x (\() -> y)
 {-# NOINLINE registerUndo #-}
 registerBack :: (Typeable b, Show b) => b -> TransientIO a -> TransientIO a
 registerBack witness f  = Transient $ do
+   tr "registerBack"
    cont@(EventF _ x  _ _ _ _ _ _ _ _ _ _ _)  <- get
  -- if isJust (event cont) then return Nothing else do
    md <- getData `asTypeOf` (Just <$> return (backStateOf witness))
@@ -1720,7 +1717,7 @@ registerBack witness f  = Transient $ do
 
         Nothing ->  setData $ Backtrack mwit [cont]
 
-   runTrans f
+   runTrans $ return () >> f
    where
    mwit= Nothing `asTypeOf` (Just witness)
    --addr x = liftIO $ return . hashStableName =<< (makeStableName $! x)
@@ -1731,6 +1728,7 @@ registerUndo f= registerBack ()  f
 
 -- XXX Should we enforce retry of the same track which is being undone? If the
 -- user specifies a different track would it make sense?
+--  see https://gitter.im/Transient-Transient-Universe-HPlay/Lobby?at=5ef46626e0e5673398d33afb
 --
 -- | For a given undo track type, stop executing more backtracking actions and
 -- resume normal execution in the forward direction. Used inside an undo
@@ -1761,6 +1759,7 @@ noFinish= continue
 --
 back :: (Typeable b, Show b) => b -> TransIO a
 back reason =  do
+  tr "back"
   bs <- getData  `onNothing`  return (backStateOf  reason)           
   goBackt  bs                                                    --  !>"GOBACK"
 
@@ -1773,15 +1772,17 @@ back reason =  do
 
   goBackt (Backtrack _ [] )= empty
   goBackt (Backtrack b (stack@(first : bs)) )= do
-        setData $ Backtrack (Just reason) stack
-        x <-  runClosure first                                  --    !> ("RUNCLOSURE",length stack)
+        setData $ Backtrack (Just reason) bs --stack
+        x <-  runClosure first                                     !> ("RUNCLOSURE",length stack)
         Backtrack back bs' <- getData `onNothing`  return (backStateOf  reason)
 
         case back of
-                 Nothing    -> runContinuation first x         --    !> "FORWARD EXEC"
+                 Nothing    -> do
+                        setData $ Backtrack (Just reason) stack
+                        runContinuation first x             !> "FORWARD EXEC"
                  justreason -> do
-                        setData $ Backtrack justreason bs
-                        goBackt $ Backtrack justreason bs      -- !> ("BACK AGAIN",back)
+                        --setData $ Backtrack justreason bs
+                        goBackt $ Backtrack justreason bs       !> ("BACK AGAIN",back)
                         empty
 
 backStateOf :: (Show a, Typeable a) => a -> Backtrack a
@@ -1936,8 +1937,14 @@ onException' mx f= onAnyException mx $ \e -> do
 
 exceptBack st = \(e ::SomeException) -> do  -- recursive catch itself
                       runStateT ( runTrans $  back e ) st                 -- !> "EXCEPTBACK"
-                  `catch` exceptBack st
+                --  `catch` exceptBack st -- removed
 
+-- re execute the first argument as long as the exception is produced within the argument. 
+-- The second argument is executed before every re-execution
+-- if the second argument executes `empty` the execution is aborted.
+
+whileException :: Exception e =>  TransIO b -> (e -> TransIO())  -> TransIO b 
+whileException mx fixexc =  mx `catcht` \e -> do fixexc e; whileException mx fixexc
   
 -- | Delete all the exception handlers registered till now.
 cutExceptions :: TransIO ()
