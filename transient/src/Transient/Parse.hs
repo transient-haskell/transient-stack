@@ -1,5 +1,21 @@
 {-#LANGUAGE FlexibleContexts, ExistentialQuantification, ScopedTypeVariables, OverloadedStrings, TypeSynonymInstances, FlexibleInstances #-}
-module Transient.Parse where
+module Transient.Parse(
+-- * Setting the stream
+setParseStream, setParseString, withParseString, withParseStream,
+-- * parsing
+string, tDropUntilToken, tTakeUntilToken, integer, hex, int, double, tChar,anyChar,
+manyTill, chainManyTill,between, symbol,parens, braces,angles,brackets,
+semi, comma, dot,colon, sepBy, sepBy1, chainSepBy, chainSepBy1,chainMany,
+commaSep, semiSep, commaSep1, dropSpaces,dropTillEndOfLine,
+parseString, tTakeWhile,tTakeUntil, tTakeWhile', tTake, tDrop, tDropUntil, tPutStr,
+isDone,dropUntilDone, 
+-- * giving the parse string
+withGetParseString, giveParseString,
+-- * debug
+notParsed, getParseBuffer,clearParseBuffer, showNext,
+-- Composing parsing processes
+(|-)) where
+
 import Transient.Internals
 import Control.Applicative
 import Data.Char
@@ -362,10 +378,10 @@ withGetParseString parser=  Transient $ do
 
     -- str <-  liftIO $ (s <> ) `liftM`  loop
     str <- liftIO $ return s <> loop
-    if BS.null str then return Nothing else do
+    --if BS.null str then return Nothing else do
         --return () !> ("withGetParseString", BS.take 3 str)
-        mr <- runTrans $ parser str
-        case mr of
+    mr <- runTrans $ parser str
+    case mr of
                   Nothing -> return Nothing    --  !> "NOTHING"
                   Just (v,str') -> do
                         --return () !> (v,str') 
@@ -403,14 +419,18 @@ giveParseString= (noTrans $ do
             Just SDone -> return mempty
    liftIO $ (s <> ) `liftM` loop)
 
+-- | drop from the stream until a condition is met
 tDropUntil cond= withGetParseString $ \s -> f s
   where 
   f s= if BS.null s then return ((),s) else if cond s then return ((),s) else f $ BS.tail s
 
+-- | take from the stream until a condition is met
 tTakeUntil cond= withGetParseString $ \s -> f s
   where 
   f s= if BS.null s then return (s,s) else if cond s then return (s,s) else f $ BS.tail s
 
+-- | add the String at the beginning of the stream to be parsed
+tPutStr s'= withGetParseString $ \s -> return ((),s'<> s)
 -- | True if the stream has finished
 isDone :: TransIO Bool
 isDone=  noTrans $ do 
