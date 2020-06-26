@@ -21,7 +21,7 @@
 {-# LANGUAGE DeriveDataTypeable        #-}
 {-# LANGUAGE RecordWildCards           #-}
 {-# LANGUAGE ConstraintKinds           #-}
---{-# LANGUAGE StrictData                #-}
+--{-# LANGUAGE MonoLocalBinds            #-}
 
 
 module Transient.Internals where
@@ -1779,7 +1779,8 @@ back reason =  do
         case back of
                  Nothing    -> do
                         setData $ Backtrack (Just reason) stack
-                        runContinuation first x             !> "FORWARD EXEC"
+                        st <- get
+                        runContinuation first x `catcht` (\e -> liftIO(exceptBack st e) >> empty)               !> "FORWARD EXEC"
                  justreason -> do
                         --setData $ Backtrack justreason bs
                         goBackt $ Backtrack justreason bs       !> ("BACK AGAIN",back)
@@ -1935,9 +1936,10 @@ onException' mx f= onAnyException mx $ \e -> do
     put st'
     return mr
 
-exceptBack st = \(e ::SomeException) -> do  -- recursive catch itself
+exceptBack st = \(e ::SomeException) -> do  
+                      tr "catched"
                       runStateT ( runTrans $  back e ) st                 -- !> "EXCEPTBACK"
-                --  `catch` exceptBack st -- removed
+           --       `catch` exceptBack st -- removed
 
 -- re execute the first argument as long as the exception is produced within the argument. 
 -- The second argument is executed before every re-execution
@@ -1954,31 +1956,41 @@ cutExceptions= backCut  (undefined :: SomeException)
 -- handlers and resume normal execution from this point on.
 continue :: TransIO ()
 continue = forward (undefined :: SomeException)   -- !> "CONTINUE"
-
 -- | catch an exception in a Transient block
 --
 -- The semantic is the same than `catch` but the computation and the exception handler can be multirhreaded
 catcht :: Exception e => TransIO b -> (e -> TransIO b) -> TransIO b
 catcht mx exc= do
-    rpassed <- liftIO $ newIORef  False
-    sandbox  $ do
-         r <- onException' mx (\e -> do
-                 passed <- liftIO $ readIORef rpassed
-                 return () !> ("CATCHT passed", passed)
-                 if not passed then continue >> exc e else do
-                    Backtrack r stack <- getData  `onNothing`  return (backStateOf  e)      
-                    setData $ Backtrack r $ tail stack
-                    back e 
-                    return () !> "AFTER BACK"
-                    empty )
+  st <- get
+  (mx,st') <- liftIO $ runStateT ( runTrans $  mx ) st `catch` \e -> runStateT ( runTrans $  exc e ) st
+  put st' 
+  case mx of
+    Just x -> return x
+    Nothing -> empty
+-- | catch an exception in a Transient block
+--
+-- The semantic is the same than `catch` but the computation and the exception handler can be multirhreaded
+-- catcht :: Exception e => TransIO b -> (e -> TransIO b) -> TransIO b
+-- catcht mx exc= do
+--     rpassed <- liftIO $ newIORef  False
+--     sandbox  $ do
+--          r <- onException' mx (\e -> do
+--                  passed <- liftIO $ readIORef rpassed
+--                  return () !> ("CATCHT passed", passed)
+--                  if not passed then continue >> exc e else do
+--                     Backtrack r stack <- getData  `onNothing`  return (backStateOf  e)      
+--                     setData $ Backtrack r $ tail stack
+--                     back e 
+--                     return () !> "AFTER BACK"
+--                     empty )
                     
-         liftIO $ writeIORef rpassed True
-         return r
-   where
-   sandbox  mx= do
-     exState <- getState <|> return (backStateOf (undefined :: SomeException))
-     mx
-       <*** do setState exState
+--          liftIO $ writeIORef rpassed True
+--          return r
+--    where
+--    sandbox  mx= do
+--      exState <- getState <|> return (backStateOf (undefined :: SomeException))
+--      mx
+--        <*** do setState exState
 
 -- | throw an exception in the Transient monad
 -- there is a difference between `throw` and `throwt` since the latter preserves the state, while the former does not.
