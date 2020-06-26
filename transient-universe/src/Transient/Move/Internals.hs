@@ -834,10 +834,30 @@ callNodes op init proc= loggedc' $ do
 callNodes' nodes op init proc= loggedc' $ Prelude.foldr op init $ Prelude.map (\node -> runAt node proc) nodes
 -----
 #ifndef ghcjs_HOST_OS
+sendRawRecover con r= do 
+   
+  c <- liftIO $ readIORef $ connData con
+  con' <- case c of
+     Nothing -> do
+         tr "CLOSED CON"
+         n <- liftIO $ readIORef $ remoteNode con
+         case n of
+          Nothing -> error "connection closed by caller"
+          Just node ->  do
+            r <- mconnect' node
+            return r
+
+     Just _ -> return con
+  sendRaw con' r
+
+ `whileException` \(SomeException _)->
+        liftIO$ writeIORef (connData con) Nothing
+
 sendRaw con r= do
    let blocked= isBlocked con
    c <- liftIO $ readIORef $ connData con
    liftIO $   modifyMVar_ blocked $ const $ do
+    tr "sendRaw"
     case c of
       Just (Node2Web  sconn )   -> liftIO $  WS.sendTextData sconn  r
       Just (Node2Node _ sock _) ->
@@ -1283,6 +1303,7 @@ mclose :: MonadIO m => Connection -> m ()
 #ifndef ghcjs_HOST_OS
 
 mclose con= do
+   
    --c <- liftIO $ readIORef $ connData con
    c <- liftIO $ atomicModifyIORef (connData con) $ \c  -> (Nothing,c)
 
@@ -1348,13 +1369,17 @@ mconnect'  node'=  exclusiveCon $ do
                     if isNothing c  -- was closed by timeout
                       then mconnect1 node
                       else return  handle
-                                                                !>  ("REUSED!", node)
+                                                                !>  ("REUSED!", nodeHost node, nodePort node)
               _ -> do
                   delNodes [node]
-                  mconnect1 node
+                  r <- mconnect1 node
+                  tr "after mconnect1"
+                  return r
   -- ctx <- liftIO $ readIORef $ istream conn
   -- modify $ \s -> s{parseContext= ctx}
   -- liftIO $ print  "SET PARSECONTEXT"
+  setState conn
+  
   return conn
 
 
@@ -1363,7 +1388,7 @@ mconnect'  node'=  exclusiveCon $ do
 -- effective connect trough different methods
 mconnect1 (node@(Node host port _ services ))= do
 
-     return ()  !> ("MCONNECT1",host,port,nodeServices node,isTLSIncluded)
+     return ()  !> ("MCONNECT1",host,port,isTLSIncluded)
      {-
      onException $ \(ConnectionError msg node) -> do
                  liftIO $ do
@@ -1396,7 +1421,6 @@ mconnect1 (node@(Node host port _ services ))= do
      setState conn
      modify $ \s -> s{execMode=Serial,parseContext= parseContext}
 
-
      -- "write node connected in the connection"
      liftIO $ writeIORef (remoteNode conn) $ Just node
      -- "write connection in the node"
@@ -1409,9 +1433,11 @@ mconnect1 (node@(Node host port _ services ))= do
 
     where
     checkSelf node= do
-      -- tr "CHECKSELF"
+      tr "CHECKSELF"
       node' <- getMyNodeMaybe 
+      guard $ isJust (connection node')
       v <- liftIO $ readMVar (fromJust $ connection  node') -- to force connection in case of calling a service of itself
+      tr "IN CHECKSELF"
       if node /= node' ||   null v
         then  empty
         else do
@@ -1427,9 +1453,7 @@ mconnect1 (node@(Node host port _ services ))= do
           return (conn, noParseContext)
 
     timeout t proc=  do
-       r <- collect' 1 t $ do   
-          -- onException $ \(SomeException _) ->  empty -- TODO check if it is right
-          proc
+       r <- collect' 1 t proc
        case r of
           []  -> empty         !> "TIMEOUT EMPTY"
           mr:_ -> case mr of
@@ -1510,8 +1534,14 @@ mconnect1 (node@(Node host port _ services ))= do
               conn <- getSData <|> error "mconnect: no connection data"
 
               sendRaw conn $  connect
-              resp <- tTakeUntilToken (BS.pack "\r\n\r\n")
-              tr ("PROXY RESPONSE=",resp)
+              first@(vers,code,_)  <- getFirstLineResp -- tTakeUntilToken (BS.pack "\r\n\r\n")
+              tr ("PROXY RESPONSE=",first) 
+              guard (BC.head code== '2') 
+                  <|> do 
+                         headers <- getHeaders
+                         Raw body <- parseBody headers
+                         error $ show (headers,body) --  decode the body and print
+
               when (isTLSIncluded && needTLS) $ do
                 Just(Node2Node{socket=sock}) <- liftIO $ readIORef $ connData conn
                 maybeClientTLSHandshake h sock mempty
@@ -1802,7 +1832,7 @@ noParseContext=  let err= error "parseContext not set" in
 defConnection =  do
   idc <- genGlobalId
   liftIO $ do
-    my <- newIORef (error "node in default connection")
+    my <- createNode "localhost" 0 >>= newIORef
     x <- newMVar Nothing
     y <- newMVar M.empty
     ref <- newIORef Nothing
@@ -1878,10 +1908,10 @@ listen  (node@(Node _ port _ _ )) = onAll $ do
    ex <- exceptionPoint :: TransIO (BackPoint SomeException)
    setData ex
 
-   mlog <- listenNew (fromIntegral port) conn   <|> listenResponses :: TransIO (StreamData NodeMSG)
+   mlog <- listenNew (fromIntegral port) conn <|> listenResponses :: TransIO (StreamData NodeMSG)
    execLog mlog
    --showNext "after listen" 10
-
+   tr "END LISTEN"
 
 -- listen incoming requests
 
@@ -2419,7 +2449,6 @@ execLog  mlog =Transient $ do
    where
    process :: IdClosure -> IdClosure  -> (Either CloudException Builder) -> Bool -> StateIO (Maybe ())
    process  closl closr  mlog  deleteClosure= do
-
       conn@Connection {localClosures=localClosures} <- getData `onNothing` error "Listen: myNode not set"
       if closl== 0 then do
 
@@ -2436,7 +2465,6 @@ execLog  mlog =Transient $ do
            setState $ Closure  closr
            setState $ DialogInWormholeInitiated True
            -- setParseString $ toLazyByteString log -- not needed it is has the log from the request, still not parsed
-
 
            return $ Just ()                  --  !> "executing top level closure"
        else do
@@ -3040,29 +3068,46 @@ data HTTPHeaders= HTTPHeaders  (BS.ByteString, B.ByteString, BS.ByteString) [(CI
 
 
 
-rawHTTP :: Loggable a => Node -> String -> TransIO  a
+rawHTTP :: Loggable a => Node -> String  -> TransIO  a
 rawHTTP node restmsg = do
   abduce   -- is a parallel operation
-  tr ("***********************rawHTTP",nodeHost node, restmsg)
-
+  tr ("***********************rawHTTP",nodeHost node)
   --sock <- liftIO $ connectTo' 8192 (nodeHost node) (PortNumber $ fromIntegral $ nodePort node)
   mcon <- getData :: TransIO (Maybe Connection)
-  c <- mconnect' node
-  
-  sendRaw c  $ BS.pack $ restmsg
-  
-  let blocked= isBlocked c    -- TODO: the same flag is used now for sending and receiving
-  
-  liftIO $ takeMVar blocked
+  c <- do
 
-  ctx <- liftIO $ readIORef $ istream c
+      c <- mconnect' node
+      tr "after mconnect'"
+      sendRawRecover c  $ BS.pack restmsg
 
-  liftIO $ writeIORef (done ctx) False
-  modify $ \s -> s{parseContext= ctx}  -- actualize the parse context
-  --SET PARSECONTEXT2
-  tr "after send"
+      c <-  getState <|> error "rawHTTP: no connection?"
+      let blocked= isBlocked c    -- TODO: the same flag is used now for sending and receiving
+      tr "before blocked"
+      liftIO $ takeMVar blocked
+      tr "after blocked"
+      ctx <- liftIO $ readIORef $ istream c
+
+      liftIO $ writeIORef (done ctx) False
+      modify $ \s -> s{parseContext= ctx}  -- actualize the parse context
+
+      return c
+   `while` \c ->do
+       is <- isTLS c
+       px <- getHTTProxyParams is
+       tr ("PX=", px)
+       (if isJust px then return True else do c <- anyChar ; tPutStr $ BS.singleton c; tr "anyChar"; return True) <|> do
+                TOD t _ <- liftIO $ getClockTime
+                -- ("PUTMVAR",nodeHost node)
+                liftIO $ putMVar (isBlocked c)  $ Just t
+                liftIO (writeIORef (connData c) Nothing) 
+                mclose c
+                tr "CONNECTION EXHAUSTED,RETRYING WITH A NEW CONNECTION"
+                return False
+
   modify $ \s -> s{execMode=Serial}
-  -- showNext "NEXT" 100
+  let blocked= isBlocked c    -- TODO: the same flag is used now for sending and receiving
+  tr "after send"
+  --showNext "NEXT" 100
   --try (do r <-tTake 10;liftIO  $ print "NOTPARSED"; liftIO $ print  r; empty) <|> return()
   first@(vers,code,_) <- getFirstLineResp <|> do 
                                         r <- notParsed
@@ -3072,7 +3117,7 @@ rawHTTP node restmsg = do
   let hdrs= HTTPHeaders first headers
   setState hdrs
 
-  tr ("HEADERS", first, headers)
+--tr ("HEADERS", first, headers)
   
   guard (BC.head code== '2') 
      <|> do Raw body <- parseBody headers
@@ -3109,8 +3154,15 @@ rawHTTP node restmsg = do
   if (isJust mcon) then setData (fromJust mcon) else delData c
   return result
   where
-  
-  parseBody headers= case lookup "Transfer-Encoding" headers of
+  isTLS c= liftIO $ do
+     cdata <- readIORef $ connData c
+     case cdata of
+          Just(TLSNode2Node _) -> return True
+          _ -> return False
+
+  while act fix= do r <- act; b <- fix r; if b then return r else act
+
+parseBody headers= case lookup "Transfer-Encoding" headers of
           Just "chunked" -> dechunk |- deserialize
 
           _ ->  case fmap (read . BC.unpack) $ lookup "Content-Length" headers  of
@@ -3122,7 +3174,9 @@ rawHTTP node restmsg = do
                 _ -> do
                   str <- notParsed   -- TODO: must be strict to avoid premature close
                   BS.length str  `seq` withParseString str deserialize
-  getFirstLineResp= do
+
+
+getFirstLineResp= do
 
       -- showNext "getFirstLineResp" 20
       (,,) <$> httpVers <*> (BS.toStrict <$> getCode) <*> getMessage
@@ -3134,7 +3188,8 @@ rawHTTP node restmsg = do
   --mclose con xxx
   --maybeClose vers headers c str
 
-lprint x= tr x
+
+
 
 dechunk=  do
 
