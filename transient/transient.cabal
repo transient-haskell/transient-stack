@@ -80,7 +80,8 @@ test-suite test-transient
                      -- libraries not bundled w/ GHC
                      , mtl
                      , stm
-                     , random
+                     , random == 1.1
+
 
 
     type: exitcode-stdio-1.0
