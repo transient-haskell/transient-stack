@@ -51,7 +51,7 @@ library
             network-info -any,
             network-uri -any,
             vector -any,
-            websockets -any,
+            websockets >=  0.12.7.1 ,
             process -any,
             random -any,
             text -any,
@@ -78,7 +78,7 @@ library
         stm -any,
         time -any,
         transformers -any,
-        transient >= 0.6.0.0
+        transient >= 0.6.4
     default-language: Haskell2010
     hs-source-dirs: src .
     ghc-options: -O -threaded -rtsopts
@@ -89,7 +89,7 @@ executable monitorService
         build-depends:
             transformers -any,
             containers,
-            transient >= 0.6.0.0,
+            transient >= 0.6.4,
             transient-universe,
             process,
             directory,
@@ -113,7 +113,7 @@ executable executor
         build-depends:
             containers,
             transformers -any,
-            transient >= 0.6.2,
+            transient >= 0.6.4,
             transient-universe,
             process >= 1.6.4.0,
             directory,
@@ -138,7 +138,7 @@ executable controlServices
         build-depends:
             containers,
             transformers -any,
-            transient >= 0.6.2,
+            transient >= 0.6.4,
             transient-universe,
             process >= 1.6.4.0,
             directory,
@@ -163,7 +163,7 @@ executable test-transient1
     if !impl(ghcjs >=0.1)
         build-depends:
             mtl -any,
-            transient >= 0.5.9.2,
+            transient >= 0.6.4,
             random -any,
             text -any,
             containers -any,
@@ -180,7 +180,7 @@ executable test-transient1
             time -any,
             vector -any,
             TCache >= 0.12,
-            websockets -any,
+            websockets >=  0.12.7.1 ,
             network-uri -any,
             case-insensitive -any,
             hashable -any,
@@ -201,7 +201,7 @@ test-suite test-transient
     if !impl(ghcjs >=0.1)
         build-depends:
             mtl -any,
-            transient >= 0.5.9.2,
+            transient >= 0.6.4,
             random -any,
             text -any,
             containers -any,
@@ -218,7 +218,7 @@ test-suite test-transient
             time -any,
             vector -any,
             TCache >= 0.12,
-            websockets -any,
+            websockets >= 0.12.7.1 ,
             network-uri -any,
             case-insensitive -any,
             hashable -any,
