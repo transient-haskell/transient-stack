@@ -1,3 +1,7 @@
+#!/usr/bin/env execthirdlinedocker.sh
+--  info: use sed -i 's/\r//g' file if report "/usr/bin/env: ‘execthirdlinedocker.sh\r’: No such file or directory"
+-- LIB="/projects/transient-stack" && runghc  -DDEBUG  -i${LIB}/transient/src -i${LIB}/transient-universe/src -i${LIB}/transient/src -i${LIB}/transient-universe-tls/src -i${LIB}/axiom/src   $1  ${2} ${3}
+
 -----------------------------------------------------------------------------
 --
 -- Module      :  Transient.Move.Services.MonitorService
@@ -118,6 +122,7 @@ returnInstances (ident, service, num)= withBlockingService service $ do
        let n= num - length nodes
        if n <= 0 then return $ take num nodes 
         else  return nodes <> requestInstall ident service n 
+
     where
 
     requestInstall :: String -> Service -> Int -> Cloud [ Node]
@@ -136,8 +141,8 @@ returnInstances (ident, service, num)= withBlockingService service $ do
               callNodes' nodes2 (<>) mempty (installHere  service pernode)
         local $ addNodes rs 
         --ns <- onAll getNodes
-        
-        return rs   -- !>  ("MONITOR RETURN---------------------------------->", rs)
+        tr   ("MONITOR RETURN---------------------------------->", rs)
+        return rs     
        
     -- installIt = installHere  service <|> installThere  service
     installHere  ::  Service -> Int -> Cloud [ Node]
@@ -149,7 +154,7 @@ returnInstances (ident, service, num)= withBlockingService service $ do
                 return () !> ("INSTALLED",n)
 
                 thisNode <- getMyNode
-                let node= Node (nodeHost thisNode)  port Nothing  ([service] ++ [relayinfo thisNode])  -- node to be published
+                let node= Node (nodeHost thisNode)  port Nothing  ([service])  --  ++ [relayinfo thisNode]) -- node to be published
                 addNodes [node] 
                 return node
           `catcht` \(e :: SomeException) ->  liftIO (putStr "INSTALL error: " >> print e) >> empty

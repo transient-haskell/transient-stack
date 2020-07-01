@@ -136,8 +136,9 @@ initService  service= loggedc $ cached  <|> installed  <|>  installIt
           ind <- liftIO $ randomRIO(0,length ns-1)
           return $  ns !! ind
           
-    installIt= do                               -- TODO block by service name, to avoid  double initializations
+    installIt= do                               -- TODO(DONE) block by service name, to avoid  double initializations
         ns <- requestInstance  service 1 
+        tr  ("CALLING  NODE: INSTALLED",ns)
         if null ns then empty else return $ head ns
 
 -- |  receives the specification of a service and install (if necessary) and run it (if necessary)
@@ -335,7 +336,7 @@ callService service params = loggedc $ do
         service'= case map toUpper type1 of
                  "HTTP" ->  service ++[("nodeport", "80")]
                  "HTTPS" -> service ++[("nodeport", "443")]
-
+                 _ ->  service
     node <-  initService  service'      --  !> ("callservice initservice", service)
 
     if take 4 type1=="HTTP" 
@@ -394,7 +395,7 @@ monitorNode= unsafePerformIO $ createNodeServ "localhost"
 callService' :: (Loggable a, Loggable b) =>  Node -> a -> Cloud b 
 #ifndef ghcjs_HOST_OS
 callService' node params =  loggedc $ do
-    return () !> "callService'"
+    tr "callService'"
     onAll abduce             -- is asynchronous
 
     my <- onAll getMyNode    -- to force connection when calling himself
@@ -468,14 +469,13 @@ inputAuthorizations= empty
 #endif
 
 
--- emptyLog= Log False [] [] 0
 
 catchc :: Exception e => Cloud a -> (e -> Cloud a) -> Cloud a
 catchc a b= Cloud $ catcht (runCloud' a) (\e -> runCloud' $ b e)
 
 
 selfServices= unsafePerformIO $ newIORef empty
-notused n= error $  "runService: "++ show (n::Int) ++ " variable should not be used"
+notused n= error $  "runService: "  ++ show (n :: Int) ++ " variable should not be used"
 
 -- | executes a program that export endpoints that can be called with `callService` primitives.
 -- It receives the service description, a default port, the services to set up and the computation to start.
@@ -483,9 +483,9 @@ notused n= error $  "runService: "++ show (n::Int) ++ " variable should not be u
 --
 -- >  main = keep $ runService monitorService 3000 $
 -- >                       [serve returnInstances
--- >                       ,serve addToLog] pings
+-- >                       ,serve addToLog] someComp
 --
--- every service incorporates a ping service and a error service, invoqued when the parameter received
+-- every service incorporates a ping service and a error service. The later invoqued when the parameter received
 -- do not match with any of the endpoints implemented.
 runService :: Loggable a => Service -> Int -> [Cloud ()] -> Cloud a  -> TransIO ()
 runService servDesc defPort servs proc= runCloud $
@@ -506,9 +506,9 @@ runService servDesc defPort servs proc= runCloud $
    ping :: () -> Cloud ()
    ping = const $ return() !> "PING"
 
-   serveerror = empty -- localIO $  do
-      -- error $  "parameter mismatch calling service  (parameter,service): "++ show (d :: IDynamic,servDesc)
-      --  empty
+   serveerror  = empty -- :: Raw  ->   Cloud()
+   -- serveerror (Raw  p)= error $  "parameter mismatch calling service  (parameter,service): "++ show (p,servDesc)
+      
 
 
 data GetNodes = GetNodes deriving(Read,Show, Typeable)
@@ -528,14 +528,15 @@ runService' servDesc defPort servAll proc=  do
        wormhole' serverNode $ inputNodes <|> proc >> empty >> return()
        return () !> "ENTER SERVALL"
        onAll $ symbol $ BS.pack "e/"
-       servAll'   
+       servAll'
+       tr "before  teleport"  
        teleport  
 
        where
 
        servAll' = servAll 
 
-              `catchc` \(e:: SomeException ) -> do
+              `catchc` \(e:: SomeException ) -> do 
                    setState emptyLog
                    return () !> ("ERRORRRRRR:",e)
                    node <- local getMyNode
@@ -624,12 +625,13 @@ receiveFromNodeStandardOutput node ident= callService' (monitorOfNode node) $ Re
 
 serve :: (Loggable a, Loggable b) => (a -> Cloud b) -> Cloud ()
 serve  serv= do 
-        return () !> "SERVE"
-
         modify $ \s -> s{execMode= Serial}
         p <-  onAll deserialize --  empty if the parameter does not match
         modifyData' (\log -> log{recover=False}) $ error "serve: error"
         loggedc $ serv p
+         
+        tr ("SERVE")
+
         return()
 
 
@@ -646,7 +648,7 @@ callHTTPService node service vars=  local $ do
 
   let calls = subst callString vars
   restmsg <- replaceVars calls
-  return () !> ("restmsg",restmsg)
+  --return () !> ("restmsg",restmsg)
   --prox <- getProxyNode node $ map toLower $ fromJust $ lookup "type" service
   rawHTTP node  restmsg
   {-

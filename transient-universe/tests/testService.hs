@@ -1,6 +1,6 @@
 #!/usr/bin/env execthirdlinedocker.sh
 --  info: use sed -i 's/\r//g' file if report "/usr/bin/env: ‘execthirdlinedocker.sh\r’: No such file or directory"
--- LIB="/home/vsonline/workspace" && ghc   -threaded  -i${LIB}/transient/src -i${LIB}/transient-universe/src -i${LIB}/transient-universe-tls/src -i${LIB}/axiom/src   $1 && ./`basename $1 .hs` ${2} ${3}
+-- LIB="/projects/transient-stack" && runghc -DDEBUG   -i${LIB}/transient/src -i${LIB}/transient-universe/src -i${LIB}/transient/src -i${LIB}/transient-universe-tls/src -i${LIB}/axiom/src   $1  ${2} ${3}
 
 
 -- cd ~/workspace/transient && cabal install  --force-reinstalls && cd ../transient-universe && cabal install --force-reinstalls && runghc tests/$1  $2 $3
@@ -77,7 +77,7 @@ distrib= do
   local $ option "dis" "request another instance of this same program and call it"
   this <- local getMyNode
   localIO $ print this
-  [node] <- requestInstance (nodeServices this) 1
+  [node] <- requestInstance (head $  nodeServices this) 1
   local $ option "launch" "launch"
   r <- runAt node $ return "hello world"
   localIO $ print r
@@ -259,7 +259,7 @@ cloudControl= do
               putChar ':'
               putStr $ show $ nodePort monitorNode
               putChar '/'
-              putStrLn $ fromJust $ lookup "service" $ nodeServices monitorNode
+              putStrLn $ fromJust $ lookup "service" $ head $ nodeServices monitorNode
   squeezeMonitor 4 monitorNode
   where
 
@@ -290,11 +290,11 @@ cloudControl= do
               putChar ':'
               putStr $ show $ nodePort node
               putChar '/'
-              putStrLn $ fromJust $ lookup "service" $ nodeServices node
+              putStrLn $ fromJust $ lookup "service" $ head $ nodeServices node
 
 
               
-           case lookup "service" $ nodeServices node of
+           case lookup "service" $ head $ nodeServices node of
            
                 Just "monitor" -> do 
                         spawn $ controlMonitor node

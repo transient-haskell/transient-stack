@@ -1970,27 +1970,27 @@ catcht mx exc= do
 -- | catch an exception in a Transient block
 --
 -- The semantic is the same than `catch` but the computation and the exception handler can be multirhreaded
--- catcht :: Exception e => TransIO b -> (e -> TransIO b) -> TransIO b
--- catcht mx exc= do
---     rpassed <- liftIO $ newIORef  False
---     sandbox  $ do
---          r <- onException' mx (\e -> do
---                  passed <- liftIO $ readIORef rpassed
---                  return () !> ("CATCHT passed", passed)
---                  if not passed then continue >> exc e else do
---                     Backtrack r stack <- getData  `onNothing`  return (backStateOf  e)      
---                     setData $ Backtrack r $ tail stack
---                     back e 
---                     return () !> "AFTER BACK"
---                     empty )
+catcht' :: Exception e => TransIO b -> (e -> TransIO b) -> TransIO b
+catcht' mx exc= do
+    rpassed <- liftIO $ newIORef  False
+    sandbox  $ do
+         r <- onException' mx (\e -> do
+                 passed <- liftIO $ readIORef rpassed
+                 return () !> ("CATCHT passed", passed)
+                 if not passed then continue >> exc e else do
+                    Backtrack r stack <- getData  `onNothing`  return (backStateOf  e)      
+                    setData $ Backtrack r $ tail stack
+                    back e 
+                    return () !> "AFTER BACK"
+                    empty )
                     
---          liftIO $ writeIORef rpassed True
---          return r
---    where
---    sandbox  mx= do
---      exState <- getState <|> return (backStateOf (undefined :: SomeException))
---      mx
---        <*** do setState exState
+         liftIO $ writeIORef rpassed True
+         return r
+   where
+   sandbox  mx= do
+     exState <- getState <|> return (backStateOf (undefined :: SomeException))
+     mx
+       <*** do setState exState
 
 -- | throw an exception in the Transient monad
 -- there is a difference between `throw` and `throwt` since the latter preserves the state, while the former does not.
