@@ -528,8 +528,9 @@ runService' servDesc defPort servAll proc=  do
        wormhole' serverNode $ inputNodes <|> proc >> empty >> return()
        return () !> "ENTER SERVALL"
        onAll $ symbol $ BS.pack "e/"
-       servAll'
+       servAll
        tr "before  teleport"  
+       onAll $ setRState $ DialogInWormholeInitiated True
        teleport  
 
        where

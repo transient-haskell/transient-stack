@@ -515,7 +515,7 @@ wormhole' node (Cloud comp) = local $ Transient $ do
 
 
                     setState  $ Closure 0
-                    setRState $ DialogInWormholeInitiated False
+                    newRState $ DialogInWormholeInitiated False
                     --lhls <- liftIO $ atomicModifyIORef (wormholes conn) $ \hls -> ((ref:hls),length  hls)
                     --tr ("LENGTH HLS",lhls)
 
@@ -601,8 +601,6 @@ teleport  =  do
 
       then  do
 
-
-
         -- when a node call itself, there is no need of socket communications
         ty <- liftIO $ readIORef contype
         case ty of
@@ -613,21 +611,21 @@ teleport  =  do
                   remote <- readIORef $ remoteNode conn
                   writeIORef (myNode conn) $ fromMaybe (error "teleport: no connection?") remote
 
-
          _ -> do
 
-
          --read this Closure
-          Closure closRemote <- getData `onNothing`  return (Closure 0 )
-          tr  ("REMOTE CLOSURE",closRemote)
+
           DialogInWormholeInitiated initiated <- getRData `onNothing` return(DialogInWormholeInitiated True)
-          --`onNothing` error "No DialogInWormholeInitiated, file a bug"
           --detecta si ya ha enviado en un mismo wormhole
           -- como detectar eso sin usar Closure?
           --   un Rflag en estado ejecución
-          (closRemote',tosend) <- if initiated
+          --tr("INITIATED",initiated,closRemote/=0)
+          (closRemote',tosend) <-    if initiated
                       -- for localFix
-                then return (closRemote, buildLog log)
+                then do
+                  Closure closRemote <- getData `onNothing`  return (Closure 0 )
+                  tr  ("REMOTE CLOSURE",closRemote)
+                  return (closRemote, buildLog log)
                 else do
                   mfix <-  getData  -- mirar  globalFix
                   tr ("mfix", mfix)
@@ -672,7 +670,7 @@ teleport  =  do
           -- The log sent is in the order of execution. log is in reverse order
 
           -- send log with closure ids at head
-          tr ("MSEND --------->------>", SMore (unsafePerformIO $ readIORef $ remoteNode conn,closRemote',closLocal,toLazyByteString tosend))
+          --tr ("MSEND --------->------>", SMore (unsafePerformIO $ readIORef $ remoteNode conn,closRemote',closLocal,toLazyByteString tosend))
           runTrans $ msend conn $ SMore $ ClosureData closRemote' closLocal tosend
 
 
@@ -949,6 +947,7 @@ msend ::  Connection -> StreamData NodeMSG -> TransIO ()
 #ifndef ghcjs_HOST_OS
 
 msend con r=  do
+  tr   ("MSEND --------->------>", r)
   c <- liftIO $ readIORef $ connData con
   con' <- case c of
      Nothing -> do
@@ -2463,7 +2462,7 @@ execLog  mlog =Transient $ do
            setData Log{recover= True, buildLog=  mempty, fulLog= log, lengthFull= 0, hashClosure= 0} --Log True [] []
 
            setState $ Closure  closr
-           setState $ DialogInWormholeInitiated True
+           setRState $ DialogInWormholeInitiated True
            -- setParseString $ toLazyByteString log -- not needed it is has the log from the request, still not parsed
 
            return $ Just ()                  --  !> "executing top level closure"
@@ -2501,7 +2500,7 @@ execLog  mlog =Transient $ do
                   let nlog= fulLog <> log    -- let nlog= reverse log ++ fulLog
                   setData $ Log{recover= True, buildLog=  mempty, fulLog= nlog, lengthFull=error "lengthFull TODO", hashClosure= hashClosure}  -- TODO hashClosure must change?
                   setState $ Closure  closr
-                  setState $ DialogInWormholeInitiated True
+                  setRState $ DialogInWormholeInitiated True
                   setParseString $ toLazyByteString log
                   --restrs <-  giveParseString
                   --tr ("rs' in execlog =", fmap (BS.take 4) restrs)
