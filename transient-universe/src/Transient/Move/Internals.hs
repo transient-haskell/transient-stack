@@ -855,7 +855,7 @@ sendRaw con r= do
    let blocked= isBlocked con
    c <- liftIO $ readIORef $ connData con
    liftIO $   modifyMVar_ blocked $ const $ do
-    tr "sendRaw"
+    tr ("sendRaw",r)
     case c of
       Just (Node2Web  sconn )   -> liftIO $  WS.sendTextData sconn  r
       Just (Node2Node _ sock _) ->
@@ -1050,6 +1050,8 @@ msend (Connection _ _ _ (Just (Node2Web sconn)) _ _ _ _ _ _ _) r=
 
 #else
 msend con r= do
+   tr   ("MSEND --------->------>", r)
+
    let blocked= isBlocked con
    c <- liftIO $ readIORef $ connData con
    case c of

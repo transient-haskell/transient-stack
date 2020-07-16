@@ -1,3 +1,3 @@
 {
-"image": "haskell:8.4"
+"image": agocorona/ghc8.0ghcjs
 }

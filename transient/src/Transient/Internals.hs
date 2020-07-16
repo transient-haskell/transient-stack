@@ -1563,12 +1563,14 @@ keep mx = do
                    empty
 
             <|>    mx
+#ifndef ghcjs_HOST_OS
             <|> do 
                   abduce 
                   liftIO $ execCommandLine
                   labelState (fromString "input") 
                   liftIO inputLoop 
                   empty
+#endif
        return ()
 
    stay rexit
