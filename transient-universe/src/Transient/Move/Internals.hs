@@ -1203,33 +1203,37 @@ mread conn=  do
     --             liftIO $ modifyMVar_ (isBlocked conn) $ const  $ Just <$> return t
     --             deserialize
   -- where
-  -- perform timeouts and cleanup of the server when connections close
-receiveData' :: Connection -> NWS.Connection -> IO  BS.ByteString
-receiveData' c conn = do
-    msg <- WS.receive conn
-    tr ("RECEIVED",msg)
-    case msg of
-        NWS.DataMessage _ _ _ am -> return  $  NWS.fromDataMessage am
-        NWS.ControlMessage cm    -> case cm of
-            NWS.Close i closeMsg -> do
-                hasSentClose <- readIORef $ WS.connectionSentClose conn
-                unless hasSentClose $ WS.send conn msg
-                writeIORef (connData c) Nothing
-                cleanConnectionData c
-                empty
+  -- perform timeouts and cleanup of the server when connections 
+  
+receiveData'  a  b=  NWS.receiveData b
+-- receiveData' :: Connection -> NWS.Connection -> IO  BS.ByteString
+-- receiveData' c conn = do
+--     msg <- WS.receive conn
+--     tr ("RECEIVED",msg)
+--     case msg of
+--         NWS.DataMessage _ _ _ am -> return  $  NWS.fromDataMessage am
+--         NWS.ControlMessage cm    -> case cm of
+--             NWS.Close i closeMsg -> do
+--                 hasSentClose <- readIORef $ WS.connectionSentClose conn
+--                 unless hasSentClose $ WS.send conn msg
+--                 writeIORef (connData c) Nothing
+--                 cleanConnectionData c
+--                 empty
 
-            NWS.Pong _    ->  do
-                TOD t _ <- liftIO getClockTime
-                liftIO $ modifyMVar_ (isBlocked c) $ const  $ Just <$> return t
-                receiveData' c conn
-                --NWS.connectionOnPong (WS.connectionOptions conn)
-                --NWS.receiveDataMessage conn
-            NWS.Ping pl   -> do
-                TOD t _ <- liftIO getClockTime
-                liftIO $ modifyMVar_ (isBlocked c) $ const  $ Just <$> return t
-                WS.send conn (NWS.ControlMessage (NWS.Pong pl))
-                receiveData' c conn
-                --WS.receiveDataMessage conn
+--             NWS.Pong _    ->  do
+--                 TOD t _ <- liftIO getClockTime
+--                 liftIO $ modifyMVar_ (isBlocked c) $ const  $ Just <$> return t
+--                 receiveData' c conn
+--                 --NWS.connectionOnPong (WS.connectionOptions conn)
+--                 --NWS.receiveDataMessage conn
+--             NWS.Ping pl   -> do
+--                 TOD t _ <- liftIO getClockTime
+--                 liftIO $ modifyMVar_ (isBlocked c) $ const  $ Just <$> return t
+--                 WS.send conn (NWS.ControlMessage (NWS.Pong pl))
+--                 receiveData' c conn
+
+
+--                 --WS.receiveDataMessage conn
 {-
 mread (Connection _ _ _ (Just (Node2Node _ _ _)) _ _ _ _ _ _ _) =  parallelReadHandler -- !> "mread"
 
@@ -3215,7 +3219,7 @@ dechunk=  do
 
 foldNet :: Loggable a => (Cloud a -> Cloud a -> Cloud a) -> Cloud a -> Cloud a -> Cloud a
 foldNet op init action = atServer $ do
-    ref <- onAll $ liftIO $ newIORef Nothing -- eliminate additional results doe to unneded parallelism when using (<|>)
+    ref <- onAll $ liftIO $ newIORef Nothing -- eliminate additional results due to unneded parallelism when using (<|>)
     r <- exploreNetExclude []
     v <-localIO $ atomicModifyIORef ref $ \v -> (Just r, v)
     case v of
