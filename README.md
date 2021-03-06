@@ -1,4 +1,6 @@
-All the transient libraries
+This new repo contains all the transient libraries
+
+A new release of transient with a lot of improvements to strenghten the execution model is coming.
 
 ## What is Transient?
 
