@@ -16,7 +16,7 @@ module GHCJS.HPlay.View(
   , module Transient.Move.Utils
   , runBody, runWidget, runWidget'
   , addHeader
-  , render,render1
+  , render1
   -- * Widget Combinators and Modifiers
   , (<<)
   , (<<<)
@@ -58,6 +58,7 @@ module GHCJS.HPlay.View(
   , inputSubmit
   , wbutton
   , wlink
+  , tlink
   , staticNav
   , noWidget
   , wraw
@@ -105,6 +106,7 @@ module GHCJS.HPlay.View(
   , module GHCJS.Perch  
   -- remove
   ,CheckBoxes(..)
+  ,edit
   ,JSString,pack, unpack
   ,RadioId(..), Radio(..)
 
@@ -270,49 +272,19 @@ instance Monad Widget where
             return Nothing
 
 
-
 setEventContW :: Widget a -> (a -> Widget b) -> JSString -> StateIO ()
-setEventContW  x f id = modify $ \EventF {mfSequence = seq, fcomp = fs, .. }
-                           -> EventF {mfSequence = seq, xcomp =  strip seq x
+setEventContW  x f id = modify $ \EventF { fcomp = fs, .. }
+                           -> EventF { xcomp = strip x
                                      , fcomp = unsafeCoerce (rend f id) :  fs
-                                     , .. }   !> "setEventContW"
+                                     , .. }  
       where
-      rend f id x= tr "rend" >> runWidgetId ( f x) id
+      rend f id x= runWidgetId ( f x) id
 
-      strip seq x=  Transient $ do
-        alert "strip"
-        -- seq' <- gets mfSequence
-        -- modify $ \ s -> s{mfSequence = seq}
-        
-        r <- runView x
-        -- modify $ \ s -> s{mfSequence = seq'}
-
+strip x= norender $ do
+        r <- x
         delData noHtml
         return r
 
--- instance Monad Widget where
---   return x=  Widget $ return x
---   x >>= f = Widget $ Transient $ do
---        id1 <- genNewId
---        setEventContW x  f id1
---        delData noHtml
---        mk <- runView x
---        form1 <- getData `onNothing` return noHtml
---        resetEventCont mk
---        let form1' = form1 <> (span ! id id1 $ noHtml)
-
---        case mk of
---          Just k  -> do
---             delData noHtml
---             setData $ IdLine 0 id1
-
---             mk <- runView $ f k
---             form2 <- getData `onNothing` return noHtml
---             setData $ form1' <> (span1  id1  form2)
---             return mk
---          Nothing -> do
---             setData form1'
---             return Nothing
 
 render1 :: Widget a -> TransIO a
 render1 w= do
@@ -323,21 +295,20 @@ render1 w= do
     
     mx <- runView w
     mexecEvent  <- getData
-    if (mexecEvent== Just ExecEvent) 
-      then do
+    if (mexecEvent== Just ExecEvent) then do
          meid1 <- liftIO $ elemById id1
          liftIO $ clearChildren $ fromJust meid1
          delData ExecEvent
          delData noHtml
-      else do
-        rend <- getData `onNothing` return noHtml
-        id2 <- genNewId
-        setData $ IdLine 0 id2
-        setData $ prevRend <> (span1 id1 $ rend)
+    else do
+    rend <- getData `onNothing` return noHtml
+    id2 <- genNewId
+    setData $ IdLine 0 id2
+    setData $ prevRend <> (span1 id1 $ rend)
 
     return mx
-    
-span1 id1 rend= Perch $ \e -> do
+    where
+    span1 id1 rend= Perch $ \e -> do
         parent <- liftIO $ elemById id1 `onNothing` error ("not found "++ show id1)
         build rend  parent
        
@@ -535,9 +506,9 @@ getParam1 :: ( Typeable a, Read a, Show a)
           => Bool -> JSString ->  StateIO (ParamResult Perch a)
 getParam1 exact  par = do
   --  alert (exact,par)
-
-       tr "GETPARAM"
-
+   isTemplate <- liftIO $ readIORef execTemplate
+   if isTemplate then return NoParam else do
+      
        me <- if exact then elemById par else elemBySeq par
                                                 !> ("looking for " ++ show par)
        case me of
@@ -609,16 +580,13 @@ rprefix= unsafePerformIO $ newIORef 0
 #ifdef ghcjs_HOST_OS
 genNewId ::  (MonadState EventF m, MonadIO m) => m  JSString
 genNewId=  do
-      -- r <- liftIO $ atomicModifyIORef rprefix (\n -> (n+1,n))
+      r <- liftIO $ atomicModifyIORef rprefix (\n -> (n+1,n))
       n <- genId
-      alert ("nid",n)
-      let nid= toJSString $  ('n':show n) -- ++ ('p':show r)
+      let nid= toJSString $  ('n':show n)  ++ ('p':show r)
       nid `seq` return  nid
 
--- getCurrentId= do
---       n <- gets mfSequence
---       let nid= toJSString $  ('n':show (n-1))
---       return nid
+
+
 #else
 genNewId ::  (MonadState EventF m, MonadIO m) => m  JSString
 genNewId= return $ pack ""
@@ -792,9 +760,8 @@ getParam look type1 mvalue= Widget . Transient $ getParamS look type1 mvalue
 
 getParamS look type1 mvalue= do
     tolook <- case look of
-       Nothing  -> genNewId -- getData `onNothing` error "no event id" -- genNewId
+       Nothing  -> getData `onNothing` error "no event id" -- genNewId
        Just n -> return n
-    alert tolook
     let nvalue x =  case x of
           Nothing -> mempty
           Just v  ->
@@ -990,6 +957,193 @@ staticNav  x= do
   Path paths <-  getState <|> return (Path  [])
   x <*** setState (Path paths)
   
+
+-- | template link. Besides the wlink behaviour, it loads the page from the server if there is any
+--
+-- the page may have been saved with `edit`
+tlink :: (Show a,  Typeable a) => a -> Perch -> Widget a
+tlink x v= Widget  $
+
+    let showx= show1 x
+    in do
+           logged $  norender $ wlink showx v
+           runCloud readPage
+           return x
+
+         <|> getPath showx
+
+   where
+
+
+   show1 x | typeOf x== typeOf (undefined :: String) = unsafeCoerce x
+           | otherwise= show x
+
+   readPage ::  Cloud ()
+   readPage =  do
+        url <- local $ do
+           Path  path <- getSData <|> return (Path  [])
+           return $ (Prelude.foldl  (\p p' -> p <> "/" <> p') (head path) $ tail path)
+        mr <- atRemote $ local $
+#ifndef ghcjs_HOST_OS
+                  do
+                    let url' = if  url =="" then "/index" else url :: String
+                    let file= "static/out.jsexe/"++ url' ++ ".html"
+                    r <- liftIO $ doesFileExist file
+                    if r
+                      then do
+                         s <- liftIO $ BS.readFile  file
+                         Just <$> do
+                                 r <- filterBody s          --  !> "exist"
+                                 return r                   --  !> ("filtered",r)
+                      else return Nothing                   --  !> "do not exist"
+#else
+                  return Nothing
+#endif
+
+
+        case mr of
+          Nothing -> return ()                                -- !> "readpage return"
+          Just bodycontent -> do
+
+
+#ifdef ghcjs_HOST_OS
+             local $ do
+               liftIO $ forElems_ "body" $ this   `setHtml` bodycontent     -- !> bodycontent
+
+
+             local  $do
+               installHandlers                                  -- !> "installHanders"
+               delData ExecEvent
+               liftIO $ writeIORef execTemplate True
+             return()
+#else
+             localIO $  return()
+             localIO $  return()
+             return ()
+#endif
+
+#ifdef ghcjs_HOST_OS
+   installHandlers= do
+         setData $ IdLine 0 "n0p0"
+         EventSet hs  <- liftIO $ readIORef eventRef -- <- getSData  <|> return (EventSet [])
+         mapM_ f  hs                          -- !> ("installhandlers, length=", Prelude.length hs)
+         where
+         f (id, _, Event event, iohandler)= do
+             me <-  elemBySeq id
+             case me of
+               Nothing -> return()
+--                                          !> ("installHandlers: not found", id) -- error $ "not found: "++ show id
+               Just e ->
+
+                  liftIO $  buildHandler e event iohandler
+--                                   !> ("installHandlers adding event to ", id)
+#endif
+
+--   getPath :: Read a => TransIO a
+#ifdef ghcjs_HOST_OS
+
+
+   getPath segment= do
+--       return () !> "GETPATH"
+
+       Path  paths <- getSData <|> initPath
+       l <- liftIO $ readIORef rReadIndexPath
+       let pathelem=  paths !! l
+           lpath= Prelude.length paths
+       if  l >= lpath
+         then   empty                                     --  !> "getPath empty"
+         else do
+--            setData ExecTemplate     !> "SET EXECTEMPLATE 2"
+--            liftIO $ writeIORef execTemplate True
+            if unpack pathelem /= segment then  empty else do
+                   liftIO $ writeIORef rReadIndexPath $ l + 1
+                   asynchronous
+                   setData $ Path  paths
+                   return x
+--                                                     !> ("getPath return", x)
+
+
+--            liftIO $ writeIORef rReadIndexPath $ l +1
+--            r <- async . return . read $ unpack pathelem      -- !> ("pathelem=",pathelem)
+--            setData $ Path  paths
+
+--            return r
+
+       where
+       asynchronous= async $ return ()
+       initPath= do
+           path1 <- liftIO $ js_path  >>=   fromJSValUnchecked
+           return $ Path  $ split $ JS.drop 1 path1
+
+       split x=
+         if JS.null x then [] else
+          let (f,s) = JS.break (=='/') x
+          in if JS.null s
+               then let l1= JS.length f  in [JS.take (l1-5) f]
+               else f:split (JS.drop 1 s)
+#else
+   getPath _= empty
+#endif
+
+#ifndef ghcjs_HOST_OS
+   filterBody :: BS.ByteString -> TransIO BS.ByteString
+   filterBody page= do
+       setData $ ParseContext (error "parsing page") page   -- !> "filterBody"
+       dropTill "<body>"                                    -- !> "token body"
+       dropTill "</script>"                                 -- !> "tojen script"
+       stringTill parseString (token "</body>")             -- !> "stringTill"
+
+
+stringTill p end  = scan where
+    scan=  parseString <> ((try end >> return mempty) <|> scan)
+
+dropTill tok=do
+    s <- parseString
+    return ()
+    if s == tok then return ()     -- !> ("FOUND", tok)
+    else dropTill tok
+
+token tok= do
+    s <- parseString
+    return ()
+    if s == tok then return ()     -- !> ("FOUND", tok)
+      else empty
+
+
+parseString= do
+--    dropSpaces
+    tTakeWhile (not . isSeparator)
+
+
+    where
+    isSeparator c=  c == '>'
+    --dropSpaces= parse $ \str ->((),BS.dropWhile isSpace str)
+
+
+-- tTakeWhile :: (Char -> Bool) -> TransIO BS.ByteString
+-- tTakeWhile cond= parse (span' cond)
+--   where
+--   span' cond s=
+--      let (h,t) = BS.span cond s
+--          c= BS.head t
+--      in (BS.snoc h c,BS.drop 1 t)
+
+
+-- parse ::  (BS.ByteString -> (b, BS.ByteString)) -> TransIO b
+-- parse split= do
+--     ParseContext readit str <- getSData
+--                                 <|> error "parse: ParseContext not found"
+--                                 :: TransIO (ParseContext BS.ByteString)
+
+--     if BS.null str then empty else do
+--        let (ret,str3) = split str
+--        setData $ ParseContext readit  str3
+--        return ret
+
+
+
+#endif
+
 -- | show something enclosed in the <pre> tag, so ASCII formatting chars are honored
 wprint :: ToElem a => a -> Widget ()
 wprint = wraw . pre
@@ -1076,7 +1230,7 @@ instance  Attributable (Widget a) where
               delData rest
               mx <- runView widget
               fs <- getData `onNothing` return (mempty :: Perch)
-              setData  $ do rest ; (child $ mspan  fs) ! atrib :: Perch
+              setData  $ do rest ; (child $ mspan "noid" fs) ! atrib :: Perch
               return mx
      where
      child render = Perch $ \e -> do
@@ -1087,14 +1241,14 @@ instance  Attributable (Widget a) where
 instance Attributable   (Perch -> Widget a) where 
     w ! attr = \p -> w p ! attr
 
-mspan  cont=  Perch $ \e -> build cont e -- do
---         n <- liftIO $ getName e
--- --        alert $ toJSString $ show n
---         if  n == Just "EVENT"
---            then build cont e
---            else build (nelem' "event" ! atr "id" id $  cont) e
+mspan id cont=  Perch $ \e -> do
+        n <- liftIO $ getName e
+--        alert $ toJSString $ show n
+        if  n == Just "EVENT"
+           then build cont e
+           else build (nelem' "event" ! atr "id" id $  cont) e
   where
-  -- nelem' x cont= nelem x `child` cont
+  nelem' x cont= nelem x `child` cont
 -- | Empty widget that does not validate. May be used as \"empty boxes\" inside larger widgets.
 --
 -- It returns a non valid value.
@@ -1371,17 +1525,18 @@ addSData y=  do
 data IdLine= IdLine Int JSString  -- deriving(Read,Show)
 data ExecRender= HasEventSet | ExecEvent   deriving (Eq, Read, Show)
 
+execTemplate= unsafePerformIO $ newIORef False
 
 -- first identifier for an applicative widget expression
 -- needed for applictives in the widget monad that are executed differently than in the TransIO monad
 -- newtype IDNUM = IDNUM Int deriving Show
 
--- data Event= forall ev.IsEvent ev => Event ev
+data Event= forall ev.IsEvent ev => Event ev
 
--- data EventSet=  EventSet [(JSString, Int, Event, ( EventData -> IO ()))] deriving Typeable
+data EventSet=  EventSet [(JSString, Int, Event, ( EventData -> IO ()))] deriving Typeable
 
--- {-# NOINLINE eventRef #-}
--- eventRef= unsafePerformIO $ newIORef $ EventSet []
+{-# NOINLINE eventRef #-}
+eventRef= unsafePerformIO $ newIORef $ EventSet []
 
 -- | triggers the event that happens in a widget. The effects are the following:
 --
@@ -1403,13 +1558,12 @@ data ExecRender= HasEventSet | ExecEvent   deriving (Eq, Read, Show)
 
 raiseEvent ::  IsEvent event  => Widget a -> event -> Widget a
 #ifdef ghcjs_HOST_OS
-raiseEvent w event = Widget  $ Transient $ do
-  --  noTrans $ do
-  --     id <- genNewId
-  --     setData HasEventSet
+raiseEvent w event = Widget $do
+   id <-genNewId
+   setData HasEventSet
 
-  --     setState id
-  --  Transient $ do
+   setState id
+   Transient $ do
       --  Alternative cont <- getData  `onNothing` (Alternative <$> get)
        cont <- get
        let iohandler :: EventData -> IO ()
@@ -1417,38 +1571,51 @@ raiseEvent w event = Widget  $ Transient $ do
                 runStateT (setData eventdata >> runCont' cont) cont  --  !> "runCont INIT"
                 return ()                                            --  !> "runCont finished"
 
-      --  id <- genNewId
-      --  setState id
-      --  let id'= JS.takeWhile (/='p') id
-       runView $ addEvent  event iohandler <<< w  
-       
+       id <- genNewId
+       let id'= JS.takeWhile (/='p') id
+       addEventList id' event iohandler
+       template <-liftIO $ readIORef execTemplate 
+       if not template then runView $ addEvent  id event iohandler <<< w  
+       else do
+          me <- elemBySeq id'                                          --  !> ("adding event to",  id')
+          case me of
+
+            Nothing -> runView $ addEvent  id event iohandler <<< w      !> "do not exist, creating elem"
+            Just e -> do
+              mr <- getData                                              !> "exist adding event to current element"
+              when (mr /= Just ExecEvent) $ liftIO (buildHandler e event iohandler)
+              r <- runView w
+              delData noHtml
+              return r
+
    where
-  --  -- to restore event handlers when a new template is loaded
-  --  addEventList a b c= do
-  --   mid <- getData
-  --   case mid of
-  --     Nothing -> return()
-  --     Just (IdLine level _) -> do
-  --       liftIO $ atomicModifyIORef eventRef $ \(EventSet mlist) ->
-  --         let (cut,rest)= Prelude.span (\(x,l,_,_) -> x < a) mlist
-  --             rest'= Prelude.takeWhile(\(_,l,_,_) -> l <= level) $ tail1 rest
-  --         in (EventSet $ cut ++ (a,level, Event b, c):rest' ,())
-  --  tail1 []= []
-  --  tail1 xs= tail xs
+   -- to restore event handlers when a new template is loaded
+   addEventList a b c= do
+    mid <- getData
+    case mid of
+      Nothing -> return()
+      Just (IdLine level _) -> do
+        liftIO $ atomicModifyIORef eventRef $ \(EventSet mlist) ->
+          let (cut,rest)= Prelude.span (\(x,l,_,_) -> x < a) mlist
+              rest'= Prelude.takeWhile(\(_,l,_,_) -> l <= level) $ tail1 rest
+          in (EventSet $ cut ++ (a,level, Event b, c):rest' ,())
+   tail1 []= []
+   tail1 xs= tail xs
 
 
    runCont' cont= do
      setData ExecEvent                              --  !> "REPEAT: SET EXECEVENT"
 
-     mr <- runClosure cont !> "runclosure"
+     liftIO $ writeIORef execTemplate False
+     mr <- runClosure cont
      case mr of
          Nothing -> return Nothing
          Just r -> runContinuation cont r     -- !> "continue"
 
        -- create an element and add any event handler to it.
-   addEvent :: IsEvent a =>   a -> (EventData -> IO()) -> Perch -> Perch
-   addEvent event iohandler be= Perch $ \e -> do
-            e' <- build (mspan be) e
+   addEvent :: IsEvent a => JSString ->  a -> (EventData -> IO()) -> Perch -> Perch
+   addEvent id event iohandler be= Perch $ \e -> do
+            e' <- build (mspan id be) e
             buildHandler e' event iohandler
             return e
 
@@ -1541,7 +1708,7 @@ runWidget' action e  = do
       return mx
 
 runWidgetId w id=  do
-   tr "runWidgetId"
+   
    me <- liftIO $ elemById id
    guard $ isJust me
    let e = fromJust me
@@ -2028,4 +2195,56 @@ replaceState _ _ _= empty
 editW = onBrowser $ local empty                             -- !> "editW"
 js_getPage=  empty
 js_path=  empty
+#endif
+
+-- | edit and save the rendering of the widgets.
+--
+-- The edited content may be saved to a file with th current route by the save option of the editor.
+-- `tlink`  will load this page. Also when this route is requested, the server will return this page.
+edit w=  do
+  b <- localIO $ elemById "edited" >>= return . isJust
+
+  if  b then  do
+              local $ do -- modify (\s -> s{mfSequence=2})  -- *******
+                         -- liftIO $ writeIORef rprefix 2
+--                         setData ExecTemplate    !> "SET EXECTEMPLATE 1"
+                         liftIO $ writeIORef execTemplate True
+--                         setData $ IdLine 0 "n0p0"
+--              local addPrefix
+              w
+        else do
+          edit' <|>  w
+  where
+  edit' = do
+
+    editW
+
+    page <-  localIO $   js_getPage >>= fromJSValUnchecked  :: Cloud String
+    url  <- localIO $  js_path  >>=   fromJSValUnchecked    :: Cloud String
+
+    atRemote $ localIO $  do
+#ifdef ghcjs_HOST_OS
+        return ()
+#else
+        let url' = if  url =="/" then "/index.html" else url :: String
+        let page'= fullpage page
+--        return ()                                       !>  ("----->",url')
+        write  ("static/out.jsexe"++ url')  page'
+
+--        return () !> "WRITTTEN"
+    empty
+
+   where
+   write filename page=
+     writeFile filename page
+         `catch` (\e -> when ( isDoesNotExistError e) $  do
+              let dir= take (1+(last $ elemIndices '/' filename)) filename
+              return ()                                      -- !> ("create",dir)
+              createDirectoryIfMissing True dir
+              write filename page)
+
+   fullpage page=
+    "<!DOCTYPE html><html><head><script language=\"javascript\" src=\"rts.js\"></script><script language=\"javascript\" src=\"lib.js\"></script><script language=\"javascript\" src=\"out.js\"></script></head><body></body><script language=\"javascript\" src=\"runmain.js\" defer></script>"
+      ++ page ++ "</body></html>"
+
 #endif

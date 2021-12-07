@@ -43,14 +43,13 @@ setParseStream iox=  modify $ \s -> s{execMode=Serial,parseContext= ParseContext
 setParseString :: TransMonad m => BS.ByteString -> m ()
 setParseString x = modify $ \s -> s{execMode=Serial,parseContext= ParseContext (return SDone) x (unsafePerformIO $ newIORef False)} --  setState $ ParseContext (return SDone) x 
 
-
+-- Set the ByteString environment for the parser parameter. At the end, it restores the original parse context.
 withParseString ::  BS.ByteString -> TransIO a -> TransIO a
 withParseString x parse= do
-     p <- gets parseContext -- getState <|> return(ParseContext (return SDone) mempty)
+     p <- gets parseContext 
      setParseString x
-     r <- parse
-     modify $ \s -> s{parseContext= p} --setState (ParseContext c (str :: BS.ByteString))
-     return r
+     parse <*** do modify $ \s -> s{parseContext= p} 
+     
 
 
 withParseStream stream parse= do
@@ -71,7 +70,7 @@ string s= withGetParseString $ \str -> do
     let len= BS.length s
         ret@(s',_) = BS.splitAt len str
 
-    if s == s'   -- !> ("parse string looked, found",s,s')
+    if s == s'    !> ("parse string looked, found",s,s')
 
       then return ret 
       else empty -- !> "STRING EMPTY"
@@ -365,7 +364,7 @@ withGetParseString parser=  Transient $ do
  
     let loop = unsafeInterleaveIO $ do
           r <-readIORef done
-          if r then return mempty else do
+          if r  then return mempty else do
             (mr,_) <- runTransient readMore
             case mr of 
               Nothing -> mempty 
@@ -410,7 +409,6 @@ giveParseString= (noTrans $ do
 
    let loop = unsafeInterleaveIO $ do
            (mr,_) <-  runTransient readMore
-           tr ("read",mr)
 
            case mr of 
             Nothing -> mempty

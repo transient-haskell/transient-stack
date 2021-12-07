@@ -238,7 +238,7 @@ TransIO, TransientIO
 , (**>), (<**), (<***)
 
 -- * Running the monad
-,keep, keep', stop, exit
+,keep, keep',keepCollect, stop, exit
 
 -- * Asynchronous console IO
 ,option,option1, input,input'
@@ -249,13 +249,13 @@ TransIO, TransientIO
 
 -- * State management
 ,setData, getSData, getData, delData, modifyData, modifyData', try, setState, getState, delState, newRState,getRState,setRState, modifyState
-,labelState, findState, killState
+,labelState, findState, removeState
 
 -- * Thread management
-, threads,addThreads, freeThreads, hookedThreads,oneThread, killChilds
+, threads, anyThreads, addThreads, freeThreads, hookedThreads,oneThread, killChilds
 
 -- * backtracking
-,undo,onUndo,retry,back,onBack,forward,backPoint,onBackPoint,finish,onFinish
+,undo,onUndo,retry,back,onBack,forward,backPoint,onBackPoint,finish,onFinish,onFinish',localBack
 
 -- * Exceptions
 

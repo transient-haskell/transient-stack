@@ -13,7 +13,7 @@
 -----------------------------------------------------------------------------
 {-# LANGUAGE  ScopedTypeVariables, CPP #-}
 module Transient.Indeterminism (
-choose,  choose', chooseStream, collect, collect', group, groupByTime, burst
+choose,  choose', for, chooseStream, collect, collect', group, groupByTime, burst
 ) where
 
 import Transient.Internals hiding (retry)
@@ -23,19 +23,19 @@ import Control.Applicative
 import Data.Monoid
 import Control.Concurrent  
 import Control.Monad.State
-import Control.Exception 
+import Control.Exception hiding (onException)
 import qualified Data.ByteString.Char8 as BS
 
+import System.IO.Unsafe
 
-
--- | Converts a list of pure values into a transient task set. You can use the
+-- | inject a stream of  values in the computation in as much threads as are available. You can use the
 -- 'threads' primitive to control the parallelism.
 --
 choose  ::  [a] -> TransIO  a
 choose []= empty
 choose   xs = chooseStream xs >>= checkFinalize  
 
--- | transmit the end of stream
+-- | inject a stream of SMore values in the computation in as much threads as are available. transmit the end of stream witha SLast value
 chooseStream  ::  [a] -> TransIO (StreamData a)
 chooseStream []= empty
 chooseStream   xs = do
@@ -47,11 +47,26 @@ chooseStream   xs = do
             x:_  -> x `seq` return $ SMore x
 
 
--- | Same as 'choose',  slower in some cases
+-- | Same as 'choose', but slower in some cases. However it uses 
+
 --
 choose' :: [a] -> TransIO a
-choose' xs = foldl (<|>) empty $ map (async . return) xs
+choose' xs = foldr (<|>) empty $ map (async . return) xs
 
+-- | for loop, single threaaded with de-inversion of control
+--
+-- >> do
+-- >>   i <- for [1..10]
+-- >>   liftIO $ print i
+--
+-- Composes with any other transient primitive
+--
+-- >> main= keep  $  do
+-- >>  x <- for[1..10::Int] <|> (option ("n" :: String) "enter another number < 10" >> input (< 10 ) "number? >")
+-- >>  liftIO $ print (x * 2)
+--
+for :: [a] -> TransIO a
+for = threads 0 . choose
 
 -- | Collect the results of a task set in groups of @n@ elements.
 --
@@ -84,47 +99,56 @@ collect n = collect' n 0
 -- collection stops after the timeout and the results collected till now are
 -- returned.
 --
-collect' :: Int -> Int -> TransIO a -> TransIO [a]
-collect' n t search= do
+-- collect' :: Int -> Int -> TransIO a -> TransIO [a]
+-- collect' n t search= do
 
 
-  rv <- liftIO $ newEmptyMVar     -- !> "NEWMVAR"
+--   rv <- liftIO $ newMVar $ Just[]     -- !> "NEWMVAR"
 
-  results <- liftIO $ newIORef (0,[])
+--   results <- liftIO $ newIORef (0,[])
 
-  let worker =  do
-        r <- abduce >> search
-        liftIO $  putMVar rv $ Just r
-        stop
-
-      timer= do
-             when (t > 0) $ do
-                --addThreads 1
-                async $ threadDelay t >> putMVar rv Nothing 
-             empty
-
-      monitor=  liftIO loop 
-
-          where
-          loop = do
-                mr <- takeMVar rv
-
-                (n',rs) <- readIORef results
-                case mr of
-                  Nothing -> return rs
-                  Just r -> do
-                     let n''= n' + 1
-                     let rs'= r:rs
-                     writeIORef results  (n'',rs')
-
-                     if (n > 0 && n'' >= n)
-                       then  return (rs')
-                       else loop
-              `catch` \(_ :: BlockedIndefinitelyOnMVar) -> 
-                                   readIORef results >>= return . snd
+--   let worker =  do
+--         abduce
+--         r <- search
+--         liftIO $ withMVar rv $ \mns ->
+--            case mns of 
+--               Nothing -> return Nothing
+--               Just ns -> return $ Just (r:ns) -- `catch` \BlockedIndefinitelyOnMVar ->  myThreadId >>= killThread >> return()
+--         empty
 
 
-  oneThread $  timer <|> worker <|> monitor 
+
+--       timer= do
+--              when (t > 0) $ do
+--                 --addThreads 1
+--                 async $ threadDelay t >> putMVar rv Nothing 
+--              empty
+      
+--       monitor=  liftIO loop 
+
+--           where
+--           loop = do
+--                 mr <- takeMVar rv
+--                 (n',rs) <- readIORef results
+--                 case mr of
+--                   Nothing -> return rs
+--                   Just rs' -> do
+--                     --  liftIO $ print $ length rs'
+--                      let n''= n' + length rs'
+--                      let rs''= rs'++rs
+--                      writeIORef results  (n'',rs'')
+
+--                      if (n > 0 && n'' >= n)
+--                        then  return (rs'')
+--                        else putMVar rv (Just rs'') >> loop
+--               `catch` \(_ :: BlockedIndefinitelyOnMVar) -> do
+--                                    readIORef results >>= return . snd
+
+--   -- localExceptions $ do
+--   --   onException $ \(e :: SomeException) -> empty
+
+--   oneThread $  (timer <|> worker <|> monitor)
+
 
 
 -- | insert `SDone` response every time there is a timeout since the last response

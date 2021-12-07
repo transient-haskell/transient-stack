@@ -27,7 +27,7 @@ import System.Environment
 import System.IO.Error
 import Data.Typeable
 import Data.List((\\), isPrefixOf)
-import qualified Data.ByteString.Char8 as BS
+import qualified Data.ByteString.Lazy.Char8 as BS
 import Control.Exception hiding(onException)
 import System.IO.Unsafe
 
@@ -61,7 +61,6 @@ rretry= unsafePerformIO $ newIORef False
 initNode :: Loggable a => Cloud a -> TransIO a
 initNode app= do
    node <- getNodeParams 
-
    rport <- liftIO $ newIORef $ nodePort node
    node' <- return node `onException'` ( \(e :: IOException) -> do
              if (ioeGetErrorString e ==  "resource busy") 
@@ -85,10 +84,11 @@ getNodeParams  =
               empty
 #else
         do
-          oneThread $ option "start" "re/start node"
+         --  oneThread $ 
+          option "start" "re/start node"
 
           host <- input' (Just "localhost") (const True) "hostname of this node. (Must be reachable, default:localhost)? "
-          retry <-input' (Just "n") (== "retry") "if you want to retry with port+1 when fail, write 'retry': "
+          retry <-input' (Just "n") (== "retry") "if you want to retry with port+1 when the port is busy, write 'retry': "
           when (retry == "retry") $ liftIO $ writeIORef rretry True
           port <- input  (const True) "port to listen? "
           liftIO $ createNode host port
@@ -134,8 +134,9 @@ initNodeServ services host port app= do
 -- the first of the two is not connected to synchronize their list of nodes. The second does.
 inputNodes :: Cloud empty
 inputNodes= onServer $ do 
-  local $ abduce >> labelState (BS.pack "inputNodes")
+--   local $ abduce >> labelState (BS.pack "inputNodes")
   listNodes <|> addNew
+  
   where
   addNew= do
           local $ do
@@ -168,8 +169,11 @@ inputNodes= onServer $ do
           empty
      
 -- | show the URL that may be called to access that functionality within a program 
-showURL= onAll$ do 
-       Closure closRemote  <- getSData <|>  return (Closure 0 )--get myclosure
+showURL= do 
+      --  idConn <- (idConn <$> getState) <|> return 0
+      --  log <- getLog
+      --  (Closure closRemote,_) <- getIndexData idConn `onNothing` return (Closure 0,[0]::[Int])
+       let closRemote= 0
        --get remoteclosure
        log <- getLog --get path 
        n <- getMyNode
@@ -179,11 +183,15 @@ showURL= onAll$ do
            putStr ":"
            putStr $show $ nodePort n
            putStr "/"
-           putStr $ show 0
+           putStr $ show 0 
+           putStr "/"
+           putStr $ show 0 -- $ hashClosure log
+           putStr "/"
+           putStr $ show 0 
            putStr "/"
            putStr $ show  closRemote
            putStr "/"
-           putStr $ show $ fulLog log
+           BS.putStr $ toLazyByteString $ toPath $ fulLog log
            putStrLn "'"
 
        
@@ -213,7 +221,6 @@ simpleWebApp port app = do
 -- initialization of the web server
 initWebApp :: Loggable a => Node -> Cloud a -> TransIO a
 initWebApp node app=  do
-
     conn <- defConnection
     liftIO $ writeIORef (myNode conn)  node
     setNodes  [node]
@@ -224,10 +231,10 @@ initWebApp node app=  do
                         return node
                     else return serverNode
 
-    runCloud' $ do
-        listen mynode <|> return()
+    runCloud $ do
+        listen mynode <|>  return()
         serverNode <- onAll getWebServerNode
-        wormhole serverNode  app
+        wormhole' serverNode $  do r <-app;(minput "end" :: Cloud()); return r
    
 
          

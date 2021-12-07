@@ -403,18 +403,19 @@ callService' node params =  loggedc $ do
       then  onAll $ do
           svs <- liftIO $ readIORef selfServices
           
-          modifyData' (\log -> log{buildLog=mempty,recover=True}) $ error "No log????"
-          withParseString (toLazyByteString $ serialize params <> byteString (BSS.pack "/")) $ runCloud' svs
-          modifyData' (\log -> log{recover=True}) $ error "No log????"
-          log <- getState
-          setParseString $ toLazyByteString $ buildLog log
+          modifyData' (\log -> log{recover=RTrue}) $ error "No log????"
+          withParseString (toLazyByteString $ serialize params <> byteString (BSS.pack "/")) $ runCloud svs
+          modifyData' (\log -> log{recover=RTrue}) $ error "No log????"
+          -- log <- getState
+          -- setParseString $ toLazyByteString $ buildLog log -- ??? to test
           r <- logged empty
           
           return r   
 
       else do
 
-          localFixServ True False
+          log <- Transient.Logged.getLog    -- test
+          setData emptyLog
           local $ return ()       
 
           r <- wormhole' node $  do
@@ -426,7 +427,7 @@ callService' node params =  loggedc $ do
              r <- local empty -- read the response
              onAll $ symbol $ BS.pack "e/" 
              return r
-          delData  (undefined :: LocalFixData)
+          setData log
           return r
 
 
@@ -471,7 +472,7 @@ inputAuthorizations= empty
 
 
 catchc :: Exception e => Cloud a -> (e -> Cloud a) -> Cloud a
-catchc a b= Cloud $ catcht (runCloud' a) (\e -> runCloud' $ b e)
+catchc a b= Cloud $ catcht (runCloud a) (\e -> runCloud $ b e)
 
 
 selfServices= unsafePerformIO $ newIORef empty
@@ -530,7 +531,6 @@ runService' servDesc defPort servAll proc=  do
        onAll $ symbol $ BS.pack "e/"
        servAll
        tr "before  teleport"  
-       onAll $ setRState $ DialogInWormholeInitiated True
        teleport  
 
        where
@@ -544,9 +544,10 @@ runService' servDesc defPort servAll proc=  do
                    sendStatusToMonitor  $ show e
 
                    local $ do
-                      Closure closRemote <- getData `onNothing` error "teleport: no closRemote"
+                      conn <- getState
+                      (Closure sess closRemote,_ ::[Int]) <- getIndexData (idConn conn) `onNothing` error "teleport: no closRemote"
                       conn <- getData `onNothing` error "reportBack: No connection defined: use wormhole"
-                      msend conn  $ SError $ toException $ ErrorCall $ show $ show $ CloudException node closRemote $ show e
+                      msend conn  $ toLazyByteString $ serialize (SError $ toException $ ErrorCall $ show $ show $ CloudException node sess closRemote $ show e :: StreamData NodeMSG)
                       empty -- return $ toIDyn ()
  
 
@@ -628,7 +629,7 @@ serve :: (Loggable a, Loggable b) => (a -> Cloud b) -> Cloud ()
 serve  serv= do 
         modify $ \s -> s{execMode= Serial}
         p <-  onAll deserialize --  empty if the parameter does not match
-        modifyData' (\log -> log{recover=False}) $ error "serve: error"
+        modifyData' (\log -> log{recover=RFalse}) $ error "serve: error"
         loggedc $ serv p
          
         tr ("SERVE")

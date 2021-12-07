@@ -193,7 +193,7 @@ mkscell  name  expr= do
 
 
 scell :: JSString -> Expr Double -> Cell Double
-scell id  expr= Cell{ mk= \mv -> Widget $  do
+scell id  expr= Cell{ mk= \mv ->Widget $ do
                            r <- norender $ getParam (Just id) "text"  mv `fire` OnChange
                            mod <-  liftIO (readIORef rmodified) <|> return( M.empty)
                            liftIO $ writeIORef rmodified $ M.insert id  r mod

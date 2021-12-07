@@ -39,7 +39,7 @@ newEVar  = Transient $ do
    ref <-liftIO  newBroadcastTChanIO
    return . Just $ EVar  ref
 
--- | delete al the subscriptions for an evar.
+-- | delete al the subscriptions for an EVar.
 cleanEVar :: EVar a -> TransIO ()
 cleanEVar (EVar  ref1)= liftIO $ atomically $  writeTChan  ref1 SDone
 
@@ -49,17 +49,12 @@ cleanEVar (EVar  ref1)= liftIO $ atomically $  writeTChan  ref1 SDone
 --
 -- if readEVar is re-executed in any kind of loop, since each continuation is different, this will register
 -- again. The effect is that the continuation will be executed multiple times
--- To avoid multiple registrations, use `cleanEVar`
+-- To avoid multiple registrations, use `cleanEVar`. Transient discourages the use of loops
 readEVar :: EVar a -> TransIO a
 readEVar (EVar  ref1)=  do
      tchan <-  liftIO . atomically $ dupTChan ref1
      r <-  parallel $ atomically $  readTChan tchan
-     case r of
-        SDone -> empty
-        SMore x -> return x
-        SLast x -> return x
-        SError e -> empty
---              error $ "readEVar: "++ show e
+     checkFinalize r
 
 -- |  update the EVar and execute all readEVar blocks with "last in-first out" priority
 --
