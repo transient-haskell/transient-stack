@@ -39,12 +39,12 @@ import Data.TCache  hiding (onNothing)
 import Data.TCache.IndexQuery
 
 #ifndef ghcjs_HOST_OS
-import Network
+-- import Network
 --- import Network.Info
 import Network.URI
 --import qualified Data.IP                              as IP
 import qualified Network.Socket                         as NS
-import qualified Network.BSD                            as BSD
+-- import qualified Network.BSD                            as BSD
 import qualified Network.WebSockets                     as NWS -- S(RequestHead(..))
 
 import qualified Network.WebSockets.Connection          as WS
@@ -86,7 +86,6 @@ import Control.Exception hiding (onException,try)
 import Data.Maybe
 --import Data.Hashable
 
-
 import System.IO.Unsafe
 import Control.Concurrent.STM as STM
 import GHC.Conc(unsafeIOToSTM)
@@ -112,12 +111,13 @@ import System.Environment
 pk= BS.pack
 up= BS.unpack
 
+-- type HostName  = String
+
 #ifdef ghcjs_HOST_OS
-type HostName  = String
 newtype PortID = PortNumber Int deriving (Read, Show, Eq, Typeable)
 #endif
 
-data Node= Node{ nodeHost   :: HostName
+data Node= Node{ nodeHost   :: NS.HostName
                , nodePort   :: Int
                , connection :: Maybe (MVar Pool)
                , nodeServices   :: [Service]
@@ -756,7 +756,7 @@ newtype PrevClos= PrevClos (DBRef LocalClosure)
 receive  conn   closLocal idSession = do
 
   (lc,log) <- setCont idSession
-  -- s <- giveParseString
+  s <- giveParseString
   -- tr ("PARSESTRING",s,"LOG",toPath $ fulLog log)
   if rrecover log && not (BS.null s) then return() else do
     when (synchronous conn) $ liftIO $ takeMVar $ localMvar lc
@@ -786,6 +786,35 @@ receive  conn   closLocal idSession = do
       Left except -> do
         throwt except
         empty
+
+
+firstCont= onAll $ do
+
+      cont <- get
+      log <- getLog
+      let rthis= getDBRef "0-0"-- TC.key this
+
+      tr ("assign",log)
+      when (not $ rrecover log) $ do
+
+        let this=LocalClosure{
+                localCon= 0,
+                prevClos= rthis, 
+                localLog=   fulLog log, -- codificar en flow.hs
+                localClos= 0, -- hashClosure log,
+                localEnd=getEnd $ fulLog log, -- codificar en flow.hs
+                localEvar= Nothing,localMvar=error "no mvar",localCont= Just cont}
+
+        tr ("end", localEnd this, fulLog log)
+        n <- getMyNode
+        -- let url= str "http://" <> str (nodeHost n) <> str ":" <> intt (nodePort n) </>    
+        --                             intt 0 </> intt 0 </> 
+        --                             intt 0 </> intt 0 </>
+        --                             str "$" <> "()"
+        -- print url
+        liftIO $ atomically $ writeDBRef rthis this
+      setState $ PrevClos rthis
+
 
 -- | store the log and the rest of parameters so that upon an invocation, the program can be restored at that point and answer such invocation
 setCont idSession   = do 
@@ -1333,9 +1362,9 @@ parallelReadHandler conn= do
         liftIO $ modifyMVar_ (isBlocked conn) $ const  $ Just <$> return t
 
         abduce
-        st <- getCont
+        -- st <- getCont
         th <- liftIO myThreadId
-        tr("extractpacket this parent",th, threadId $ fromJust $ unsafePerformIO $ readIORef $ parent st)
+        -- tr("extractpacket this parent",th, threadId $ fromJust $ unsafePerformIO $ readIORef $ parent st)
         -- topState >>= showThreads
         setParseString str
         deserialize
@@ -1379,7 +1408,8 @@ mclose con= do
    case c of
       Just (TLSNode2Node ctx) -> liftIO $ withMVar (isBlocked con) $ const $ liftIO $ tlsClose ctx
       Just (HTTPS2Node ctx) -> do
-         Just node <- liftIO $ readIORef $ remoteNode con
+         mnode <- liftIO $ readIORef $ remoteNode con
+         let node = fromMaybe (error "mclose: no node") mnode
          delNodes [node]
          liftIO $ withMVar (isBlocked con) $ const $ liftIO $ tlsClose ctx
 
@@ -1387,7 +1417,9 @@ mclose con= do
 
       Just (Node2Web sconn )      -> liftIO $ WS.sendClose sconn ("closemsg" :: BS.ByteString) !> "WEBSOCkET CLOSE"
       Just (HTTP2Node _ sock _)   -> do
-         Just node <- liftIO $ readIORef $ remoteNode con
+         mnode <- liftIO $ readIORef $ remoteNode con
+         let node = fromMaybe (error "mclose: no node") mnode
+
          delNodes [node]
          liftIO $ withMVar (isBlocked con) $ const $ liftIO $ NS.close sock !> "SOCKET CLOSE"
 
@@ -1549,14 +1581,14 @@ mconnect1 (node@(Node host port _ services ))= do
                        connectWebSockets1  h p ("/relay/"  ++  h  ++ "/" ++ show p ++ "/") needTLS
 
 
-    connectSockTLS host port needTLS= do
+    connectSockTLS host (port :: Int) needTLS= do
         return ()                                         !> "connectSockTLS"
 
         let size=8192
         c@Connection{myNode=my,connData=rcdata} <- getSData <|> defConnection 
         tr "BEFORE HANDSHAKE"
 
-        sock  <- liftIO $ connectTo'  size  host $ PortNumber $ fromIntegral port
+        sock  <- liftIO $ connectTo'  size  host  $ show port
         let cdata= (Node2Node u  sock (error $ "addr: outgoing connection"))
         cdata' <- liftIO $ readIORef rcdata
 
@@ -1817,24 +1849,49 @@ mconnect node'= do
 #ifndef ghcjs_HOST_OS
 
 
-connectTo' bufSize hostname (PortNumber port) =  do
-        proto <- BSD.getProtocolNumber "tcp"
-        bracketOnError
-            (NS.socket NS.AF_INET NS.Stream proto)
-            (NS.close)  -- only done if there's an error
-            (\sock -> do
-              NS.setSocketOption sock NS.RecvBuffer bufSize
-              NS.setSocketOption sock NS.SendBuffer bufSize
+-- connectTo' bufSize hostname  port =  do
+--         proto <- getProtocolNumber "tcp"
+--         bracketOnError
+--             (NS.socket NS.AF_INET NS.Stream proto)
+--             (NS.close)  -- only done if there's an error
+--             (\sock -> do
+--               NS.setSocketOption sock NS.RecvBuffer bufSize
+--               NS.setSocketOption sock NS.SendBuffer bufSize
 
 
 
 --              NS.setSocketOption sock NS.SendTimeOut 1000000  !> ("CONNECT",port)
 
-              he <- BSD.getHostByName hostname
+              -- he <- getHostByName hostname
 
-              NS.connect sock (NS.SockAddrInet port (BSD.hostAddress he))
+              -- NS.connect sock (NS.SockAddrInet port (hostAddress he))
 
-              return sock)
+              -- return sock)
+
+
+connectTo' ::  Int -> NS.HostName -> NS.ServiceName   -> IO NS.Socket 
+connectTo' bufSize host port  =  do
+    addr <- resolve
+    bracket (open addr) NS.close $ \sock -> do
+               NS.setSocketOption sock NS.RecvBuffer bufSize
+               NS.setSocketOption sock NS.SendBuffer bufSize
+
+
+
+               NS.setSocketOption sock NS.SendTimeOut 1000000  !> ("CONNECT",port)
+
+              --  he <- NS.getHostByName host
+
+              --  NS.connect sock (NS.SockAddrInet port (NS.hostAddress he))
+
+               return sock
+  where
+    resolve = do
+        let hints = NS.defaultHints { NS.addrSocketType = NS.Stream }
+        head <$> NS.getAddrInfo (Just hints) (Just host) (Just port)
+    open addr = bracketOnError (NS.openSocket addr) NS.close $ \sock -> do
+        NS.connect sock $ NS.addrAddress addr
+        return (sock :: NS.Socket)
 
 #else
 connectToWS  h (PortNumber p) = do
@@ -1849,17 +1906,18 @@ connectToWS  h (PortNumber p) = do
 -- last usage+ blocking semantics for sending
 type Blocked= MVar (Maybe Integer)
 type BuffSize = Int
+type PortID= Int
 data ConnectionData=
 #ifndef ghcjs_HOST_OS
-                   Node2Node{port :: PortID
-                            ,socket ::Socket
+                   Node2Node{port :: NS.ServiceName
+                            ,socket ::NS.Socket
                             ,sockAddr :: NS.SockAddr
                              }
                    | TLSNode2Node{tlscontext :: SData}
                    | HTTPS2Node{tlscontext :: SData}
                    | Node2Web{webSocket :: WS.Connection}
-                   | HTTP2Node{port :: PortID
-                            ,socket ::Socket
+                   | HTTP2Node{port ::  NS.ServiceName
+                            ,socket :: NS.Socket
                             ,sockAddr :: NS.SockAddr}
                    | Self
 
@@ -1867,7 +1925,9 @@ data ConnectionData=
                    Self
                    | Web2Node{webSocket :: WebSocket}
 #endif
-   --   deriving (Eq,Ord)
+      deriving (Show)
+instance Show WS.Connection where
+  show _ = "WS"
 
 newtype PersistId= PersistId Integer deriving (Read,Show,Typeable)
 instance TC.Indexable PersistId where key _ = "persistId"
@@ -2010,7 +2070,7 @@ listen  (node@(Node _ port _ _ )) = onAll $ do
    ex <- exceptionPoint :: TransIO (BackPoint SomeException)
    setData ex
 
-   mlog <- listenNew (fromIntegral port) conn <|> listenResponses :: TransIO (StreamData NodeMSG)
+   mlog <- listenNew  (show port) conn <|> listenResponses :: TransIO (StreamData NodeMSG)
    execLog mlog
   --  onFinish $ const $ do
   --               liftIO $ print "FINISH IN CLOSURE 0"
@@ -2031,8 +2091,23 @@ listen  (node@(Node _ port _ _ )) = onAll $ do
 
 -- listen incoming requests
 
+listenOn :: NS.ServiceName  -> IO NS.Socket
+listenOn  port  =  do
+    addr <- resolve
+    open addr
+  where
+    resolve = do
+        let hints = NS.defaultHints {NS.addrFlags = [NS.AI_PASSIVE], NS.addrSocketType = NS.Stream }
+        head <$> NS.getAddrInfo (Just hints) Nothing (Just port)
+    open addr = bracketOnError (NS.openSocket addr) NS.close $ \sock -> do
+        NS.setSocketOption sock NS.ReuseAddr 1
+        NS.withFdSocket sock NS.setCloseOnExecIfNeeded
+        NS.bind sock $ NS.addrAddress addr
+        NS.listen sock 1024
+        return sock
+
 listenNew port conn'=  do
-   sock <- liftIO $ listenOn $ PortNumber port
+   sock <- liftIO $ listenOn  port
    tr "LISTEN ON"
    liftIO $ do
       let bufSize= bufferSize conn'
@@ -2066,7 +2141,7 @@ listenNew port conn'=  do
                     (liftIO $ NS.close sock >> throw (ConnectionError "connection closed" nod)) 
                     input (unsafePerformIO $ newIORef False)
              ::ParseContext )}
-   cdata <- liftIO $ newIORef $ Just (Node2Node (PortNumber port) sock addr)
+   cdata <- liftIO $ newIORef $ Just (Node2Node  port sock addr)
    let conn'= conn{connData=cdata}
   --  TOD t _ <- liftIO $ getClockTime
    liftIO $ modifyMVar_ (isBlocked conn) $ const  $ return Nothing -- Just <$> return t
@@ -2259,7 +2334,10 @@ listenNew port conn'=  do
                 conn <- getSData
                 liftIO $ atomicModifyIORef' (connData conn) $ \cdata -> case cdata of
                          Just(Node2Node  port sock addr) -> (Just $ HTTP2Node port sock addr,())
+                         Just(HTTP2Node port sock addr) -> (Just $ HTTP2Node port sock addr,())
                          Just(TLSNode2Node ctx) -> (Just $ HTTPS2Node ctx,())
+                         Just (HTTPS2Node ctx) -> (Just $ HTTPS2Node ctx,())
+                         _ -> error $ "line 2337: " <> show (cdata) 
                 pool <- liftIO $ newMVar [conn]
                 let node=Node "httpnode" 0 (Just pool) [[("httpnode","")]]
                 addNodes [node]
@@ -2308,7 +2386,7 @@ listenNew port conn'=  do
         let (host:port:_)=  split $ BC.unpack $ BC.drop 6 uri'
         tr ("RELAY TO",host, port)
         --liftIO $ threadDelay 1000000
-        sserver <- liftIO $ connectTo' 4096 host $ PortNumber $ fromIntegral $ read port
+        sserver <- liftIO $ connectTo' 4096 host  port
         tr "CONNECTED"
         rawHeaders <- getRawHeaders
         tr  ("RAWHEADERS",rawHeaders)
@@ -2948,11 +3026,11 @@ emptyPool= liftIO $ newMVar  []
 
 -- | Create a node from a hostname (or IP address), port number and a list of
 -- services.
-createNodeServ ::  HostName -> Int -> [Service] -> IO Node
+createNodeServ ::  NS.HostName -> Int -> [Service] -> IO Node
 createNodeServ h p svs=  return $ Node h  p Nothing svs
 
 
-createNode :: HostName -> Int -> IO Node
+createNode ::  NS.HostName -> Int -> IO Node
 createNode h p= createNodeServ h p []
 
 createWebNode :: IO Node
@@ -2981,7 +3059,6 @@ instance Read Node where
 nodeList :: TVar  [Node]
 nodeList = unsafePerformIO $ newTVarIO []
 
-deriving instance Ord PortID
 
 --myNode :: Int -> DBRef  MyNode
 --myNode= getDBRef $ key $ MyNode undefined
@@ -3558,27 +3635,18 @@ restoreClosure idConn (clos :: Int)=  do
   let cont'= cont{parseContext=(parseContext cont){buffer=parses} ,mfData= mf'}
   tr ("SET parseString",toPathLon $LD log,"short",toPath $ LD log)
   void $ liftIO $ runStateT (runCont cont') cont' `catch` exceptBack cont
-  -- void $ liftIO $ runStateT (do
-  --   mr <- runClosure cont
-  --   case mr of
-  --     Nothing -> return Nothing
-  --     Just r -> do
-  --        tr ("baselog",baselog)
-  --        let log'= baselog <> log
-  --        setState emptyLog{recover=True,fulLog=log'}
-  --        setParseString  $ toLazyByteString $ toPathLon log
-  --        tr ("SET",toPathLon log')
-  --        runContinuation cont r) cont
 
-    
 
-newtype OpCounter= OpCounter Int
+
+
+-- {-# NOINLINE opCounter #-}
+-- opCounter= unsafePerformIO $ newIORef (1 ::Int)
 
 data InitSendSequence= InitSendSequence
 
 
-minput :: Loggable a => String -> Cloud a
-minput msg= response 
+minput :: (Loggable a,ToRest a) => String -> String -> Cloud a
+minput ident msg= response 
  where
  response= do
 
@@ -3586,24 +3654,26 @@ minput msg= response
   local $ do
       log <-getLog
       connected log  <|> commandLine  log
-  
 
-  where 
-  type1:: Cloud a -> a
-  type1= undefined
-
-
-  commandLine log = do
+ commandLine log = r 
+    where 
+    r= do
      guard (not $ rrecover log)
      mconn <- getData :: TransIO (Maybe Connection)
-     guard (isNothing mconn)
-     OpCounter n <- modifyData' (\(OpCounter n) -> OpCounter $ n+1) (OpCounter 1)
-     option n $ msg <> ": "
-     input (const True) msg
-
+     guard (isNothing mconn || case unsafePerformIO (readIORef $ connData $fromJust mconn) of Just Self -> True; _ -> False)
+    --  n <- liftIO $ atomicModifyIORef opCounter $ \ n -> (n+1,n)
+    --  pref <- prefix 1 msg
+     if null ident then  do liftIO $ putStrLn msg ; empty else do
+      option ident  msg 
+      if typeOf r /= typeOf (undefined :: TransIO ()) then inputLine deserialize  msg else return $ unsafeCoerce ()
+      
+      -- prefix n option= do
+      --   let ident = take n msg
+      --   actions <- readIORef rcb
+      --   if and $ map (\(a,_,_) -> ident /= a) actions then return ident else prefix (n+1) option
 
   -- connected :: Loggable a => TransIO a
-  connected log = do
+ connected log = do
     -- PrevClos prev <- getState
     idSession <- fromIntegral <$> genPersistId
     -- idSession <-  let ind= read $ takeWhile (/= '-') $ keyObjDBRef prev
@@ -3627,7 +3697,7 @@ minput msg= response
         let url= str "http://" <> str (nodeHost n) <> str ":" <> intt (nodePort n) </>    
                                     intt idSession </> intt closLocal </> 
                                     intt sess </> intt closRemote </>
-                                    str "$" <> (str $ show $ typeOf $ type1 response)
+                                    (toRest $ type1 response)
 
         ty <- liftIO $ readIORef $ connData conn
         case ty of
@@ -3645,13 +3715,13 @@ minput msg= response
          _ -> do
 
           -- insertar typeof response
-          let tosend= str "{ \"msg\"=\""  <> str msg  <> str "\", cont=\""  <> url <> str "\"}"
+          let tosend= str "{ \"msg\"=\""  <> str msg  <> str "\", \"cont\"=\""  <> url <> str "\"}"
           let l = fromIntegral $ BS.length tosend
           
           ms <- getRData  -- avoid more than one onWaitthread, add "{" at the beguinning of the response
           case ms of
             Nothing -> do
-               onWaitThreads $ const $ do liftIO $ print "ONWAIT"; msend conn $ str "1\r\n}\r\n0\r\n\r\n"
+               onWaitThreads $ const $  msend conn $ str "1\r\n}\r\n0\r\n\r\n"
                setRState InitSendSequence
                msend conn "1\r\n{\r\n"
             Just InitSendSequence -> return()
@@ -3670,18 +3740,10 @@ minput msg= response
           delRState InitSendSequence
 
           logged $ error "insuficient parameters 2" -- read the response, error if response not logged
-          
 
       else do
-
-
-
         receive conn closLocal idSession
         tr "else"
-
-   
-
-
         logged $ error "insuficient parameters 3" -- read the response
         
       where 
@@ -3693,3 +3755,8 @@ minput msg= response
       toHex l= 
           let (q,r)= quotRem  l 16
           in toHex q <> (BS.singleton $ if r < 9  then toEnum( fromEnum '0' + r) else  toEnum(fromEnum  'A'+ r -10))
+   
+      type1:: Typeable a => Cloud a -> a
+      type1 cx= r
+        where
+        r= error $ show $ typeOf r
