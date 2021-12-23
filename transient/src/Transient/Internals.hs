@@ -865,7 +865,7 @@ showThreads st = liftIO $ withMVar printBlock $ const $ do
         chs <- readMVar $ children ch
         mapM_ (showTree $ n + 2) $ reverse chs
   showTree 0 st
-
+{-
 #ifdef DEBUG
 diffThreads :: (TransMonad m, MonadIO m) => m ()
 diffThreads=  do
@@ -903,6 +903,8 @@ diffThreads=  do
     liftIO $ showTree 0 st
 
 #endif
+
+-}
 -- | Return the state of the thread that initiated the transient computation
 -- topState :: TransIO EventF
 
@@ -1716,16 +1718,14 @@ inputf remove ident message mv cond = do
           
   when remove $  liftIO $ delConsoleAction ident 
   c <- liftIO $ readIORef rconsumed
-  if c then returnm mv else do
-
-    let rr = read1 str 
-
-    case   (rr,str)  of
-      (Nothing,_) -> do (liftIO $ when (isJust mv) $ putStrLn ""); returnm mv 
-      (Just x,"") -> do (liftIO $ do writeIORef rconsumed True; print x); returnm mv 
-      (Just x,_)  -> if cond x 
+  if isJust c then returnm mv else do
+    let res = read2 str 
+    case   res  of
+      Nothing -> do (liftIO $ when (isJust mv) $ putStrLn ""); returnm mv 
+      -- (Just x,"") -> do (liftIO $ do writeIORef rconsumed True; print x); returnm mv 
+      Just (x,rest)  -> if cond x 
                         then liftIO $ do
-                          writeIORef rconsumed True  
+                          writeIORef rconsumed $ Just $ dropspaces rest  
                           print x
                           -- hFlush stdout
                           return x
@@ -1737,15 +1737,19 @@ inputf remove ident message mv cond = do
   returnm (Just x)= return x
   returnm _ = empty
   
-  -- read1 :: String -> Maybe a
-  read1 s= r 
+dropspaces s= dropWhile (\x ->elem x "/: ") s
+
+read2 :: (Typeable a,Read a) =>String -> Maybe (a,String)
+read2 s= r 
       where
-      typ= typeOf $ fromJust r
-      r = if typ == typeOf ""                 then Just $ unsafeCoerce s
-          else if typ == typeOf (BS.pack "")  then Just $ unsafeCoerce $ BS.pack  s
-          else if typ == typeOf (BSL.pack "") then Just $ unsafeCoerce $ BSL.pack  s
+      typ :: Maybe (a,String) -> a
+      typ= undefined
+      typr= typeOf(typ r)
+      r = if typr== typeOf ""                 then  let (r1,rest)= span(\x -> (not $ elem x "/: ")) s in Just (unsafeCoerce r1,dropspaces rest) -- span
+          else if typr == typeOf (BS.pack "")  then  let (r1,rest)= span(\x -> (not $ elem x "/: ")) s in Just (unsafeCoerce $ BS.pack r1, dropspaces rest)  -- until separator
+          else if typr == typeOf (BSL.pack "") then  let (r1,rest)= span(\x -> (not $ elem x "/: ")) s in Just (unsafeCoerce $ BSL.pack r1,dropspaces rest)
           else case reads s of
-              [(x,"")] -> Just x
+              [(x,rest)] -> Just (x,dropspaces rest)
               _ ->  Nothing
 
 
@@ -1760,6 +1764,8 @@ input' :: (Typeable a, Read a,Show a) => Maybe a -> (a -> Bool) -> String -> Tra
 input' mv cond prompt= do  
   --liftIO $ putStr prompt >> hFlush stdout 
   inputf True "input" prompt  mv cond 
+
+
 
 
 rcb= unsafePerformIO $ newIORef [] :: IORef [ (String,String,String -> IO())]
@@ -1799,22 +1805,49 @@ inputLoop= do
 
 
 {-# NOINLINE rconsumed #-}
-rconsumed = unsafePerformIO $ newIORef False
+rconsumed = unsafePerformIO $ newIORef Nothing
 {-# NOINLINE lineprocessmode #-}
 lineprocessmode= unsafePerformIO $ newIORef False
 
-processLine r = do
+processLine line =   do
+       mbs <- readIORef rcb
+       process 2 mbs line
+  where
+  process :: Int -> [(String,String,String -> IO())] -> String -> IO ()
+  process _ _ []= writeIORef rconsumed Nothing >> return ()
+     
+  process 0 [] line= do
+    let (r,rest) = span(\x -> (not $ elem x "/: ")) line
+    hPutStr  stderr r >> hPutStrLn stderr ": can't read, skip"
+    mbs <- readIORef rcb
+    writeIORef rconsumed Nothing
+    process 2 mbs rest
+  
+  process n [] line= do
+    mbs <- readIORef rcb
+    process (n-1) mbs line
 
+  process n mbs line= do
+       let cb = trd $ head mbs
+       cb line
+
+       r <- atomicModifyIORef' rconsumed $ \res -> (Nothing,res)
+       let restLine=  fromMaybe line r
+
+       
+       process n (tail mbs) restLine  
+    where
+    trd (_,_,x)=x
+
+  {-
+processLine r = do
     linepro <- readIORef lineprocessmode
     if linepro then do
-
             mapM' invokeParsers [r]
-            
        else do
             let rs = breakSlash [] r
             mapM' invokeParsers rs
 
-    
     where
     invokeParsers x= do
        mbs <- readIORef rcb
@@ -1843,6 +1876,7 @@ processLine r = do
               else mapM' f xss
 
     riterloop= unsafePerformIO $ newIORef 0
+
 breakSlash :: [String] -> String -> [String]
 breakSlash [] ""= [""]
 breakSlash s ""= s
@@ -1851,7 +1885,7 @@ breakSlash res ('\"':s)=
     in breakSlash (res++[r]) $ tail1 rest
 
 breakSlash res s=
-    let (r,rest) = span(\x -> (not $ elem x "/,:") && x /= ' ') s
+    let (r,rest) = span(\x -> (not $ elem x "/: ")) s
     in breakSlash (res++[r]) $ tail1 rest
 
 tail1 []= []
@@ -1861,7 +1895,7 @@ tail1 x= tail x
 -- ["test.hs","0","-prof -auto"]
 --
 
-
+-}
 
 
 -- | Wait for the execution of `exit` and return the result or the exhaustion of thread activity
@@ -1976,10 +2010,16 @@ keep mx = do
                    -}
             <|> do
                    option "end" "exit"
-                   liftIO $ putStrLn "exiting..."
+                   liftIO $ putStrLn  "exiting..."
                    abduce
-                   killChilds
+
+                   st <-threadState $ fromString "input"
+                   liftIO $ killThread $ threadId st
+                  --  killChilds
                    liftIO $ putMVar rexit Nothing
+                   top <- topState
+                   liftIO $ killChildren $ children top
+                   liftIO $ killThread $ threadId top
                    empty
 
 
@@ -2090,6 +2130,7 @@ keepCollect n time mx  = do
     forkIO execCommandLine
     takeMVar rexit  `catch` \(e :: BlockedIndefinitelyOnMVar) -> return []
 
+execCommandLine :: IO ()
 execCommandLine= do
     args <- getArgs
     let mindex =  findIndex (\o ->  o == "-p" || o == "--path" ) args
