@@ -12,7 +12,7 @@ isDone,dropUntilDone,
 -- * giving the parse string
 withGetParseString, giveParseString,
 -- * debug
-notParsed, getParseBuffer,clearParseBuffer, showNext,
+notParsed, getParseBuffer,clearParseBuffer, showNext, inputParse, ToRest(..),
 -- Composing parsing processes
 (|-)) where
 
@@ -20,7 +20,7 @@ import Transient.Internals
 import Control.Applicative
 import Data.Char
 import Data.Monoid
-
+import System.IO
 import System.IO.Unsafe
 import Control.Monad
 import Control.Monad.State
@@ -33,6 +33,7 @@ import Control.Exception hiding (try)
 import Data.IORef
 import Control.Concurrent
 import Data.Maybe
+import Data.Typeable
 
 -- | set a stream of strings to be parsed
 setParseStream :: TransMonad m =>  TransIO (StreamData BS.ByteString) -> m ()
@@ -474,7 +475,69 @@ showNext msg n= do
    liftIO $ print (msg,r);
    modify $ \s -> s{parseContext= (parseContext s){buffer= r <>buffer(parseContext s)}}
 
-        
+
+u= undefined 
+
+class Typeable a => ToRest a where
+  toRest :: a -> BS.ByteString
+  toRest x=  BS.pack (typeOfR x)
+
+instance ToRest () where
+  toRest _ = ""
+
+instance ToRest String where
+  toRest _= "$string"
+
+instance ToRest BS.ByteString where
+  toRest _= "$string"
+
+instance ToRest Int where  
+  toRest _= "$int"
+
+instance (ToRest a,  ToRest b) => ToRest (a,b) where
+    toRest x =   (toRest $ fst x) <> "/" <>  (toRest $ snd x)
+      where
+      fst (a,_)= a
+      snd (_,b)= b
+
+instance (Typeable a, Typeable b, Typeable c) => ToRest(a,b,c) where
+    toRest x= BS.pack $  (typeOfR $ fst x) ++ "/" ++  (typeOfR $ snd x) ++ "/" ++  (typeOfR $ thr x)
+      where
+      fst (a,_,_)= a
+      snd (_,b,_)= b
+      thr (_,_,c)= c
+
+instance (Typeable a, Typeable b,Typeable c,Typeable d) => ToRest(a,b,c,d) where
+    toRest x= BS.pack $  (typeOfR $ fst x) ++ "/" ++  (typeOfR $ snd x) ++  "/" ++ (typeOfR $ thr x) ++ "/" ++ (typeOfR $ frt x)
+      where
+      fst (a,_,_,_)= a
+      snd (_,b,_,_)= b
+      thr (_,_,c,_)= c
+      frt (_,_,_,d)= d
+
+typeOfR x= show $ typeOf x --  "$" <> map toLower ( show (typeOf x))
+  -- let t= typeOf x 
+  -- in if t== typeOf (u:: String) || t==typeOf (u :: BS.ByteString) || t==typeOf (u :: BS.ByteString) then "string"
+  --    else map toLower $ show t
+
+
+-- | write a message and parse a complete line
+inputParse :: (Typeable b) => TransIO b  -> String -> TransIO b
+inputParse parse  message= r 
+  where 
+  r= do
+    liftIO $ putStr message {-(message  <> " type: " <> BS.unpack (toRest $ t r) ) -} >> hFlush stdout
+    -- liftIO $ writeIORef lineprocessmode True
+    str <- react (addConsoleAction message message) (return ())   
+
+    liftIO $ delConsoleAction message  
+    -- liftIO $ writeIORef lineprocessmode False
+    (r,rest) <- withParseString (BS.pack str) $ (,) <$> parse <*> giveParseString  
+    liftIO $ do writeIORef rconsumed $ Just rest
+    return r
+
+  t :: TransIO a -> a
+  t= u
         
         
 -- infixl 0 |-
