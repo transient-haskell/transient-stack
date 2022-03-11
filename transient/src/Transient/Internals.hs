@@ -1157,7 +1157,7 @@ setData x = modify $ \st -> st { mfData = M.insert t (unsafeCoerce x) (mfData st
 
 -- | Accepts a function which takes the current value of the stored data type
 -- and returns the modified value. If the function returns 'Nothing' the value
--- is deleted otherwise updated.
+-- is deleted. Otherwise, updated.
 modifyData :: (TransMonad m, Typeable a) => (Maybe a -> Maybe a) -> m ()
 modifyData f = modify $ \st -> st { mfData = M.alter alterf t (mfData st) }
   where typeResp :: (Maybe a -> b) -> a
@@ -1199,14 +1199,25 @@ delData x = modify $ \st -> st { mfData = M.delete (typeOf x) (mfData st) }
 delState :: (TransMonad m, Typeable a) => a -> m ()
 delState = delData
 
--- | get a state identified by his type and an index
+-- | get a pure state identified by his type and an index
 getIndexData n= do
   clsmap <- getData `onNothing` return M.empty
   return $ M.lookup n clsmap
 
--- | set a state identified by his type and an index
-setIndexData n cls= do
-  modifyData' (\map -> M.insert n cls map) (M.singleton n cls)
+-- | set a pure state identified by his type and an index
+setIndexData n val= do
+  modifyData' (\map -> M.insert n val map) (M.singleton n val)
+
+withIndexData
+  :: (TransMonad m,
+      Typeable k,
+      Typeable a, Ord k) =>
+     k -> a -> (a -> a) -> m (M.Map k a)
+withIndexData i n f= 
+      modifyData' (\map -> case M.lookup i map of
+                              Just x -> M.insert i (f x) map
+                              Nothing -> map <> (M.singleton i n)) (M.singleton i n)
+
 
 getIndexState n= Transient $ getIndexData n
 
@@ -1592,7 +1603,7 @@ free th env = do
                                       let u= unsafePerformIO
                                           typ= fst (u $ readIORef $ labelth ev)
                                       in if typ==DeadParent && length (u (readMVar $ children ev))==0
-                                            || typ /= Parent  
+                                            || (typ /= Parent && typ /= DeadParent)
                                             then
                                               (processed ++ evts, True)
                                             else (processed ++ evtss,False)
@@ -1736,21 +1747,24 @@ inputf remove ident message mv cond = do
   where
   returnm (Just x)= return x
   returnm _ = empty
-  
-dropspaces s= dropWhile (\x ->elem x "/: ") s
 
-read2 :: (Typeable a,Read a) =>String -> Maybe (a,String)
-read2 s= r 
+
+
+  read2 :: (Typeable a,Read a) =>String -> Maybe (a,String)
+  read2 s= r 
       where
       typ :: Maybe (a,String) -> a
       typ= undefined
       typr= typeOf(typ r)
-      r = if typr== typeOf ""                 then  let (r1,rest)= span(\x -> (not $ elem x "/: ")) s in Just (unsafeCoerce r1,dropspaces rest) -- span
-          else if typr == typeOf (BS.pack "")  then  let (r1,rest)= span(\x -> (not $ elem x "/: ")) s in Just (unsafeCoerce $ BS.pack r1, dropspaces rest)  -- until separator
-          else if typr == typeOf (BSL.pack "") then  let (r1,rest)= span(\x -> (not $ elem x "/: ")) s in Just (unsafeCoerce $ BSL.pack r1,dropspaces rest)
+      r = if typr== typeOf ""                 then  let (r1,rest)= span(\x ->  (not $ elem x separators)) s in Just (unsafeCoerce r1,dropspaces rest) -- span
+          else if typr == typeOf (BS.pack "")  then  let (r1,rest)= span(\x -> (not $ elem x separators)) s in Just (unsafeCoerce $ BS.pack r1, dropspaces rest)  -- until separator
+          else if typr == typeOf (BSL.pack "") then  let (r1,rest)= span(\x -> (not $ elem x separators)) s in Just (unsafeCoerce $ BSL.pack r1,dropspaces rest)
           else case reads s of
               [(x,rest)] -> Just (x,dropspaces rest)
               _ ->  Nothing
+
+dropspaces s= dropWhile (\x ->elem x separators) s
+separators= "/:\t\n "
 
 
 -- | Waits on stdin and return a value when a console input matches the
@@ -1772,7 +1786,7 @@ rcb= unsafePerformIO $ newIORef [] :: IORef [ (String,String,String -> IO())]
 
 addConsoleAction :: String -> String -> (String ->  IO ()) -> IO ()
 addConsoleAction name message cb= atomicModifyIORef rcb $ \cbs ->  
-              ((name,message, cb) : filter ((/=) name . fst) cbs ,())
+              ( filter ((/=) name . fst) cbs <> [(name,message, cb)]  ,())
  where
  fst (x,_,_)= x
 
@@ -1811,7 +1825,7 @@ lineprocessmode= unsafePerformIO $ newIORef False
 
 processLine line =   do
        mbs <- readIORef rcb
-       process 2 mbs line
+       process 5 mbs line
   where
   process :: Int -> [(String,String,String -> IO())] -> String -> IO ()
   process _ _ []= writeIORef rconsumed Nothing >> return ()
@@ -1821,7 +1835,7 @@ processLine line =   do
     hPutStr  stderr r >> hPutStrLn stderr ": can't read, skip"
     mbs <- readIORef rcb
     writeIORef rconsumed Nothing
-    process 2 mbs rest
+    process 5 mbs $ dropspaces rest
   
   process n [] line= do
     mbs <- readIORef rcb
@@ -1833,9 +1847,9 @@ processLine line =   do
 
        r <- atomicModifyIORef' rconsumed $ \res -> (Nothing,res)
        let restLine=  fromMaybe line r
-
-       
-       process n (tail mbs) restLine  
+       --si se ha consumido leer la lista de callbacks otra vez
+       mbs' <- if isJust r then readIORef rcb else return $ tail mbs
+       process n mbs' restLine  
     where
     trd (_,_,x)=x
 
@@ -1953,12 +1967,15 @@ keep mx = do
            liftIO $ removeFile logFile `catch`  \(e :: IOError) -> return ()
 
            onException $ \(e :: SomeException) -> do
-              liftIO $ do
-                th <- myThreadId
-                putStrLn $ show th ++ ": " ++ show e
-              back $ Finish $ show  (unsafePerformIO myThreadId,e)
-              --showThreads top`
-              --liftIO $ appendFile logFile $ show e ++ "\n" -- `catch` \(e:: IOError) -> exc
+             case fromException e of 
+              Just BlockedIndefinitelyOnSTM -> return () 
+              _ -> do
+                liftIO $ do
+                  th <- myThreadId
+                  putStrLn $ show th ++ ": " ++ show e
+                back $ Finish $ show  (unsafePerformIO myThreadId,e)
+                --showThreads top`
+                --liftIO $ appendFile logFile $ show e ++ "\n" -- `catch` \(e:: IOError) -> exc
               
            
            onException $ \(e :: IOException) -> do
@@ -2008,6 +2025,8 @@ keep mx = do
                    liftIO $ print $ fmap (\(Log _ _ log _) -> reverse log) ml
                    empty
                    -}
+
+
             <|> do
                    option "end" "exit"
                    liftIO $ putStrLn  "exiting..."

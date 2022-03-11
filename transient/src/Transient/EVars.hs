@@ -8,7 +8,7 @@ import Control.Applicative
 import Control.Concurrent.STM
 import Control.Monad.State
 
-
+import Control.Exception as CE
 
 
 

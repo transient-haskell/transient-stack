@@ -466,17 +466,18 @@ mainsetc= keep $  do
 
  
 
-mainmonad= keep $ do
-  flowAssign
+maincomplx= keep $ do
+  -- flowAssign
+  firstCont -- setc
   proc1 <|> restore1 <|> save
 
   where
 
-  proc1= proc "p1"  <|> proc "p2"
+  proc1= proc "p1"   <|> proc "p2"
   proc op= do
     logged $ option op ("process "++ op)
-    
     r <- logged $ return HELLO
+    
     logged $ liftIO $ putStrLn $ show r ++ op
     r <- logged $  logged $ logged $ return WORLD
     logged $ liftIO $ putStrLn $ show r ++ op
@@ -487,7 +488,9 @@ mainmonad= keep $ do
             setc
             logged $ return POST1
         logged $ return POSTT
-    
+        
+    showLog
+
     logged $ return THAT
 
     r <- logged $  logged $ logged $ return WORLD
@@ -521,7 +524,38 @@ setc =  do
 
 showLog=do
   log <- getLog
-  ttr $ ("SHOWLOG",fulLog log," ",toPath $ fulLog log,"  ",toPathLon $ fulLog log)
+  tr $ ("SHOWLOG",fulLog log," ",toPath $ fulLog log,"  ",toPathLon $ fulLog log)
+
+
+{- 
+  Que hay diferente entre setc y teleport?
+    el teleport recibe un log el problema es saber, cuando envia, cual es el incremento.
+       cuando está a punto de acabar
+       pero el envio se hace cuando los exe han sido resueltos. Filtrar los LX? cuales?
+          por cada sybslast, recalcular?
+          descartar todos los lx desde el final del anterior 
+          update setindexdata mientras parsestring== null y esté en un loggedc
+  
+  el setIndexData es equivalente a la DBRef pero sin log, solo con ends
+-}
+main= keep $ do
+   firstCont
+   proc <|>  save <|>  restore1
+ where
+ proc= do
+  logged $ option "go" "go"
+  r <- logged $ logged $ logged $ do
+    setc
+    logged $ return HELLO
+
+  logged $ liftIO $ print r
+  
+  r1 <- logged $ do
+    setc
+    return WORLD
+  logged $ liftIO $ print (r,r1)
+  log <- getLog
+  tr ("fulLog",fulLog log)
 
 
 
@@ -541,19 +575,19 @@ mainf= keep $ syncFlush <|>  runCloud (do
       r <- mparallel  $ do  threadDelay 5000000 ; return $ SMore  prev
       localIO $ print r
 
-main=keep $ syncFlush <|>  initNode (do
-   onAll flowAssign
-   local $ return "HI"
-   r <- minput "enter msg1"  :: Cloud String 
-   onAll $ liftIO $ print "RECEIVEDDDDD llll"
-   localIO $ print (r ::String)
+-- main20=keep $ syncFlush <|>  initNode (do
+--    onAll flowAssign
+--    local $ return "HI"
+--    r <- minput "enter msg1"  :: Cloud String 
+--    onAll $ liftIO $ print "RECEIVEDDDDD llll"
+--    localIO $ print (r ::String)
  
-  --  conn <- Cloud getState
-  --  path "msgs1"
-   r2 <- minput "enter msg21"  <|> minput "enter msg22" :: Cloud String -- <|>  Cloud( do liftIO $ threadDelay 1000000; msend conn ( BS.pack "0\r\n\r\n"))
-   localIO $ liftIO $ print (r,r2)
-   r3 <- minput "enter msg3" :: Cloud String
-   localIO $ print (r,r2,r3))
+--   --  conn <- Cloud getState
+--   --  path "msgs1"
+--    r2 <- minput "enter msg21"  <|> minput "enter msg22" :: Cloud String -- <|>  Cloud( do liftIO $ threadDelay 1000000; msend conn ( BS.pack "0\r\n\r\n"))
+--    localIO $ liftIO $ print (r,r2)
+--    r3 <- minput "enter msg3" :: Cloud String
+--    localIO $ print (r,r2,r3))
 {-
  como se gestiona la historia del navegador
  gestion de cookies
@@ -578,17 +612,17 @@ autentificacion? investigar
 --       setRState pa <> "/" <> str
 
 -- get all the options of a user
-allOptions user= do
-  ns <- allReg localCon .==. user
-  let url n= str "http://" <> str (nodeHost n) <> str ":" <> intt (nodePort n) </>    
-                                    intt (localCon n) </> intt (localClos n) </> 
-                                    intt 0 </> intt 0 </>
-                                    str "$" <> (str $ show $ typeOf $ type1 response)
-  return map url ns
-  where 
-  str=   BS.pack
-  type1:: Cloud a -> a
-  type1= undefined
+-- allOptions user= do
+--   ns <- allReg localCon .==. user
+--   let url n= str "http://" <> str (nodeHost n) <> str ":" <> intt (nodePort n) </>    
+--                                     intt (localCon n) </> intt (localClos n) </> 
+--                                     intt 0 </> intt 0 </>
+--                                     str "$" <> (str $ show $ typeOf $ type1 response)
+--   return map url ns
+--   where 
+--   str=   BS.pack
+--   type1:: Cloud a -> a
+--   type1= undefined
   -- falta response
 
 mainwait = do

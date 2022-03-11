@@ -193,6 +193,7 @@ chainManyTill op p end=   scan
             <|>
               do{ x <- p; xs <- scan; return (x `op` xs) }
 
+
 between open close p = do{ open; x <- p; close; return x }
 
 symbol = string 
@@ -459,7 +460,7 @@ notParsed:: TransIO BS.ByteString
 notParsed= withGetParseString $ \s -> return (s,mempty) !> "notParsed"
 
 -- | get the current buffer already read but not yet parsed
-getParseBuffer :: TransIO BS.ByteString
+getParseBuffer :: TransMonad m => m BS.ByteString
 getParseBuffer= do
   ParseContext _ s _<- gets parseContext
   return s
@@ -519,7 +520,6 @@ typeOfR x= show $ typeOf x --  "$" <> map toLower ( show (typeOf x))
   -- let t= typeOf x 
   -- in if t== typeOf (u:: String) || t==typeOf (u :: BS.ByteString) || t==typeOf (u :: BS.ByteString) then "string"
   --    else map toLower $ show t
-
 
 -- | write a message and parse a complete line
 inputParse :: (Typeable b) => TransIO b  -> String -> TransIO b

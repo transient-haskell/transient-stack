@@ -30,7 +30,7 @@ import Data.List((\\), isPrefixOf)
 import qualified Data.ByteString.Lazy.Char8 as BS
 import Control.Exception hiding(onException)
 import System.IO.Unsafe
-
+import Data.TCache(syncCache)
 rretry= unsafePerformIO $ newIORef False
 
 -- | ask in the console for the port number and initializes a node in the port specified
@@ -93,7 +93,13 @@ getNodeParams  =
           port <- input  (const True) "port to listen? "
           liftIO $ createNode host port
          <|> getCookie
+         <|> commit
+         
     where
+    commit= do
+                    option "save" "commit the current execution state"
+                    liftIO $ syncCache
+                    empty
     getCookie= do
         if isBrowserInstance then return() else do
           option "cookie" "set the cookie"
@@ -104,7 +110,7 @@ getNodeParams  =
     
 initNodeDef :: Loggable a => String -> Int -> Cloud a -> TransIO a
 initNodeDef host port app= do
-   node <- def <|> getNodeParams -- <|> maybeRetry
+   node <- def <|> getNodeParams 
    initWebApp node app
    where
    def= do
@@ -219,7 +225,7 @@ simpleWebApp port app = do
 
 -- | use this instead of simpleWebApp when you have to do some initializations in the server prior to the
 -- initialization of the web server
-initWebApp :: Loggable a => Node -> Cloud a -> TransIO a
+initWebApp :: (Loggable a) => Node -> Cloud a -> TransIO a
 initWebApp node app=  do
     conn <- defConnection
     liftIO $ writeIORef (myNode conn)  node
@@ -232,10 +238,17 @@ initWebApp node app=  do
                     else return serverNode
 
     runCloud $ do
+         
         listen mynode <|>  return()
+
+        onAll $(do c <- getState; receive c 0) <|> return()
+
         serverNode <- onAll getWebServerNode
-        wormhole' serverNode $  do r <-app;(minput "end" :: Cloud()); return r
-   
+        wormhole' serverNode $ do 
+
+            r <-app;(minput "" "end" :: Cloud())
+            return r
+        
 
          
 -- | run N nodes (N ports to listen) in the same program. For testing purposes.

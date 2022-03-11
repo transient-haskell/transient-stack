@@ -80,7 +80,7 @@ test-suite test-transient
                      -- libraries not bundled w/ GHC
                      , mtl
                      , stm
-                     , random == 1.1
+                     , random
 
 
 

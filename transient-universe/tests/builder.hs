@@ -331,7 +331,7 @@ instance Exception CompilationErrors
 
 
 
-newtype Options=Options [String]
+newtype Options= Options [String]
 newtype Package= Package (M.Map String String)
 build :: String  -> TransIO ()
 build file = do

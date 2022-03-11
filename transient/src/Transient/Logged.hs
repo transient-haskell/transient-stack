@@ -43,7 +43,7 @@ Loggable(..), logged, received, param, getLog, exec,wait, emptyLog,
  suspend, checkpoint, rerun, restore,
 #endif
 
-Log(..),Recover(..),logs, toPath, toPathLon, getEnd, getLogFromIndex, dropFromIndex,rrecover, (<<),(<<-), LogData(..),LogDataElem(..),  toLazyByteString, byteString, lazyByteString, Raw(..)
+Log(..),Recover(..),logs, toPath,toPathFragment, toPathLon, getEnd, joinlog,substLast, dropFromIndex,rrecover, (<<),(<<-), LogData(..),LogDataElem(..),  toLazyByteString, byteString, lazyByteString, Raw(..)
 ) where
 
 import Data.Typeable
@@ -143,9 +143,9 @@ instance Loggable a => Loggable (StreamData a) where
      sdone = symbol "SDone"  >> return SDone
      serror= symbol "SError/" >> (SError <$> deserialize)
 
-instance Loggable () where
-  serialize= mempty
-  deserialize= return()
+instance Loggable () --where
+  -- serialize= mempty
+  -- deserialize= return()
 
 instance Loggable Bool where 
   serialize b= if b then "t" else "f"
@@ -158,17 +158,27 @@ instance Loggable Bool where
             in if h== 't' then return (True,tail)  else if h== 'f' then return (False, tail) else empty 
 
 -- instance {-# OVERLAPPING #-} Loggable String where
---   serialize s= byteString $ BSS.pack s
---   deserialize= BS.unpack <$> tTakeWhile (/= '/')
+  -- serialize s= byteString $ BSS.pack s
+  -- deserialize= BS.unpack <$> tTakeWhile (/= '/')
 
 instance Loggable Int
 instance Loggable Integer
+
+instance Loggable a => Loggable [a]
  
-instance   (Typeable a, Loggable a) => Loggable[a]  
-  --  serialize x= if typeOf x== typeOf (undefined :: String) then BS.pack x else BS.pack $ show x
-  --  deserialize= let [(s,r)]= 
+{-
+instance  {-# OVERLAPPING #-}  (Typeable a, Loggable a) => Loggable[a]  where
+    serialize x= byteString $ if typeOf x== typeOf (undefined :: String) then  BSS.pack (unsafeCoerce x) else BSS.pack $ show x
+    deserialize= r 
+       where 
+       ty :: TransIO [a] -> [a]
+       ty = undefined
+       r= 
+          if typeOf (ty r) == typeOf (undefined :: String) 
+                then unsafeCoerce $ BS.unpack <$> tTakeWhile (/= '/')
+                else tChar '[' >> commaSep deserialize <* tChar ']'
 
-
+-}
 
 
 
@@ -253,13 +263,26 @@ rrecover log= let r =recover log in r== RTrue    --   ||  r== Restore
 
 data Log  = Log{ recover :: Recover, fromCont :: Bool, fulLog :: LogData,  hashClosure :: Int} deriving (Show)
 
-data LogDataElem= LE  Builder  | LX LogData {- (Maybe LogData)-} deriving (Read,Show, Typeable)
+data LogDataElem= LE  Builder  | LX LogData deriving (Read,Show, Typeable)
 
 newtype LogData=  LD [LogDataElem]  deriving (Read,Show, Typeable)
 
 instance Loggable LogData where
   serialize = toPath
   deserializePure s= Just (LD[LE  $ lazyByteString s],mempty)
+
+-- instance Semigroup LogData where
+--   (<>)= mappend
+-- instance Monoid LogData where
+--   mempty= LD mempty
+--   LD [] `mappend` LD log= LD log
+--   LD log `mappend` LD log' = 
+--     case ((splitAt (length log -1) log),log') of
+--       ((_,[LE _]),log') -> LD $ log ++ log' 
+      
+--       ((prev,[LX  (LD log'')]),LE log''':rest) -> LD $ prev ++ [LX $ LD(log''++[LE log'''])] <> rest
+--       -- cuando los dos terminos tiene LX, se juntan
+--       ((prev,[LX (log'')]),LX (log'''):rest) -> LD $ prev ++ [LX(log''<>log''')] <> rest
 
 instance Semigroup LogData where
   (<>)= mappend
@@ -269,10 +292,18 @@ instance Monoid LogData where
   LD log `mappend` LD log' = 
     case (splitAt (length log -1) log) of
       (_,[LE _]) -> LD $ log ++ log' 
-      -- (prev,[LX  (LD[])]) -> LD $ prev ++ [LX ( LD  $ tail log' )]
-      (prev,[LX  log'']) -> LD $ prev ++ [LX (log'' <> LD log' )]
+      (prev,[LX  log'']) ->  LD $ prev ++ [LX (log'' <> LD log' )]
 
-      -- (prev,[LX  (LD log'')]) -> LD $ prev ++ [LX ( LD $ log''<> log' )]
+
+-- continue a chain at the deep of the second argument
+LD [] `joinlog` LD log= LD log
+LD log `joinlog` LD log' = 
+    case (splitAt (length log -1) log) of
+      (_,[LE _]) -> LD $ log ++ log' 
+      (prev,[LX  log'']) -> case log' of
+                   [] -> LD log
+                   (LE _ : _) -> LD $ prev ++ [LX (log'' <> LD log' )]
+                   (LX log''':rest) -> LD $ prev ++ [LX(log'' `joinlog` log''')] <> rest
 
 
 
@@ -400,41 +431,59 @@ substLast (LD x) a= LD $ append' x where
 --   dropLast' [LX(LD xs)]= [LX(LD $ dropLast' xs)]
 --   dropLast' (x:xs)= x:dropLast' xs
 
-getLogFromIndex :: [Int] -> LogData -> Builder
-getLogFromIndex [] (LD log)= toPathl log
+-- getLogFromIndex :: [Int] -> LogData -> Builder
+-- getLogFromIndex [] (LD log)= toPathl log
 
-getLogFromIndex [0] (LD log)= toPathl log
+-- getLogFromIndex [0] (LD log)= toPathl log
 
-getLogFromIndex (i:is) (LD log)= 
-  let ls= drop i  log
-  in case ls of
-    [] -> mempty
-    _ ->
-      case head ls of
-        LX log' -> (if null is then byteString "e/" else mempty)  <> getLogFromIndex is log'  <> 
-                                     case ls of
-                                       [_] -> mempty
-                                       _   -> toPathl (tail $ tail ls)
-        _ -> toPathl   ls
+-- getLogFromIndex (i:is) (LD log)= 
+--   let dropi= drop i  log
+--   in case dropi of
+--     [] -> mempty
+--     _ ->
+--       case head dropi of
+--         LX log' -> (if null is then byteString "e/" else mempty)  <> getLogFromIndex is log'  <> 
+--                                      case dropi of
+--                                        [_] -> mempty
+--                                        _   -> toPathl (tail $ tail dropi)
+--         _ -> toPathl   dropi
 
 
+
+
+-- dropFromIndex :: [Int] -> LogData -> [LogDataElem]
+-- dropFromIndex [] (LD log)=  log
+
+-- dropFromIndex [i] (LD log)=  drop i log
+
+
+-- dropFromIndex (i:is) (LD log)= 
+--   let dropi= drop i  log 
+--   in case dropi of
+--     []          -> mempty
+--     (LX log':t) -> if null is then [LX $ LD $ dropFromIndex is log'] <> t
+--                                    else dropFromIndex is log'  <> if null t then [] else tail t
+--     (LE x:_)    -> if toLazyByteString x== "w/"  then dropi else                   
+--                         error "dropFormIndex: level too deep" -- drop (length is) dropi  -- shoud be error
 
 
 dropFromIndex :: [Int] -> LogData -> [LogDataElem]
 dropFromIndex [] (LD log)=  log
 
-dropFromIndex [i] (LD log)=  drop i log
+-- dropFromIndex [i] (LD log)=  drop i log
 
 
 dropFromIndex (i:is) (LD log)= 
-  let ls= drop i  log 
-  in case ls of
+  let dropi= drop i  log 
+  in case dropi of
     []          -> mempty
-    -- (LX (LD [])):t ->  if null t then [] else  tail t
-    (LX log':t) -> if null is then [LX $ LD $ dropFromIndex is log'] <> t
-                                   else dropFromIndex is log'  <> if null t then [] else tail t
-    (LE x:_)    -> if toLazyByteString x== "w/"  then ls else                   
-                        drop (length is) ls !!> ("drop",length is,ls)
+    (LX log':t) -> if null is then LX log' : t
+                  --  else if length is==1 then LX (LD $ dropFromIndex is log'):t
+                        -- tail t because it filters out the "solution" of the LX
+                        else LX (LD $ dropFromIndex is log')  :   t -- if null t then [] else tail t
+    (LE x:_)    -> dropi --if toLazyByteString x== "w/"  then dropi else                   
+                        --error $ "dropFormIndex: level too deep " ++ show (is) -- drop (length is) dropi  -- shoud be error
+
 
 (!!>) a b = unsafePerformIO (print b) `seq` a
 
@@ -448,7 +497,10 @@ dropFromIndex (i:is) (LD log)=
 {- 
 debe ser [[LE "\"HO\"/"],LE "HELLO/",LE "()/"]
 necesario algo para preservar la estructura.
+
+el path LogData está estructurado de manera que siempre a continuacion de un LX figura su resultado final 
 -}
+
 
 
 -- shortest path
@@ -457,14 +509,24 @@ toPathl :: [LogDataElem] -> Builder
 toPathl  []  = mempty
 toPathl (LE b:rest)= b <> toPathl rest
 toPathl (LX (LD b):[])=  byteString "e/" <> toPathl  b
-toPathl (LX _: b)= toPathl  b
+toPathl (LX _: b)= toPathl  b -- only get the result of the LX block which is b
+
+
+-- remove the all "e/" before the first element
+toPathFragment (LX (LD b):[])=   toPathFragment  b
+toPathFragment (LX x:b)=toPathl b
+toPathFragment x= toPathl $ tail x
 
 -- longest path
 toPathLon (LD x)= toPathlon' x
 toPathlon' [] = mempty
 toPathlon' (LE b:rest)= b <> toPathlon' rest
+
+toPathlon' [(LX (LD [LE _]))]= byteString "e/" 
+
 toPathlon' (LX x:[])= byteString "e/" <> toPathLon  x
 toPathlon' (LX x: b)= byteString "e/" <> toPathLon  x  <> toPathlon' (tail b)
+
 -- >>> toPathLon $ LD $ [e "\"HI\"/",LX (LD [])] <>  [e "\"HELLO\"/",e "()/",LX (LD [])] <>  [e "\"WORLD\"/",e "()/",LX (LD [])]
 -- "\"HI\"/e/\"HELLO\"/()/e/\"WORLD\"/()/e/"
 --
@@ -474,12 +536,12 @@ toPathlon' (LX x: b)= byteString "e/" <> toPathLon  x  <> toPathlon' (tail b)
 --
 
 
-toPathFragment :: [LogDataElem] -> Builder
-toPathFragment []= mempty
-toPathFragment (LX x:[]) = toPath x 
+-- toPathFragment :: [LogDataElem] -> Builder
+-- toPathFragment []= mempty
+-- toPathFragment (LX x:[]) = toPath x 
 
-toPathFragment (LX x:rest) = toPath x <> toPathl (tail rest)
-toPathFragment other= toPathl other
+-- toPathFragment (LX x:rest) = toPath x <> toPathl (tail rest)
+-- toPathFragment other= toPathl other
 
   
 
@@ -625,32 +687,30 @@ logged mx = res
         -- tr ("BUILD inicio", toPath $ fulLog log)
 
         let full= fulLog log
-        rest <- giveParseString
+        rest <- getParseBuffer -- giveParseString
         tr ("parseString",rest)
-        let log'= if BS.null rest && typeOf(type1 res) /= typeOf () then log{recover=RFalse} else log
-        notRecover full log'
-      -- <** do
-      --   log <- getLog
-      --   setData $ log{fulLog=fulLog log <<- wait,hashClosure=hashClosure log + 100000}
+        let log'= if BS.null rest {-&& typeOf(type1 res) /= typeOf () -}then log{recover=RFalse}  else log
+        process rest full log'
+ 
 
     where
+    fmx mx= tr ("executing logged stmt of type",typeOf mx) >> mx
     type1 :: TransIO a -> a
     type1 = undefined
-    notRecover full log= do
+    process rest full log= do
 
-        tr ("BUILDLOG0, recover",  rrecover log,fulLog log,fromCont log)
+        -- tr ("BUILDLOG0, recover",  rrecover log,fulLog log,fromCont log)
 
-        let fullexec=  full <> exec  
-        -- setData $ Log RFalse  fullexec (hashClosure log + 1000)     
+        let fullexec=   full <> exec
+
         setData log{fulLog= fullexec, fromCont= False, hashClosure= hashClosure log + 1000}
-        r <- if rrecover log 
-               then recoverIt 
-               else mx  -- <**  do setData $ Log (recover log) (fromCont log) (fullexec <<- wait)  (hashClosure log + 100000)
-                          <** modifyData' (\log -> log{fulLog=fulLog log <<- wait,hashClosure=hashClosure log + 100000}) emptyLog
+        r <-(if not $ BS.null rest -- rrecover log 
+               then do tr "LOGGED RECOVERIT";recoverIt 
+               else do tr "LOGGED EXECUTING"; fmx mx)  <** modifyData' (\log -> log{fulLog=fulLog log <<- wait,hashClosure=hashClosure log + 100000}) emptyLog
                             
                             -- when   p1 <|> p2, to avoid the re-execution of p1 at the
                             -- recovery when p1 is asynchronous or  empty
-
+        
         log' <- getLog 
 
         let 
@@ -658,26 +718,165 @@ logged mx = res
             add=   (serialize r <> byteString "/")   -- Var (toIDyn r):  full
 
         tr ("FROMCONT",fromCont log',fromCont log,"RECOVER",recover log,recover log')
-        tr ("LOG ",fulLog log)
-        tr ("LOG'",fulLog log')
+        -- tr ("LOG ",fulLog log)
+        -- tr ("LOG'",fulLog log')
+        if BS.null rest{-recover log == RFalse-} && (recoverAfter ==RTrue  ||  fromCont log' || fromCont log) then do
+            tr ("SUBLAST", "fulLog log'",fulLog log', "add", add,"sublast",substLast(fulLog log')  add)
+            setData $ Log{recover=RFalse, fromCont= fromCont log' || fromCont log,fulLog= substLast(fulLog log')  add, hashClosure=hashClosure log +10000000}
 
-        if recover log == RFalse && (recoverAfter ==RTrue || fromCont log' || fromCont log) then do
-            -- setData $ log'{fulLog= fulLog log' <<- add} --,hashClosure=hashClosure log' +10000000}
-
-            -- let rlog= LD $ ful<> drop (length ful +1) full'
-            setData $ Log{recover=recover log, fromCont= fromCont log' || fromCont log,fulLog= substLast(fulLog log')  add, hashClosure=hashClosure log +10000000}
-            tr ("PROCESSING FROMCONT",substLast (fulLog log')  add)
-
-        else do
-
-            setData $ Log{recover=recover log, fromCont= False, fulLog= fullexec <<- add, hashClosure= hashClosure log +10000000}
-
-            tr ("PROCESSIN NORMAL", fullexec <<- add)
-                         
-            -- setData $ Log{recover=recover log, fromCont=fromCont log',fulLog= fulLog log' <<- add, hashClosure=hashClosure log +10000000}
+        else  do
+            tr ("ADDLOG", "fulexec",fullexec,fullexec <<- add)  
+            setData $ Log{recover=RTrue, fromCont= False, fulLog= fullexec <<- add, hashClosure= hashClosure log +10000000}
 
 
         return r
+
+
+    recoverIt = do
+        s <- giveParseString
+
+        -- tr ("BUILDLOG3 recover", s)
+
+        case BS.splitAt 2 s of
+          ("e/",r) -> do
+            tr "EXEC"
+            setParseString r                    
+            fmx mx
+
+          ("w/",r) -> do
+            setParseString r
+            modify $ \s -> s{execMode= Parallel}  --setData Parallel
+            empty                                --   !> "Wait"
+
+          _ -> value 
+
+    value = r
+      where
+      typeOfr :: TransIO a -> a
+      typeOfr _= undefined
+
+      r= do
+            psr <- giveParseString
+
+            x <- deserialize <|>  error  (show("error parsing",psr,"to",typeOf $ typeOfr r))
+
+            
+            when(not $ BS.null psr) $ tChar '/' >> return()
+
+            log <- getLog
+            tr ("value recover",typeOf $ typeOfr r, fulLog log,psr)
+
+            return x
+
+{-
+
+logged :: Loggable a => TransIO a -> TransIO a
+logged mx =   do
+        log <- getLog
+        -- tr ("BUILD inicio", toPath $ fulLog log)
+
+        let full= fulLog log
+        rest <- giveParseString
+
+        if rrecover log                  -- !> ("recover",recover log)
+           then
+                  if not $ BS.null rest 
+                    then recoverIt log     !> "RECOVER" 
+                    else
+                      notRecover full log  !> "NOTRECOVER"
+
+           else notRecover full log
+    where
+    notRecover full log= do
+
+      --  tr ("BUILDLOG0,before exec",  toPath full)
+
+        let fullexec=  full <> exec  
+        setData $ Log RFalse  False fullexec (hashClosure log + 1000)     
+
+        r <-  mx <** do setData $ Log RFalse  False (fullexec <<- wait)  (hashClosure log + 100000)
+                            -- when   p1 <|> p2, to avoid the re-execution of p1 at the
+                            -- recovery when p1 is asynchronous or  empty
+
+        log' <- getLog 
+
+        tr ("BUILDLOG7 after exec recoveryafter?", recover log', toPath $ fulLog log')
+
+        let 
+            recoverAfter= recover log'
+            add=  (serialize r <> byteString "/")   -- Var (toIDyn r):  full
+        if recoverAfter == RTrue then
+              setData $ log'{fulLog= fulLog log' <<- add} --,hashClosure=hashClosure log' +10000000}
+        -- else if recoverAfter == Restore then
+        --       setData $ log'{fulLog= fulLog log'{recover=Restore}} -- ,hashClosure=hashClosure log' +10000000}
+        else 
+              setData $ Log{recover= RFalse, fulLog= fullexec <<- add, hashClosure=hashClosure log +10000000}
+              {- exec vacio permite logged $ do .. pero como se quita si no es necesario
+                 se junta en Restore o RTrue
+              -}
+        return r
+
+    recoverIt log= do
+        s <- giveParseString
+
+        tr ("BUILDLOG3 recover", s,fulLog log)
+
+        case BS.splitAt 2 s of
+          ("e/",r) -> do
+            setData $ log{ hashClosure= hashClosure log + 1000}
+            setParseString r                     --   !> "Exec"
+            mx
+
+          ("w/",r) -> do
+            setData $ log{ hashClosure= hashClosure log + 100000}
+            setParseString r
+            modify $ \s -> s{execMode= Parallel}  --setData Parallel
+            empty                                --   !> "Wait"
+
+          _ -> value log
+
+    value log= r
+      where
+      typeOfr :: TransIO a -> a
+      typeOfr _= undefined
+      r= do
+            x <- deserialize <|> do
+                   psr <- giveParseString
+                   error  (show("error parsing",psr,"to",typeOf $ typeOfr r))
+                  
+            tChar '/'
+
+            setData $ log{{-recover= RTrue, -}hashClosure= hashClosure log + 10000000}
+            tr ("BUILDLOG31 recover",   toPath $ fulLog log)
+
+            return x
+
+-}
+
+
+-------- parsing the log for API's
+
+received :: (Loggable a, Eq a) => a -> TransIO ()
+received n= Transient.Internals.try $ do
+   r <- param
+   if r == n then  return () else empty
+
+param :: (Loggable a, Typeable a) => TransIO a
+param = r where
+  r=  do
+       let t = typeOf $ type1 r
+       (Transient.Internals.try $ tChar '/'  >> return ())<|> return () --maybe there is a '/' to drop
+       --(Transient.Internals.try $ tTakeWhile (/= '/') >>= liftIO . print >> empty) <|> return ()
+       if      t == typeOf (undefined :: String)     then return . unsafeCoerce . BS.unpack =<< tTakeWhile' (/= '/')
+       else if t == typeOf (undefined :: BS.ByteString) then return . unsafeCoerce =<< tTakeWhile' (/= '/')
+       else if t == typeOf (undefined :: BSS.ByteString)  then return . unsafeCoerce . BS.toStrict =<< tTakeWhile' (/= '/')
+       else deserialize  -- <* tChar '/'
+
+
+       where
+       type1  :: TransIO x ->  x
+       type1 = undefined
+
 
 {-
 dejar como estaba. poner flag recovery cuando hay un setCont
@@ -742,148 +941,3 @@ Ahora: lo mismo al log generado por mx se le añade un w/ preventivo, y hay que 
     como se quita si retorna?
       hay que quitar el ultimo elemento nada mas.
 -}
-
-    recoverIt = do
-        s <- giveParseString
-
-        tr ("BUILDLOG3 recover", s)
-
-        case BS.splitAt 2 s of
-          ("e/",r) -> do
-            setParseString r                     --   !> "Exec"
-            mx
-
-          ("w/",r) -> do
-            setParseString r
-            modify $ \s -> s{execMode= Parallel}  --setData Parallel
-            empty                                --   !> "Wait"
-
-          _ -> value 
-
-    value = r
-      where
-      typeOfr :: TransIO a -> a
-      typeOfr _= undefined
-
-      r= do
-            x <- deserialize <|> do
-                    psr <- giveParseString
-                    error  (show("error parsing",psr,"to",typeOf $ typeOfr r))
-
-            psr <- giveParseString
-            when(not $ BS.null psr) $ tChar '/' >> return()
-
-            -- tr ("BUILDLOG31 recover",   toPath $ fulLog log)
-
-            return x
-
-
-
--- logged :: Loggable a => TransIO a -> TransIO a
--- logged mx =   do
---         log <- getLog
---         -- tr ("BUILD inicio", toPath $ fulLog log)
-
---         let full= fulLog log
---         rest <- giveParseString
-
---         if rrecover log                  -- !> ("recover",recover log)
---            then
---                   if not $ BS.null rest 
---                     then recoverIt log     !> "RECOVER" 
---                     else
---                       notRecover full log  !> "NOTRECOVER"
-
---            else notRecover full log
---     where
---     notRecover full log= do
-
---       --  tr ("BUILDLOG0,before exec",  toPath full)
-
---         let fullexec=  full <> exec  
---         setData $ Log RFalse  fullexec (hashClosure log + 1000)     
-
---         r <-  mx <** do setData $ Log RFalse  (fullexec <<- wait)  (hashClosure log + 100000)
---                             -- when   p1 <|> p2, to avoid the re-execution of p1 at the
---                             -- recovery when p1 is asynchronous or  empty
-
---         log' <- getLog 
-
---         tr ("BUILDLOG7 after exec recoveryafter?", recover log', toPath $ fulLog log')
-
---         let 
---             recoverAfter= recover log'
---             add=  (serialize r <> byteString "/")   -- Var (toIDyn r):  full
---         if recoverAfter == RTrue then
---               setData $ log'{fulLog= fulLog log' <<- add} --,hashClosure=hashClosure log' +10000000}
---         -- else if recoverAfter == Restore then
---         --       setData $ log'{fulLog= fulLog log'{recover=Restore}} -- ,hashClosure=hashClosure log' +10000000}
---         else 
---               setData $ Log{recover= RFalse, fulLog= fullexec <<- add, hashClosure=hashClosure log +10000000}
---               {- exec vacio permite logged $ do .. pero como se quita si no es necesario
---                  se junta en Restore o RTrue
---               -}
---         return r
-
---     recoverIt log= do
---         s <- giveParseString
-
---         tr ("BUILDLOG3 recover", s,fulLog log)
-
---         case BS.splitAt 2 s of
---           ("e/",r) -> do
---             setData $ log{ hashClosure= hashClosure log + 1000}
---             setParseString r                     --   !> "Exec"
---             mx
-
---           ("w/",r) -> do
---             setData $ log{ hashClosure= hashClosure log + 100000}
---             setParseString r
---             modify $ \s -> s{execMode= Parallel}  --setData Parallel
---             empty                                --   !> "Wait"
-
---           _ -> value log
-
---     value log= r
---       where
---       typeOfr :: TransIO a -> a
---       typeOfr _= undefined
---       r= do
---             x <- deserialize <|> do
---                    psr <- giveParseString
---                    error  (show("error parsing",psr,"to",typeOf $ typeOfr r))
-                  
---             tChar '/'
-
---             setData $ log{{-recover= RTrue, -}hashClosure= hashClosure log + 10000000}
---             tr ("BUILDLOG31 recover",   toPath $ fulLog log)
-
---             return x
-
-
-
-
--------- parsing the log for API's
-
-received :: (Loggable a, Eq a) => a -> TransIO ()
-received n= Transient.Internals.try $ do
-   r <- param
-   if r == n then  return () else empty
-
-param :: (Loggable a, Typeable a) => TransIO a
-param = r where
-  r=  do
-       let t = typeOf $ type1 r
-       (Transient.Internals.try $ tChar '/'  >> return ())<|> return () --maybe there is a '/' to drop
-       --(Transient.Internals.try $ tTakeWhile (/= '/') >>= liftIO . print >> empty) <|> return ()
-       if      t == typeOf (undefined :: String)     then return . unsafeCoerce . BS.unpack =<< tTakeWhile' (/= '/')
-       else if t == typeOf (undefined :: BS.ByteString) then return . unsafeCoerce =<< tTakeWhile' (/= '/')
-       else if t == typeOf (undefined :: BSS.ByteString)  then return . unsafeCoerce . BS.toStrict =<< tTakeWhile' (/= '/')
-       else deserialize  -- <* tChar '/'
-
-
-       where
-       type1  :: TransIO x ->  x
-       type1 = undefined
-
-
