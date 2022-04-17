@@ -91,3 +91,27 @@ test-suite test-transient
     default-language: Haskell2010
     hs-source-dirs: tests src .
     ghc-options:  -threaded -rtsopts
+
+
+executable Test
+        build-depends:
+            containers,
+            transformers -any,
+            transient >= 0.8.0.0,
+            process >= 1.6.4.0,
+            directory,
+            bytestring, 
+            aeson,
+            time,
+            mtl,
+            vector,
+            random,
+            old-time,
+            hspec-core
+
+            
+        hs-source-dirs: tests
+        main-is: Test.hs
+    
+        build-depends:
+            base >4 && <5

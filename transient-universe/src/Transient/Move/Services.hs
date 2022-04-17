@@ -172,23 +172,23 @@ requestInstanceHost hostname service= do
 
 requestInstanceFail :: Node -> Int -> Cloud [Node]
 requestInstanceFail node num=  loggedc $ do
-       return () !> "REQUEST INSTANCEFAIL"
+      --  return ()  !> "REQUEST INSTANCEFAIL"
        local $ delNodes [node]
        local $ onException $ \(e:: ConnectionError) ->  do
            liftIO $ putStrLn "Monitor was not running. STARTING MONITOR"
            continue
-           startMonitor                                                        !> ("EXCEPTIOOOOOOOOOOON",e)
+           startMonitor                                                        -- !> ("EXCEPTIOOOOOOOOOOON",e)
        
 
-       nodes <- callService' monitorNode ("", node, num )                      !> "CALLSERVICE'"
-       local $ addNodes nodes                                                  !> ("ADDNODES")
+       nodes <- callService' monitorNode ("", node, num )                      -- !> "CALLSERVICE'"
+       local $ addNodes nodes                                                  -- !> ("ADDNODES")
        return nodes
 
 
 rmonitor= unsafePerformIO $ newMVar ()  -- to avoid races starting the monitor
 startMonitor :: TransIO () 
 startMonitor = ( liftIO $ do
-    return () !> "START MONITOR"
+    -- return () !> "START MONITOR"
     b <- tryTakeMVar rmonitor
     when (b== Just()) $ do
 
@@ -214,7 +214,7 @@ endMonitor= do
 
 findInNodes :: Service -> TransIO [Node]
 findInNodes service =  do
-      return () !> "FINDINNODES"
+      -- return () !> "FINDINNODES"
       nodes <-  getNodes
 
       return $ filter (hasService service) nodes
@@ -403,9 +403,9 @@ callService' node params =  loggedc $ do
       then  onAll $ do
           svs <- liftIO $ readIORef selfServices
           
-          modifyData' (\log -> log{recover=RTrue}) $ error "No log????"
+          modifyData' (\log -> log{recover=True}) $ error "No log????"
           withParseString (toLazyByteString $ serialize params <> byteString (BSS.pack "/")) $ runCloud svs
-          modifyData' (\log -> log{recover=RTrue}) $ error "No log????"
+          modifyData' (\log -> log{recover=True}) $ error "No log????"
           -- log <- getState
           -- setParseString $ toLazyByteString $ buildLog log -- ??? to test
           r <- logged empty
@@ -505,7 +505,7 @@ runService servDesc defPort servs proc= runCloud $
                    , serveerror]
 
    ping :: () -> Cloud ()
-   ping = const $ return() !> "PING"
+   ping = const $ return() -- !> "PING"
 
    serveerror  = empty -- :: Raw  ->   Cloud()
    -- serveerror (Raw  p)= error $  "parameter mismatch calling service  (parameter,service): "++ show (p,servDesc)
@@ -527,7 +527,7 @@ runService' servDesc defPort servAll proc=  do
        onAll $ liftIO $ writeIORef selfServices servAll
        serverNode <- initNodeServ servDesc 
        wormhole' serverNode $ inputNodes <|> proc >> empty >> return()
-       return () !> "ENTER SERVALL"
+      --  return () !> "ENTER SERVALL"
        onAll $ symbol $ BS.pack "e/"
        servAll
        tr "before  teleport"  
@@ -539,13 +539,13 @@ runService' servDesc defPort servAll proc=  do
 
               `catchc` \(e:: SomeException ) -> do 
                    setState emptyLog
-                   return () !> ("ERRORRRRRR:",e)
+                  --  return () !> ("ERRORRRRRR:",e)
                    node <- local getMyNode
                    sendStatusToMonitor  $ show e
 
                    local $ do
                       conn <- getState
-                      (Closure sess closRemote,_ ::[Int]) <- getIndexData (idConn conn) `onNothing` error "teleport: no closRemote"
+                      (Closure sess closRemote (_ ::[Int])) <- getIndexData (idConn conn) `onNothing` error "teleport: no closRemote"
                       conn <- getData `onNothing` error "reportBack: No connection defined: use wormhole"
                       msend conn  $ toLazyByteString $ serialize (SError $ toException $ ErrorCall $ show $ show $ CloudException node sess closRemote $ show e :: StreamData NodeMSG)
                       empty -- return $ toIDyn ()
@@ -629,7 +629,7 @@ serve :: (Loggable a, Loggable b) => (a -> Cloud b) -> Cloud ()
 serve  serv= do 
         modify $ \s -> s{execMode= Serial}
         p <-  onAll deserialize --  empty if the parameter does not match
-        modifyData' (\log -> log{recover=RFalse}) $ error "serve: error"
+        modifyData' (\log -> log{recover=False}) $ error "serve: error"
         loggedc $ serv p
          
         tr ("SERVE")

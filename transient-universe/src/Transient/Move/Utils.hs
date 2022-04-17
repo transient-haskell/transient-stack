@@ -72,7 +72,7 @@ initNode app= do
                  return node{nodePort= port}
                  
               else return node )
-   return () !> ("NODE", node')
+   return () -- !> ("NODE", node')
    initWebApp node' app
 
 
@@ -236,19 +236,15 @@ initWebApp node app=  do
                         addNodes [serverNode]
                         return node
                     else return serverNode
-
+    
     runCloud $ do
-         
-        listen mynode <|>  return()
-
-        onAll $(do c <- getState; receive c 0) <|> return()
+        listen mynode <|> onAll (do c <- getState; firstCont >> receive c 0) <|> return()
 
         serverNode <- onAll getWebServerNode
         wormhole' serverNode $ do 
 
-            r <-app;(minput "" "end" :: Cloud())
+            r <- app -- ;(minput "" "end" :: Cloud())
             return r
-        
 
          
 -- | run N nodes (N ports to listen) in the same program. For testing purposes.

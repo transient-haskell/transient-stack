@@ -7,11 +7,12 @@
 
 -- cd /projects/transient && cabal install -f debug --force-reinstalls && cd ../transient-universe && cabal install --force-reinstalls &&  runghc $1 $2 $3 $4
 
-{-# LANGUAGE ScopedTypeVariables, FlexibleInstances #-}
+{-# LANGUAGE ScopedTypeVariables, FlexibleInstances, OverloadedStrings #-}
 module Main where
 
 import Transient.Base
 import Transient.Move.Internals
+import Transient.Parse
 import Transient.Internals
 import Transient.Move.Utils
 import Control.Applicative
@@ -23,9 +24,13 @@ import Transient.EVars
 -- import Transient.Move.Services
 import Transient.Mailboxes
 import Transient.Indeterminism
-import Data.TCache
-
-
+import Data.TCache hiding (onNothing)
+import System.IO.Unsafe
+import Data.IORef
+import qualified Data.ByteString.Lazy.Char8 as BS
+import Data.Typeable
+import Data.TCache hiding (onNothing)
+import Data.TCache.DefaultPersistence
 -- main2= keep $ do 
 --      i <- threads 0 $ choose[0..]
 --      abduce
@@ -95,15 +100,230 @@ data WORLD2= WORLD2 deriving (Read,Show)
 instance Loggable WORLD2
 
 save= local $ do
-    option "save" "save execution state"
+    option ("save" :: String) "save execution state"
     liftIO $ syncCache
 
 data INTER= INTER deriving (Read,Show)
 
 instance Loggable INTER
 
-main =  keep $  initNode $ save <|> inputNodes <|>  do
-    local $ option "go" "go" 
+
+mainseq= keep $ initNode $ do
+    id <- minput "id" "enter your id"
+    (number::Int) <- minput "lock" "enter a lock number"
+    tr ("LOCK NUMBER RECEIVED=", number)
+    -- ventaja: el almacenamiento del lock number es automático
+    number' <- minput ("g " ++ id)  $ "guess " ++ id ++ " number"
+    tr ("GUESS NUMBER RECEIVED=", number')
+
+    minput "" (if number== number' then "YES" else "NO") :: Cloud()
+
+
+
+{-
+AHora es un entorno multiusuario. No deben verse las opciones que no son propias
+Como restringir ? el usuario solo debe ver las opciones creadas por encima de el, no las laterales
+las URL se presentan secuencialmente o acumulativamente?
+    en el primer caso, el frontend almacena URLS
+        no tiene en cuenta opciones creadas por otros browsers/usuarios
+    en el segundo, todas las opcioneslas suministra el backend
+        necesita saber cuales son las opciones siguentes
+  
+  mezcla de los dos:
+    presentar secueencialmente
+    opcion de pedir todas las opciones disponibles que ahora son todas las ejecutadas
+    en el caso de consola asi es. el cliente puede saltarse el flujo como ocurre el consola
+       como evitar que se presenten opciones que no corresponden a ese usuario?
+         por ejemplo el guess tiene que acceder a todos los locks de distintos usuarios pero en algunos casos hay que filtrar?
+         se pueden pedir seleccionar por usaurio (sesiom) los que esten en su estado
+           en realidad se está haciendo uso de una estructura de datos que existe la de callbacks de consola
+           si se crea una nueva estructura, puede almacenar también continuaciones (URLs)
+             se tiene la flexibilidad de poder seleccionar a gusto de la app y el almacenamiento de variables en el stack de la cont
+-}
+
+
+
+mainequal= keep $ initNode $ do
+    
+    -- r <- minput "x" "init2" :: Cloud String
+    -- localIO $ print r
+    -- tienen igual el hash de closure:
+    r <- ((local abduce :: Cloud ()) >> (local empty <|> minput "a" "a") ) <|> do local $return() ;( minput "b" "b")
+    localIO $ putStrLn r
+
+mainsimple= keep $ initNode $ do
+  s <- minput "s1" "una string"
+  local $ do
+    log <- getLog
+    ttr ("LOG after MINPUT", toPathLon $ fulLog log)
+  setState s
+  s2 <- minput "s2" "otra string"
+  local $ do
+    log <- getLog
+    ttr ("LOG after MINPUT", toPathLon $ fulLog log)
+  caller <- local getSessionState
+  rec <- local getState
+  localIO $ print (s :: String, s2 :: String)
+  localIO $ print (caller :: String, rec :: String)
+
+{-
+Locks debe recuperarse
+acceder al contexto del llamante
+usar el stack como almacenamiento para locks y tcache?
+  NO: estarian repetidos en cada stack de ejecucion
+-} 
+-- locks = getDBRef "lockList"
+-- instance Indexable [InputData] where
+--   key= const "lockList"
+instance Loggable InputData
+
+
+mainsimplw= keep $ initNode $ Cloud $ restore1 <|> do
+      -- onAll $ ttr "MINPUT"
+      -- r <- minput "go" "go"
+      -- localIO $ putStrLn r
+      -- log <- getLog
+      -- localIO $ print (fulLog log,toPath $fulLog log,toPathLon $ fulLog log)
+
+
+  r <- logged $ do
+        setParseString "HELLO/WORLD/"
+        log <- getLog
+        setCont 0
+        setState $ log{recover=True}
+        setCont 0
+        (x,y) <-  logged $ return (HELLO, WORLD)
+        return y
+  liftIO $ print r
+  log <- getLog
+  liftIO $ print (fulLog log,toPath $fulLog log,toPathLon $ fulLog log)
+  
+restore1= do
+        option "res" "restore1"  :: TransIO String
+        s    <- input (const True) "sesion  >"
+        clos <- input (const True) "closure >"
+        noTrans $ restoreClosure s clos 
+
+{-
+traspaso de estado en frio
+  a menos que no se grabe el contexto no se puede saber quien llamo la url
+-}
+
+main= keep $ initNode $ do 
+  local $  newRState ([] :: [InputData]) >> return ()
+  id :: String   <- minput "id" "enter your id "  
+  setState id
+  newSessionState id
+  id' <- local getSessionState <|> return "NO CALLER"
+  localIO $ print ("CALLER",id' :: String)
+  myGameSequence id  <|> otherGames
+  where
+  myGameSequence id= do
+    number ::Int <- minput "lock" "enter a lock number" 
+    id <- local getSessionState <|> return "NO  CALLER STATE"
+    local $ ttr (id :: String,"locked",number)
+    number' <- minput ("guess"++ id) ("guess a number for user " ++ id)  <|> addToOptions
+    id' <- local $ getSessionState <|>  return "no caller state"
+    id  <- local getState <|> return "NO STATE"
+    localIO $ putStrLn id'
+    localIO $ print (number, number')
+    (minput ""  $ if number== number' then id' ++ " guessed the number of " ++ id else "NO") :: Cloud ()
+
+  addToOptions :: Loggable a => Cloud a
+  addToOptions=  do
+        idata :: InputData <- local getState 
+        -- liftIO $ atomically $ do
+        lcks :: [InputData] <- local getRState --  readDBRef locks `onNothing` return []
+        local $ setRState $ idata:lcks -- writeDBRef locks $ idata:lcks 
+        empty
+
+
+  otherGames = do
+      inputdatas <-  local getRState -- liftIO $ atomically $ readDBRef locks `onNothing` return []
+      tr ("Options",inputdatas)
+      local $ foldr (<|>) empty $ map (\(InputData id msg url) -> sendURL msg url) inputdatas
+
+  sendURL  msg url= do
+    Context id _ <- getState  <|> error "sendURL:no state, use `minput`"
+    url' <- withParseString url $ do
+      s<- tTakeUntilToken "/0/0/"
+      tDropUntil (\s -> BS.head s=='$')
+      s' <- giveParseString
+      return $ s <>"/0/0/" <> intt id <> "/" <> s'
+    
+    sendFragment $ "{ \"msg\"=\""<>BS.pack msg<>"\", \"url\"= \"" <> url' <>"\"}"
+    where
+    intt = BS.pack . show
+
+mainhelloworld= keep  $ initNode $ do
+  h <- minput "hello"  "hello"
+  w <- minput "world" "world"
+  minput "" (h++w) :: Cloud ()
+
+-- | initili
+newRPState x= onAll $ newRState x
+
+getRPState :: (Typeable a,Loggable a) => Cloud a
+getRPState = local getRState
+
+setRPState :: (Typeable a,Loggable a) =>  a -> Cloud ()
+setRPState val = do
+  val' <- local $ return val
+  onAll $ setRState val'
+  
+withRPState f = onAll $ do
+    ref <- getState 
+    liftIO $ atomicModifyIORef ref f
+
+sendFragment :: BS.ByteString -> TransIO()
+sendFragment tosend= do
+  let l = fromIntegral $ BS.length tosend
+  conn <- getState
+  ms <- getRData  -- avoid more than one onWaitthread, add "{" at the beguinning of the response
+  case ms of
+    Nothing -> do
+        onWaitThreads $ const $  msend conn $ str "1\r\n]\r\n0\r\n\r\n"
+        setRState InitSendSequence
+        msend conn "1\r\n[\r\n"
+    Just InitSendSequence -> msend conn $ str "2\r\n\n,\r\n"
+
+
+  -- keep HTTP 1.0 no chunked encoding. HTTP 1.1 Does not render progressively well. It waits for end.
+  -- msend conn $ str "HTTP/1.0 200 OK\r\nContent-Length: " <> str(show l) <> str "\r\n\r\n" <> tosend 
+  -- mclose conn
+
+  msend conn $  toHex l <> str "\r\n" <> tosend <> "\r\n"-- <>  "\r\n0\r\n\r\n"
+       
+  where
+  toHex 0= mempty
+  toHex l=
+          let (q,r)= quotRem  l 16
+          in toHex q <> (BS.singleton $ if r <= 9  then toEnum( fromEnum '0' + r) else  toEnum(fromEnum  'A'+ r -10))
+
+  str=   BS.pack
+
+{-
+      
+maindistgame= keep $ initNode $ inputNodes <|> do
+  id <- inputString
+  game <|> options
+  where
+  game= do
+    lock  <- inputInt 
+    guess <- inputInt <|> getMailbox  $ "guessbox"++id
+    if lock== guess...
+    
+  options= do
+    ids <-getAllids
+    id <- wlink ids
+    option id
+  option id= do
+    guess <- inputInt
+    putMailbox "guessbox" guess
+-}
+
+maindist =  keep' $  initNode $ inputNodes <|>  do
+    local $ option  ("go" :: String) "go" 
     node <- local $ getNodes >>= return . (!! 1)
     x <- local $ return HELLO
     -- h <- runAt node $ do

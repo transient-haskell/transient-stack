@@ -306,7 +306,7 @@ flowAssign=  do
       let rthis= getDBRef "0-0"-- TC.key this
 
       tr ("assign",log)
-      when (not $ rrecover log) $ do
+      when (not $ recover log) $ do
 
         let this=LocalClosure{
                 localCon= 0,
@@ -443,30 +443,27 @@ mainalter= keep $ do
             _ -> return mx
 
 
-mainsetc= keep $  do
-  flowAssign
+mainsimple= keep $ initNode $ Cloud $ do
+  -- firstCont
   proc2 <|> restore1 <|> save
   
-  liftIO syncCache
+  -- liftIO syncCache
   
   where
   proc2= do
     logged $ option "p" "process"
-    logged $ do 
-      -- logged $ return HI
-      setc 
-      -- logged $ return "HO"
+    logged setc
 
     y <- logged $ return HELLO
     logged $ lprint y
-    setc
+    logged setc
     r <-logged $ return THAT
     logged $ lprint r
     showLog
 
  
 
-maincomplx= keep $ do
+main= keep $ do
   -- flowAssign
   firstCont -- setc
   proc1 <|> restore1 <|> save
@@ -538,7 +535,7 @@ showLog=do
   
   el setIndexData es equivalente a la DBRef pero sin log, solo con ends
 -}
-main= keep $ do
+main1= keep $ do
    firstCont
    proc <|>  save <|>  restore1
  where
@@ -808,7 +805,7 @@ syncFlush= do
 
 --   commandLine log = do
 
---      guard (not $ rrecover log)
+--      guard (not $ recover log)
 
 --      OpCounter n <- modifyData' (\(OpCounter n) -> OpCounter $ n+1) (OpCounter 1)
 --      option n $ msg <> ": "
@@ -825,7 +822,7 @@ syncFlush= do
 --     let closLocal= hashClosure log
 
 --     pstring <- giveParseString
---     if (not $ rrecover log)  || BS.null pstring
+--     if (not $ recover log)  || BS.null pstring
 
 --       then  do
 --         tr "EN NOTRECOVER"

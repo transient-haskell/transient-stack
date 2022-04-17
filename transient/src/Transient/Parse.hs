@@ -1,4 +1,5 @@
-{-#LANGUAGE FlexibleContexts, ExistentialQuantification, ScopedTypeVariables, OverloadedStrings, TypeSynonymInstances, FlexibleInstances #-}
+{-#LANGUAGE FlexibleContexts, ExistentialQuantification, ScopedTypeVariables, 
+OverloadedStrings, TypeSynonymInstances, FlexibleInstances, MonoLocalBinds #-}
 module Transient.Parse(
 -- * Setting the stream
 setParseStream, setParseString, withParseString, withParseStream,
@@ -71,7 +72,7 @@ string s= withGetParseString $ \str -> do
     let len= BS.length s
         ret@(s',_) = BS.splitAt len str
 
-    if s == s'    !> ("parse string looked, found",s,s')
+    if s == s'  --  !> ("parse string looked, found",s,s')
 
       then return ret 
       else empty -- !> "STRING EMPTY"
@@ -118,7 +119,7 @@ hex = withGetParseString $ \s ->  parsehex (-1) s
       _  -> do
 
 
-          let h= BS.head s !> ("HEX",BS.head s)
+          let h= BS.head s -- !> ("HEX",BS.head s)
 
               t= BS.tail s
               v'= if v== -1 then 0 else v
@@ -198,19 +199,21 @@ between open close p = do{ open; x <- p; close; return x }
 
 symbol = string 
          
-parens p        = between (symbol "(") (symbol ")") p  !> "parens "
-braces p        = between (symbol "{") (symbol "}") p  !> "braces "
-angles p        = between (symbol "<") (symbol ">") p  !> "angles "
-brackets p      = between (symbol "[") (symbol "]") p  !> "brackets "
+parens p        = between (symbol "(") (symbol ")") p  -- !> "parens "
+braces p        = between (symbol "{") (symbol "}") p  -- !> "braces "
+angles p        = between (symbol "<") (symbol ">") p  -- !> "angles "
+brackets p      = between (symbol "[") (symbol "]") p  -- !> "brackets "
 
-semi            = symbol ";"  !> "semi"
-comma           = symbol ","  !> "comma"
-dot             = symbol "."  !> "dot"
-colon           = symbol ":"  !> "colon"
+semi            = symbol ";"  -- !> "semi"
+comma           = symbol ","  -- !> "comma"
+dot             = symbol "."  -- !> "dot"
+colon           = symbol ":"  -- !> "colon"
 
 
-
-sepBy p sep         = sepBy1 p sep <|> return []
+sepBy
+  :: TransIO a
+     -> TransIO x -> TransIO [a]
+sepBy p sep  = sepBy1 p sep <|> return []
 
 
 sepBy1 = chainSepBy1 (:) 
@@ -226,7 +229,7 @@ chainSepBy1 chain p sep= do{ x <- p
                         ; xs <- chainMany chain (sep >> p)
                         ; return (x `chain` xs)
                         }
-                        !> "chainSepBy "
+                        -- !> "chainSepBy "
        
 chainMany chain v= (chain <$> v <*> chainMany chain v) <|> return mempty
        
@@ -238,7 +241,7 @@ semiSep1 p      = sepBy1 p semi
 
 dropSpaces= withGetParseString $ \str ->  return( (),BS.dropWhile isSpace str)
 
-dropTillEndOfLine= withGetParseString $ \str -> return ((),BS.dropWhile ( /= '\n') str) !> "dropTillEndOfLine"
+dropTillEndOfLine= withGetParseString $ \str -> return ((),BS.dropWhile ( /= '\n') str) -- !> "dropTillEndOfLine"
 
 
 
@@ -263,14 +266,14 @@ tTakeWhile cond= -- parse (BS.span cond)
 tTakeWhile' :: (Char -> Bool) -> TransIO BS.ByteString
 tTakeWhile' cond= withGetParseString $ \s -> do
    let (h,t)= BS.span cond s
-   return () !> ("takewhile'",h,t)
+  --  return () !> ("takewhile'",h,t)
    if BS.null h then empty else return (h, if BS.null t then t else BS.tail t) 
 
  
 just1 f x= let (h,t)= f x in (Just h,t)
 
 -- | take n characters 
-tTake n= withGetParseString $ \s ->  return $ BS.splitAt n s  !> ("tTake",n)
+tTake n= withGetParseString $ \s ->  return $ BS.splitAt n s  -- !> ("tTake",n)
 
 -- | drop n characters
 tDrop n= withGetParseString $ \s ->  return $ ((),BS.drop n s)
@@ -431,6 +434,7 @@ tTakeUntil cond= withGetParseString $ \s -> f s
 
 -- | add the String at the beginning of the stream to be parsed
 tPutStr s'= withGetParseString $ \s -> return ((),s'<> s)
+
 -- | True if the stream has finished
 isDone :: TransIO Bool
 isDone=  noTrans $ do 
@@ -457,7 +461,7 @@ dropUntilDone= (withGetParseString $ \s -> do
 --  would print where myParser  stopped working. 
 -- This does not work with (infinite) streams. Use `getParseBuffer` instead
 notParsed:: TransIO BS.ByteString
-notParsed= withGetParseString $ \s -> return (s,mempty) !> "notParsed"
+notParsed= withGetParseString $ \s -> return (s,mempty) -- !> "notParsed"
 
 -- | get the current buffer already read but not yet parsed
 getParseBuffer :: TransMonad m => m BS.ByteString
@@ -521,18 +525,19 @@ typeOfR x= show $ typeOf x --  "$" <> map toLower ( show (typeOf x))
   -- in if t== typeOf (u:: String) || t==typeOf (u :: BS.ByteString) || t==typeOf (u :: BS.ByteString) then "string"
   --    else map toLower $ show t
 
--- | write a message and parse a complete line
+-- | write a message and parse a complete line from the console
 inputParse :: (Typeable b) => TransIO b  -> String -> TransIO b
 inputParse parse  message= r 
   where 
   r= do
-    liftIO $ putStr message {-(message  <> " type: " <> BS.unpack (toRest $ t r) ) -} >> hFlush stdout
-    -- liftIO $ writeIORef lineprocessmode True
+    liftIO $ putStr (message ++ " ") {-(message  <> " type: " <> BS.unpack (toRest $ t r) ) -} >> hFlush stdout
     str <- react (addConsoleAction message message) (return ())   
-
     liftIO $ delConsoleAction message  
-    -- liftIO $ writeIORef lineprocessmode False
-    (r,rest) <- withParseString (BS.pack str) $ (,) <$> parse <*> giveParseString  
+
+    let (str',rest)= span (/= '/') str
+
+    liftIO $ putStrLn str
+    r <- withParseString (BS.pack str') parse -- $ (,) <$> parse <*> giveParseString  
     liftIO $ do writeIORef rconsumed $ Just rest
     return r
 
@@ -632,7 +637,7 @@ p |- q =  do
     r <- q
     dropUntilDone
     Just p <- liftIO $ readIORef pcontext
-    liftIO $ writeIORef pcontext Nothing !> "WRITENOTHING"
+    liftIO $ writeIORef pcontext Nothing -- !> "WRITENOTHING"
     pc <- gets parseContext
     modify $ \ s -> s{parseContext= p{done=done pc}}
     return r

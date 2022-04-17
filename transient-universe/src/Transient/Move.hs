@@ -47,7 +47,7 @@
 module Transient.Move(
 
 -- * Running the Monad
-Cloud(..),runCloud, runCloudIO, runCloudIO',
+Cloud(..), runCloudIO, runCloudIO',
 
 -- * Node & Cluster Management
 -- $cluster

@@ -56,8 +56,7 @@ solver= do
     return  []
         `onException'`  
            \(CompilationErrors errs)-> do 
-    -- mod <- getMailbox' ("new" ::String) :: TransIO  BS.ByteString
-    --deleteMailbox' ("new" :: String) (""::String)
+
                 case errs of
                  [] -> empty
                  CabalError _ _ _:_ -> backtrack
@@ -67,8 +66,7 @@ solver= do
                     liftIO $ print ("received",mod)
                     packages <-  findPackages (mod :: BS.ByteString)
                     newRState (1 :: Int)
-                    -- guardNotSolved
-                    --abduce <|> getMailbox' mod :: TransIO ()
+
                     pk <- return (packages !! 0) 
                            `onException'`  
                              \(CompilationErrors errs) -> do

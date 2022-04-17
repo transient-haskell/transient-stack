@@ -38,8 +38,6 @@ import Data.String
 
 import System.IO.Unsafe
 import Unsafe.Coerce
-import Data.Algorithm.Diff
-import Data.Algorithm.DiffOutput
 
 -- ```python
 -- def fibonacci():
@@ -53,6 +51,26 @@ import Data.Algorithm.DiffOutput
 --   System.out.println(num);
 --   if num > 10_000) break;
 -- ```
+
+main= keep $ do
+    option "init" "init" :: TransIO String
+    n <- input (const True) "your name>" 
+    option n n
+
+{-
+mainyield= keep' $ do
+    p1 <||> p2
+    str <- getState
+    liftIO $ print str
+
+
+class (Show a) => Yield a where
+ (<||>) x y= do
+     r1 <- X
+     modifyData' (++ show r1) r1
+-}
+
+
 atEndThread adquire release = react  (bracket adquire release) (return ())
 
 newtype Finish2= Finish2 String deriving (Show)
@@ -84,7 +102,7 @@ atEndThread mirar si no tien hijos,
        cabal update --index-state='2020-05-20T08:40:22Z'
 -}
 
-
+{-
 diffThreads=  do
     liftIO $ takeMVar printBlock
     liftIO $ putStrLn ""
@@ -119,7 +137,7 @@ threadString = do
     liftIO $ showTree 0 st
 
 
-{-
+
 el enviante puede enviar un SLast cuando sus thread exhausted
 el receptor tiene que usar ese SLast para disparar el...
 como hacer forward del SLast?
@@ -188,7 +206,7 @@ mainevarfinsh= keep $ do
 
 data NoMoreWork= NoMoreWork deriving (Typeable,Read,Show)
 
-main= keep' $ do
+mainevar= keep' $ do
     -- return () `onBack`  \NoMoreWork ->  tr "nomorework"
     
     -- back NoMoreWork <|> return()
