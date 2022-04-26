@@ -111,8 +111,8 @@ class (Show a, Read a,Typeable a) => Loggable a where
            []       -> Nothing  -- !> "Nothing"
            (r,t): _ -> return (r, BS.pack t)
 
-      typeOf1 :: Maybe(a, BS.ByteString) -> a
-      typeOf1= undefined
+      -- typeOf1 :: Maybe(a, BS.ByteString) -> a
+      -- typeOf1= undefined
 
     deserialize ::  TransIO a
     deserialize = x
@@ -150,13 +150,11 @@ instance Loggable () --where
 
 instance Loggable Bool where 
   serialize b= if b then "t" else "f"
-  deserialize = withGetParseString $ \s -> 
-     if (BS.head $ BS.tail s) /= '/'   
-        then empty 
-        else
+  deserialize = withGetParseString $ \s -> do
             let h= BS.head s
                 tail=  BS.tail s
-            in if h== 't' then return (True,tail)  else if h== 'f' then return (False, tail) else empty 
+            if BS.head tail /= '/' then empty else
+              if h== 't' then return (True,tail)  else if h== 'f' then return (False, tail) else empty 
 
 -- instance {-# OVERLAPPING #-} Loggable String where
   -- serialize s= byteString $ BSS.pack s
@@ -164,8 +162,6 @@ instance Loggable Bool where
 
 instance Loggable Int
 instance Loggable Integer
-
--- instance Loggable a => Loggable [a]
  
 
 instance  {-# OVERLAPPING #-}  (Typeable a, Loggable a) => Loggable[a]  where
@@ -176,13 +172,11 @@ instance  {-# OVERLAPPING #-}  (Typeable a, Loggable a) => Loggable[a]  where
       ty = undefined
       r= if typeOf (ty r) /= typeOf (undefined :: String) 
               then tChar '[' >> commaSep deserialize <* tChar ']'
-              else  unsafeCoerce <$> BS.unpack <$>  tTakeWhile (/= '/')
+              else  unsafeCoerce <$> BS.unpack <$> ((tChar '"' >> tTakeWhile' (/= '"'))
+                                               <|> tTakeUntil (\s -> let c= BS.head s in c == '/' || c==' '))
 
 
-
-
-
-sspace= tChar '/' <|> (many (tChar ' ') >> return ' ')
+sspace= tChar '/' <|> (many (tChar ' ') >> tr "space" >> return ' ')
 
 instance Loggable Char
 instance Loggable Float
@@ -241,13 +235,14 @@ instance (Loggable k, Ord k, Loggable a) => Loggable (M.Map k a)  where
 #ifndef ghcjs_HOST_OS
 instance Loggable BS.ByteString where
         serialize str =  lazyByteString str
-        deserialize= tTakeWhile (/= '/')
+        deserialize=  (tChar '"' >> tTakeWhile' (/= '"'))
+                      <|> tTakeUntil (\s -> let c= BS.head s in c == '/' || c==' ') 
 #endif
 
 #ifndef ghcjs_HOST_OS
 instance Loggable BSS.ByteString where
-        serialize str =  byteString str
-        deserialize = tTakeWhile (/= '/') >>= return . BS.toStrict
+        serialize str = byteString str
+        deserialize   = deserialize >>= return . BS.toStrict
 #endif
 instance Loggable SomeException
 

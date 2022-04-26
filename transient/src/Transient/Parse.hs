@@ -188,12 +188,18 @@ manyTill :: TransIO a -> TransIO b -> TransIO [a]
 manyTill= chainManyTill (:)
 
 --chainManyTill   :: Monoid m =>  (m -> a -> a) -> TransIO m -> TransIO t -> TransIO a
-chainManyTill op p end=   scan
+-- | like `manyTill` with an adittional parmeter that stablush how the fragments are chained
+chainManyTill op p end= scan
       where
-      scan  = do{try end; return mempty }
+      scan  = do {try end ; return mempty }
             <|>
-              do{ x <- p; xs <- scan; return (x `op` xs) }
+              (op) <$> p <*> scan
+              -- do{ x <- p; xs <- scan; return (x `op` xs) }
 
+-- -- | keep the parse context unmodified even if the parser succeed
+-- tryKeep parse= do
+--    s <- giveParseString
+--    withParseString s parse
 
 between open close p = do{ open; x <- p; close; return x }
 
@@ -428,9 +434,9 @@ tDropUntil cond= withGetParseString $ \s -> f s
   f s= if BS.null s then return ((),s) else if cond s then return ((),s) else f $ BS.tail s
 
 -- | take from the stream until a condition is met
-tTakeUntil cond= withGetParseString $ \s -> f s
+tTakeUntil cond= withGetParseString $ \s -> f mempty s
   where 
-  f s= if BS.null s then return (s,s) else if cond s then return (s,s) else f $ BS.tail s
+  f  r s= if BS.null s then return (r,s) else if cond s then return (r,s) else f (BS.snoc r $ BS.head s) $ BS.tail s
 
 -- | add the String at the beginning of the stream to be parsed
 tPutStr s'= withGetParseString $ \s -> return ((),s'<> s)
@@ -484,36 +490,35 @@ showNext msg n= do
 u= undefined 
 
 class Typeable a => ToRest a where
-  toRest :: a -> BS.ByteString
-  toRest x=  BS.pack (typeOfR x)
+  toRest :: a -> TransIO  BS.ByteString
+  toRest x=  return $ "$" <> (BS.pack $ map toLower (typeOfR x))
 
 instance ToRest () where
-  toRest _ = ""
+  toRest _ = return ""
 
 instance ToRest String where
-  toRest _= "$string"
+  toRest _= return "$string"
 
 instance ToRest BS.ByteString where
-  toRest _= "$string"
+  toRest _= return $ "$string"
 
-instance ToRest Int where  
-  toRest _= "$int"
+instance ToRest Int 
+
+instance ToRest Integer
 
 instance (ToRest a,  ToRest b) => ToRest (a,b) where
-    toRest x =   (toRest $ fst x) <> "/" <>  (toRest $ snd x)
-      where
-      fst (a,_)= a
-      snd (_,b)= b
+    toRest x =   (toRest $ fst x) <>  "/" <>  (toRest $ snd x)
 
-instance (Typeable a, Typeable b, Typeable c) => ToRest(a,b,c) where
-    toRest x= BS.pack $  (typeOfR $ fst x) ++ "/" ++  (typeOfR $ snd x) ++ "/" ++  (typeOfR $ thr x)
+
+instance (ToRest a, ToRest b, ToRest c) => ToRest(a,b,c) where
+    toRest x=  (toRest $ fst x) <>  "/" <>  (toRest $ snd x) <> "/" <>  (toRest $ thr x)
       where
       fst (a,_,_)= a
       snd (_,b,_)= b
       thr (_,_,c)= c
 
-instance (Typeable a, Typeable b,Typeable c,Typeable d) => ToRest(a,b,c,d) where
-    toRest x= BS.pack $  (typeOfR $ fst x) ++ "/" ++  (typeOfR $ snd x) ++  "/" ++ (typeOfR $ thr x) ++ "/" ++ (typeOfR $ frt x)
+instance (ToRest a, ToRest b,ToRest c,ToRest d) => ToRest(a,b,c,d) where
+    toRest x= (toRest $ fst x) <> "/" <>  (toRest $ snd x) <>  "/" <> (toRest $ thr x) <> "/" <> (toRest $ frt x)
       where
       fst (a,_,_,_)= a
       snd (_,b,_,_)= b
@@ -534,10 +539,11 @@ inputParse parse  message= r
     str <- react (addConsoleAction message message) (return ())   
     liftIO $ delConsoleAction message  
 
-    let (str',rest)= span (/= '/') str
+    -- let (str',rest)= span (/= '/') str
 
-    liftIO $ putStrLn str
-    r <- withParseString (BS.pack str') parse -- $ (,) <$> parse <*> giveParseString  
+    -- liftIO $ putStrLn str
+    (r,rest) <- withParseString (BS.pack str) $  (,) <$> parse <*> giveParseString  
+              
     liftIO $ do writeIORef rconsumed $ Just rest
     return r
 

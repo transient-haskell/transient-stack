@@ -238,7 +238,7 @@ initWebApp node app=  do
                     else return serverNode
     
     runCloud $ do
-        listen mynode <|> onAll (do c <- getState; firstCont >> receive c 0) <|> return()
+        listen mynode <|> onAll (do c <- getState; firstCont >> receive c Nothing 0) <|> return()
 
         serverNode <- onAll getWebServerNode
         wormhole' serverNode $ do 

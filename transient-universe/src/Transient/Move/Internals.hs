@@ -289,7 +289,7 @@ local mx = Cloud $  logged $ do
   tr ("PARSESTRING","recover",parseString,recover log)
   when (BS.null parseString) $ do
     conn <- getData `onNothing` error "no connection"
-    Closure a b ns  <- getIndexData (idConn conn) `onNothing` return (Closure 0 0 [])
+    Closure a b ns  <- getIndexData (idConn conn) `onNothing` return (Closure 0 "0" [])
     when (null ns) $ do
         -- log <- getLog
         let end = getEnd $ fulLog log 
@@ -738,7 +738,7 @@ teleport  =  do
 
 
           tr ("teleport remote call",idConn)
-          (Closure sess closRemote n) <- getIndexData idConn `onNothing` return (Closure 0 0 [])
+          (Closure sess closRemote n) <- getIndexData idConn `onNothing` return (Closure 0 "0" [])
           tr ("getIndexData",idConn,sess, closRemote,n)
           let fragment= dropFromIndex n $ fulLog log
           let tosend=  if null n then toPath  $ LD fragment else  toPathFragment  fragment  -- if a fragment, avoid the LX LX
@@ -748,13 +748,13 @@ teleport  =  do
 
 
 
-          let closLocal= hashClosure log
+          let closLocal= BC.pack $show $ hashClosure log
 
 
 
           runTrans $ do
-            msend conn $ toLazyByteString $ serialize $ SMore $ ClosureData sess closRemote idSession closLocal tosend
-            receive  conn    idSession
+            msend conn $ toLazyByteString $ serialize $ SMore $ ClosureData  closRemote sess  closLocal idSession tosend
+            receive  conn  Nothing  idSession
 
 
           -- return Nothing  
@@ -766,9 +766,9 @@ teleport  =  do
 newtype PrevClos= PrevClos {unPrevClos ::DBRef LocalClosure}
 
 
-receive conn idSession = do
+receive conn clos idSession = do
   tr "RECEIVE"
-  (lc,log) <- setCont idSession
+  (lc,log) <- setCont clos idSession
   s <- giveParseString
   -- tr ("PARSESTRING",s,"LOG",toPath $ fulLog log)
   if recover log && not (BS.null s) then return() else do
@@ -815,7 +815,7 @@ firstCont = do
                 localCon= 0,
                 prevClos= rthis,
                 localLog=   fulLog log, -- codificar en flow.hs
-                localClos= 0, -- hashClosure log,
+                localClos= "0", -- hashClosure log,
                 localEnd=getEnd $ fulLog log, -- codificar en flow.hs
                 localEvar= Just ev,localMvar=mv,localCont= Just cont}
 
@@ -832,11 +832,11 @@ firstCont = do
 
 
 -- | store the log and the rest of parameters so that upon an invocation, the program can be restored at that point and answer such invocation
-setCont idSession   = do
+setCont mclos idSession   = do
     mprev <- getData  
 
 
-    closLocal <- hashClosure <$> getLog
+    closLocal <- case mclos of Just cls -> return cls ; _ ->  BC.pack <$> show <$> hashClosure <$> getLog
     let dblocalclos = getDBRef $ kLocalClos idSession closLocal  :: DBRef LocalClosure
 
     setState $ PrevClos dblocalclos
@@ -1014,15 +1014,15 @@ sendRaw (Connection _ _ _(Just (TLSNode2Node  ctx )) _ _ blocked _ _ _ _) r=
 
 
 type SessionId= Int
-data NodeMSG= ClosureData SessionId IdClosure SessionId IdClosure  Builder    deriving (Read, Show)
+data NodeMSG= ClosureData  IdClosure SessionId  IdClosure SessionId  Builder    deriving (Read, Show)
 
 
 instance Loggable NodeMSG where
-   serialize (ClosureData s1 clos s2 clos' build)= intDec s1 <> "/" <> intDec clos  <> "/" <>
-                                                   intDec s2 <> "/" <> intDec clos' <> "/" <> build
+   serialize (ClosureData clos s1  clos' s2 build)= byteString clos  <> "/" <> intDec s1 <> "/" <>
+                                                   byteString clos' <> "/" <> intDec s2 <> "/" <> build
 
-   deserialize= ClosureData <$>(int <* tChar '/') <*> (int <* tChar '/') <*>
-                               (int <* tChar '/') <*> (int <* tChar '/') <*> restOfIt
+   deserialize= ClosureData <$> (BL.toStrict <$> (tTakeWhile (/='/')) <* tChar '/') <*> (int <* tChar '/') <*> 
+                                (BL.toStrict <$> (tTakeWhile (/='/')) <* tChar '/') <*> (int <* tChar '/') <*>  restOfIt
       where
       restOfIt= lazyByteString <$> giveParseString
 {-
@@ -1976,7 +1976,7 @@ data LocalClosure= LocalClosure{
 instance TC.Indexable LocalClosure where
   key LocalClosure{..}= kLocalClos localCon localClos
 
-kLocalClos idCon clos=show idCon <> "-" <> show clos
+kLocalClos idCon clos= BC.unpack clos <> "-" <> show idCon 
 
 instance TC.Serializable LocalClosure where
   serialize LocalClosure{..}= TC.serialize (localCon,prevClos,localLog,localEnd,localClos)
@@ -2257,7 +2257,7 @@ listenNew port conn'=  do
                            _ -> return $ log
                   --  let build= toPath log'
                    setParseString $ toLazyByteString log'
-                   return $ SMore $ ClosureData 0 0 0 0  log' -- !> ("APIIIII", log')
+                   return $ SMore $ ClosureData "0" 0 "0" 0  log' -- !> ("APIIIII", log')
 
             ("relay",_) ->  proxy sock method vers uri'
 
@@ -2332,7 +2332,7 @@ listenNew port conn'=  do
                       -- integer
                       deserialize
                          -- a void message is sent to the application signaling the beginning of a connection
-                         <|> (return $ SMore (ClosureData 0 0 0 0  (toPath $ exec << lazyByteString s)))
+                         <|> (return $ SMore (ClosureData "0" 0  "0" 0  (toPath $ exec << lazyByteString s)))
               else  do
                 -- let uri'' = if not $ isNumber $ BS.head uri' 
                 --               then
@@ -2340,13 +2340,13 @@ listenNew port conn'=  do
                 --               else uri'
                 let uriparsed=  BS.pack $ unEscapeString $ BC.unpack uri'
                 setParseString uriparsed -- !> ("uriparsed",uriparsed)
+                remoteClosure <- BL.toStrict <$> tTakeWhile (/= '/')  -- deserialize   :: TransIO BC.ByteString
+                tChar '/'
                 s1 <- deserialize
                 tChar '/'
-                remoteClosure <- deserialize    :: TransIO Int
+                thisClosure <-  BL.toStrict <$> tTakeWhile (/= '/') -- deserialize      :: TransIO BC.ByteString
                 tChar '/'
                 s2 <- deserialize
-                tChar '/'
-                thisClosure <- deserialize      :: TransIO Int
                 tChar '/'
                 tr (s1,remoteClosure,s2,thisClosure)
 
@@ -2368,7 +2368,7 @@ listenNew port conn'=  do
 
                 liftIO $ SBSL.sendAll sock $  "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nTransfer-Encoding: chunked\r\n\r\n"
 
-                return $ SLast $ ClosureData s1 remoteClosure s2 thisClosure  $ lazyByteString  s
+                return $ SLast $ ClosureData remoteClosure s1 thisClosure s2 $ lazyByteString  s
 
 
 
@@ -2534,7 +2534,7 @@ listenResponses= do
 
 
 
-type IdClosure= Int
+type IdClosure= BC.ByteString
 
 -- The remote closure ids for each node connection
 data Closure = Closure  SessionId IdClosure [Int] deriving (Read,Show,Typeable)
@@ -2654,8 +2654,8 @@ execLog  mlog =Transient $ do
 
 
              SDone   -> runTrans(back $ ErrorCall "SDone") >> return Nothing   -- TODO remove closure?
-             SMore (ClosureData s1 closl s2 closr  log) -> processMessage s1 closl s2 closr  (Right log) False
-             SLast (ClosureData s1 closl s2 closr  log) -> processMessage s1 closl s2 closr  (Right log) True
+             SMore (ClosureData s1 closl s2 closr  log) -> processMessage closl s1 closr s2  (Right log) False
+             SLast (ClosureData s1 closl s2 closr  log) -> processMessage closl s1 closr s2  (Right log) True
   where
   processMessage :: SessionId -> IdClosure -> SessionId -> IdClosure  -> (Either CloudException Builder) -> Bool -> StateIO (Maybe ())
   processMessage  s1 closl s2 closr  mlog  deleteClosure= do
@@ -3323,29 +3323,31 @@ connect'  remotenode= loggedc $ do
 -------------------------------  HTTP client ---------------
 
 
-instance {-# Overlapping #-}  Loggable Value where
-   serialize= return . lazyByteString =<< encode
-   deserialize =  decodeIt
+serializetoJSON :: ToJSON a => a ->  Builder
+serializetoJSON= lazyByteString . encode
+
+deserializeJSON :: FromJSON a => TransIO a
+deserializeJSON=  do
+    s <- jsElem
+    tr ("decode",s)
+
+    case eitherDecode s of 
+      Right x    -> return x
+      Left err   -> empty
     where
-        jsElem :: TransIO BS.ByteString  -- just delimites the json string, do not parse it
-        jsElem=   dropSpaces >> (jsonObject <|> array <|> atom)
-        atom=     elemString
-        array=      (brackets $ return "[" <> return "{}" <> chainSepBy mappend (return "," <> jsElem)  (tChar ','))  <> return "]"
-        jsonObject= (braces $ return "{" <> chainMany mappend jsElem) <> return "}"
-        elemString= do
-            dropSpaces
-            tTakeWhile (\c -> c /= '}' && c /= ']' )
+    jsElem :: TransIO BS.ByteString  -- just delimites the json string, do not parse it
+    jsElem=   dropSpaces >> (jsonObject <|> array <|> atom)
+    atom=     elemString
+    array=      (brackets $ return "[" <> return "{}" <> chainSepBy mappend (return "," <> jsElem)  (tChar ','))  <> return "]"
+    jsonObject= (braces $ return "{" <> chainMany mappend jsElem) <> return "}"
+    elemString= do
+        dropSpaces
+        tTakeWhile (\c -> c /= '}' && c /= ']' )
 
-
-
-        decodeIt= do
-            s <- jsElem
-            tr ("decode",s)
-
-            case eitherDecode s of -- !> "DECODE" of
-              Right x -> return x
-              Left err      -> empty
-
+instance {-# Overlapping #-}  Loggable Value where
+   serialize= serializetoJSON
+   deserialize =  deserializeJSON
+ 
 
 
 
@@ -3467,7 +3469,7 @@ getFirstLineResp= do
       -- showNext "getFirstLineResp" 20
       (,,) <$> httpVers <*> (BS.toStrict <$> getCode) <*> getMessage
     where
-    httpVers= tTakeUntil (BS.isPrefixOf "HTTP" ) >> parseString
+    httpVers= tDropUntil (BS.isPrefixOf "HTTP" ) >> parseString
     getCode= parseString
     getMessage= tTakeUntilToken ("\r\n")
   --con<- getState <|> error "rawHTTP: no connection?"
@@ -3626,11 +3628,11 @@ loopClosures= do
 -}
 
 -- | restore the continuation recursively from older
-getClosureLog :: Int -> Int -> StateIO (LogData,LogData, EventF)
-getClosureLog idConn 0= do
+getClosureLog :: Int -> BC.ByteString -> StateIO (LogData,LogData, EventF)
+getClosureLog idConn "0"= do
    tr ("getClosureLog",idConn,0)
 
-   clos <- liftIO $ atomically $ (readDBRef $ getDBRef $ kLocalClos 0 0) `onNothing` error "closure not found in DB"
+   clos <- liftIO $ atomically $ (readDBRef $ getDBRef $ kLocalClos 0 "0") `onNothing` error "closure not found in DB"
    let cont= fromMaybe  (error "please run flowAssign before") $localCont clos
    return (localLog clos,mempty ,cont)
 
@@ -3651,8 +3653,8 @@ getClosureLog idConn clos= do
       Just cont -> return (localLog clos,mempty ,cont)
 
 -- | cold restore  of the closure from the log drom data stored in permanent storage, and run form that point on
-restoreClosure _ 0= return()
-restoreClosure idConn (clos :: Int)=  do
+restoreClosure _ "0"= return()
+restoreClosure idConn (clos :: BC.ByteString)=  do
   tr ("restoreclosure",idConn,clos)
   (_,LD log,cont) <- getClosureLog idConn clos
   -- cont is the nearest continuation above which is loaded and running
@@ -3681,6 +3683,7 @@ data InitSendSequence= InitSendSequence
 
 data IsCommand= IsCommand deriving Show
 data InputData= InputData{idInput, message :: String, url :: BS.ByteString} deriving(Show,Read,Typeable)
+instance Loggable InputData
 
 data Context = Context Int  (M.Map String String) deriving (Read,Show,Typeable)
 instance TC.Indexable Context where key (Context k _)= show k
@@ -3694,30 +3697,32 @@ minput ident msg=  response
 
  where
  response= do
-  idSession <- local $ fromIntegral <$> genPersistId
+  -- idSession <- local $ fromIntegral <$> genPersistId
 
   modify $ \s -> s{execMode=if execMode s == Remote then Remote else Parallel}
   local $ do
       log <-getLog
       conn <- getState -- if connection not available, execute alternative computation
 
-      let closLocal= hashClosure log
-      closdata@(Closure sess closRemote _) <- getIndexData (idConn conn) `onNothing` return (Closure 0 0 [])
+      let closLocal=  hashClosure log
+      closdata@(Closure sess closRemote _) <- getIndexData (idConn conn) `onNothing` return (Closure 0 "0" [])
       mynode <- getMyNode
-      Context idcontext _ <- getState <|> do
+      ctx@(Context idcontext _) <- getState <|> do
+                                 liftIO $ print "NO STATE"
                                  ctx <- Context <$> genSessionId <*> return (M.empty)
                                  setState ctx
                                  return ctx
-
+      let idSession= idcontext
+      params <- toRest $ type1 response
       let url= str "http://" <> str (nodeHost mynode) <> str ":" <> intt (nodePort mynode) </>
-                                    intt idSession </> intt closLocal </>
-                                    intt sess </> intt closRemote </>
+                                    str ident </> intt idSession </>
+                                    BL.fromStrict closRemote </>  intt sess </> 
                                     intt idcontext </>
-                                    toRest (type1 response) :: BS.ByteString
+                                    params :: BS.ByteString
 
       setState $ InputData ident msg url
 
-      connected log idSession conn closLocal sess closRemote url  <|> commandLine conn log url 
+      connected log ctx idSession conn closLocal sess closRemote url  <|> commandLine conn log url 
 
 
 
@@ -3758,13 +3763,8 @@ minput ident msg=  response
 
       
 
- connected log  idSession conn closLocal sess closRemote url = do
-    ctx@(Context idcontext st) <- getState <|> do
-                                 ctx <- Context <$> genSessionId <*> return M.empty
-                                 setState ctx
-                                 return ctx
+ connected log  ctx@(Context idcontext _) idSession conn closLocal sess closRemote url = do
 
-    -- setState $ Context idcontext M.empty -- st  -- for sendURL
     liftIO $ atomically $ writeDBRef (getDBRef $ show idcontext) ctx   -- store the state, the id will be in the URL
     (idcontext' :: Int,result) <- do
         pstring <- giveParseString
@@ -3777,7 +3777,7 @@ minput ident msg=  response
             case ty of
               Just Self -> do
                 -- liftIO $ print url
-                receive conn  idSession
+                receive conn (Just $ BC.pack ident) idSession
                 tr "SELF XXX"
 
                 logged $ error "insuficient parameters 1" -- read the response
@@ -3788,19 +3788,11 @@ minput ident msg=  response
 
               _ -> do
 
+                checkComposeJSON conn
+
                 -- insertar typeof response
                 let tosend= str "{ \"msg\"=\""  <> str msg  <> str "\", \"url\"=\""  <> url <> str "\"}"
                 let l = fromIntegral $ BS.length tosend
-
-                ms <- getRData  -- avoid more than one onWaitthread, add "{" at the beguinning of the response
-                                -- and send the final chunk when no thread is active.
-                case ms of
-                  Nothing -> do
-                    onWaitThreads $ const $  msend conn $ str "1\r\n]\r\n0\r\n\r\n"
-                    setRState InitSendSequence
-                    msend conn "1\r\n[\r\n"
-                  Just InitSendSequence -> msend conn $ str "2\r\n\n,\r\n"
-
 
                 -- for HTTP 1.0 no chunked encoding:
                 -- msend conn $ str "HTTP/1.0 200 OK\r\nContent-Length: " <> str(show l) <> str "\r\n\r\n" <> tosend 
@@ -3810,13 +3802,13 @@ minput ident msg=  response
                 -- store the msg and the url and the alias
                 -- se puede simular solo con los datos actuales
 
-                receive conn  idSession
+                receive conn (Just $ BC.pack ident) idSession
                 tr "after receive"
                 delRState InitSendSequence
                 logged $ error "not enough parameters 2" -- read the response, error if response not logged
 
           else do
-            receive conn  idSession
+            receive conn (Just $ BC.pack ident) idSession
             tr "else"
             logged $ error "insuficient parameters 3" -- read the response
             -- maybe another user from other context continues the program
@@ -3853,6 +3845,39 @@ minput ident msg=  response
  type1 cx= r
         where
         r= error $ show $ typeOf r
+
+-- | add the fragments of the beguinning and the end of the JSON packet
+checkComposeJSON conn= do
+  ms <- getRData  -- avoid more than one onWaitthread, add "{" at the beguinning of the response
+                  -- and send the final chunk when no thread is active.
+  case ms of
+    Nothing -> do
+      onWaitThreads $ const $  msend conn $ str "1\r\n]\r\n0\r\n\r\n"
+      setRState InitSendSequence
+      msend conn "1\r\n[\r\n"
+    Just InitSendSequence -> msend conn $ str "2\r\n\n,\r\n"
+  where
+  str= BS.pack
+
+sendOption  msg url= do
+    Context id _ <- getState  <|> error "sendURL:no , use `minput`"
+    url' <- withParseString url $ do
+      s<- tTakeUntilToken "/0/0/"
+      tDropUntil (\s -> BS.head s=='$')
+      s' <- giveParseString
+      return $ s <>"/0/0/" <> intt id <> "/" <> s'
+    
+    sendFragment $ "{ \"msg\"=\""<>BS.pack msg<>"\", \"url\"= \"" <> url' <>"\"}"
+    where
+    intt = BS.pack . show
+
+--  | Send a JSON fragment
+sendFragment :: BS.ByteString -> TransIO()
+sendFragment tosend= do
+  let l = fromIntegral $ BS.length tosend
+  conn <- getState
+  checkComposeJSON conn
+
 
 getSessionState ::  (Read a,Typeable a) => TransIO a
 getSessionState= res

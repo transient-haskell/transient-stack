@@ -7,7 +7,8 @@
 
 -- cd /projects/transient && cabal install -f debug --force-reinstalls && cd ../transient-universe && cabal install --force-reinstalls &&  runghc $1 $2 $3 $4
 
-{-# LANGUAGE ScopedTypeVariables, FlexibleInstances, OverloadedStrings #-}
+{-# LANGUAGE ScopedTypeVariables, FlexibleInstances, OverloadedStrings,ExistentialQuantification #-}
+{-# LANGUAGE DeriveGeneric #-}
 module Main where
 
 import Transient.Base
@@ -31,6 +32,9 @@ import qualified Data.ByteString.Lazy.Char8 as BS
 import Data.Typeable
 import Data.TCache hiding (onNothing)
 import Data.TCache.DefaultPersistence
+import Data.Default
+import Data.Aeson
+import GHC.Generics 
 -- main2= keep $ do 
 --      i <- threads 0 $ choose[0..]
 --      abduce
@@ -175,8 +179,12 @@ usar el stack como almacenamiento para locks y tcache?
 -- locks = getDBRef "lockList"
 -- instance Indexable [InputData] where
 --   key= const "lockList"
-instance Loggable InputData
-
+{-
+como hacer post de JSON
+minput que solo coja el get.
+que parsee el cuerpo 
+alternativamente, que ensaye parse de post
+-}
 
 mainsimplw= keep $ initNode $ Cloud $ restore1 <|> do
       -- onAll $ ttr "MINPUT"
@@ -189,9 +197,9 @@ mainsimplw= keep $ initNode $ Cloud $ restore1 <|> do
   r <- logged $ do
         setParseString "HELLO/WORLD/"
         log <- getLog
-        setCont 0
+        setCont Nothing 0
         setState $ log{recover=True}
-        setCont 0
+        setCont Nothing 0
         (x,y) <-  logged $ return (HELLO, WORLD)
         return y
   liftIO $ print r
@@ -205,14 +213,67 @@ restore1= do
         noTrans $ restoreClosure s clos 
 
 {-
-traspaso de estado en frio
-  a menos que no se grabe el contexto no se puede saber quien llamo la url
--}
+minput que soporte entrada post
+ como se dicta que tenga post?
+ con se manda una URL con post?
+   mandar todo: la URL y el header con un ejemplo JSON
+       ejemplo json con Data.Default
+         haskellData <- minput
+         process toJson def :: HaskellData
+         para que una parte solo se envie como POST
+           (a,b, POST C) <- minput  
+             instance toREST (POST a) where
+                modifyState BODY x -> BODY process toJSON def
+                return ""
+            data POST= POST forall a(Default a,Typeable a)=> a
+            
+           buscar campos del JSON generado y sustituirlo por $campo
+            o ir por campos:
+              type : GET default, POST
+              url
+              headers
+              body (JSON)
+        cuando llega el POST:
+         parsear los campos get
+         mirar si hay post  
 
-main= keep $ initNode $ do 
+-}
+data BODY= BODY [BS.ByteString] deriving (Typeable,Show)
+data POSTD=  forall a.(Default a,ToJSON a)=> POSTD a
+instance ToRest POSTD where
+  toRest (POSTD x)= do
+    nelem <- process $ encode (def `asTypeOf` x)
+    modifyData' (\(BODY xs) -> BODY $ nelem:xs) (BODY [nelem]) 
+    return ""
+    where
+    process ::  BS.ByteString -> TransIO (BS.ByteString)
+    process s= do
+      frags <- withParseString s $ many $ do
+                prev <- tTakeUntilToken "\""
+                var <- tTakeUntilToken "\""
+                val <- chainManyTill BS.cons anyChar ( sandbox $ tChar ',' <|> tChar '}')
+                sep <- anyChar -- tChar ',' <|> tChar '}'
+              
+                return $  prev <> "\"" <> var <> "\":" <> "$" <> var <> BS.singleton sep
+      return $ BS.concat frags
+      -- where
+      -- mod var val =
+      --   if BS.head val == '\"' then "\"" <> "$" <> var <> "\""  else "$" <> var
+
+data Test= Test{a:: Int} deriving (Generic)
+
+
+instance ToJSON Test
+
+instance Default Test
+
+main=  keep $ initNode $ do
+  (a,b,c) <- minput "go" "go"
+  localIO $ print (a :: BS.ByteString, b:: BS.ByteString,c :: Int) -- (a :: Int,b :: String, c :: Int)
+
+mainguess= keep $ initNode $ do 
   local $  newRState ([] :: [InputData]) >> return ()
   id :: String   <- minput "id" "enter your id "  
-  setState id
   newSessionState id
   id' <- local getSessionState <|> return "NO CALLER"
   localIO $ print ("CALLER",id' :: String)
@@ -220,12 +281,9 @@ main= keep $ initNode $ do
   where
   myGameSequence id= do
     number ::Int <- minput "lock" "enter a lock number" 
-    id <- local getSessionState <|> return "NO  CALLER STATE"
     local $ ttr (id :: String,"locked",number)
     number' <- minput ("guess"++ id) ("guess a number for user " ++ id)  <|> addToOptions
     id' <- local $ getSessionState <|>  return "no caller state"
-    id  <- local getState <|> return "NO STATE"
-    localIO $ putStrLn id'
     localIO $ print (number, number')
     (minput ""  $ if number== number' then id' ++ " guessed the number of " ++ id else "NO") :: Cloud ()
 
@@ -241,25 +299,17 @@ main= keep $ initNode $ do
   otherGames = do
       inputdatas <-  local getRState -- liftIO $ atomically $ readDBRef locks `onNothing` return []
       tr ("Options",inputdatas)
-      local $ foldr (<|>) empty $ map (\(InputData id msg url) -> sendURL msg url) inputdatas
+      local $ foldr (<|>) empty $ map (\(InputData id msg url) -> sendOption msg url) inputdatas
 
-  sendURL  msg url= do
-    Context id _ <- getState  <|> error "sendURL:no state, use `minput`"
-    url' <- withParseString url $ do
-      s<- tTakeUntilToken "/0/0/"
-      tDropUntil (\s -> BS.head s=='$')
-      s' <- giveParseString
-      return $ s <>"/0/0/" <> intt id <> "/" <> s'
-    
-    sendFragment $ "{ \"msg\"=\""<>BS.pack msg<>"\", \"url\"= \"" <> url' <>"\"}"
-    where
-    intt = BS.pack . show
+
 
 mainhelloworld= keep  $ initNode $ do
   h <- minput "hello"  "hello"
   w <- minput "world" "world"
   minput "" (h++w) :: Cloud ()
 
+
+{-
 -- | initili
 newRPState x= onAll $ newRState x
 
@@ -275,17 +325,7 @@ withRPState f = onAll $ do
     ref <- getState 
     liftIO $ atomicModifyIORef ref f
 
-sendFragment :: BS.ByteString -> TransIO()
-sendFragment tosend= do
-  let l = fromIntegral $ BS.length tosend
-  conn <- getState
-  ms <- getRData  -- avoid more than one onWaitthread, add "{" at the beguinning of the response
-  case ms of
-    Nothing -> do
-        onWaitThreads $ const $  msend conn $ str "1\r\n]\r\n0\r\n\r\n"
-        setRState InitSendSequence
-        msend conn "1\r\n[\r\n"
-    Just InitSendSequence -> msend conn $ str "2\r\n\n,\r\n"
+
 
 
   -- keep HTTP 1.0 no chunked encoding. HTTP 1.1 Does not render progressively well. It waits for end.
@@ -302,7 +342,7 @@ sendFragment tosend= do
 
   str=   BS.pack
 
-{-
+
       
 maindistgame= keep $ initNode $ inputNodes <|> do
   id <- inputString

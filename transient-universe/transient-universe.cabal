@@ -248,7 +248,9 @@ executable test5
             time,
             mtl,
             vector,
-            TCache
+            TCache,
+            data-default,
+            syb
             
         hs-source-dirs: tests
         main-is: test5.hs

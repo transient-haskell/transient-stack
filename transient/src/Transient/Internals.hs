@@ -595,6 +595,10 @@ instance (Num a, Eq a) => Num (TransIO a) where
   abs f       = f >>= return . abs
   signum f    = f >>= return . signum
 
+
+instance (IsString a) => IsString (TransIO a) where
+  fromString = return . fromString
+
 class AdditionalOperators m where
 
   -- | Run @m a@ discarding its result before running @m b@.
@@ -1289,14 +1293,14 @@ delRState x= delState (undefined `asTypeOf` ref x)
 -- that may have been caused by the action and allow aternative actions to run with the original state
 try :: TransIO a -> TransIO a
 try mx = do
-  sdata <- gets mfData
-  mx <|> (modify (\s' ->s' { mfData = sdata}) >> empty)
+  st <- get
+  mx <|> (modify (\s' ->s' { mfData = mfData st,parseContext=parseContext st}) >> empty)
 
--- | Executes the computation and restores all the state variables accessed by Data State, RData and RState primitives.
+-- | Executes the computation and restores all the state variables accessed by Data State, RData, RState and parse primitives.
 sandbox :: TransIO a -> TransIO a
 sandbox mx = do
-  sd <- gets mfData
-  mx <*** modify (\s ->s { mfData = sd})
+  st <- get
+  mx <*** modify (\s ->s { mfData = mfData st, parseContext= parseContext st})
 
 -- | executes a computation and restores the concrete state data. Default state is assigned if there isn't any before execution
 sandboxData :: Typeable a => a -> TransIO b -> TransIO b
