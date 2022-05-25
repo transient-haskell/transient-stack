@@ -9,11 +9,11 @@ manyTill, chainManyTill,between, symbol,parens, braces,angles,brackets,
 semi, comma, dot,colon, sepBy, sepBy1, chainSepBy, chainSepBy1,chainMany,
 commaSep, semiSep, commaSep1, dropSpaces,dropTillEndOfLine,
 parseString, tTakeWhile,tTakeUntil, tTakeWhile', tTake, tDrop, tDropUntil, tPutStr,
-isDone,dropUntilDone, 
+isDone,dropUntilDone,
 -- * giving the parse string
 withGetParseString, giveParseString,
 -- * debug
-notParsed, getParseBuffer,clearParseBuffer, showNext, inputParse, ToRest(..),
+notParsed, getParseBuffer,clearParseBuffer, showNext,
 -- Composing parsing processes
 (|-)) where
 
@@ -27,7 +27,6 @@ import Control.Monad
 import Control.Monad.State
 -- import Control.Exception (throw,IOException)
 import Control.Concurrent.MVar
-import Data.Maybe(fromJust)
 import qualified Data.ByteString.Lazy.Char8  as BS
 import Data.ByteString.Builder
 import Control.Exception hiding (try)
@@ -48,10 +47,10 @@ setParseString x = modify $ \s -> s{execMode=Serial,parseContext= ParseContext (
 -- Set the ByteString environment for the parser parameter. At the end, it restores the original parse context.
 withParseString ::  BS.ByteString -> TransIO a -> TransIO a
 withParseString x parse= do
-     p <- gets parseContext 
+     p <- gets parseContext
      setParseString x
-     parse <*** do modify $ \s -> s{parseContext= p} 
-     
+     parse <*** do modify $ \s -> s{parseContext= p}
+
 
 
 withParseStream stream parse= do
@@ -74,38 +73,36 @@ string s= withGetParseString $ \str -> do
 
     if s == s'  --  !> ("parse string looked, found",s,s')
 
-      then return ret 
+      then return ret
       else empty -- !> "STRING EMPTY"
 
 -- | fast search for a token.
 -- If the token is not found, the parse is left in the original state.
-tDropUntilToken token= withGetParseString $ \str -> 
-    if BS.null str then empty else  drop2 str 
-  where 
-  drop2 str=
-    if token `BS.isPrefixOf` str   -- !> (BS.take 2 str)
-          then  return ((),BS.drop (BS.length token) str)
-          else if not $ BS.null str then drop2 $ BS.tail str else empty
+tDropUntilToken token= withGetParseString $ \str ->
+    if BS.null str then empty else  drop2 str
+  where
+  drop2 str
+    | token `BS.isPrefixOf` str = return ((),BS.drop (BS.length token) str)
+    | not $ BS.null str = drop2 $ BS.tail str
+    | otherwise = empty
 
 
 
 tTakeUntilToken :: BS.ByteString -> TransIO BS.ByteString
 tTakeUntilToken token= withGetParseString $ \str -> takeit mempty str
-  where 
+  where
   takeit :: Builder -> BS.ByteString -> TransIO ( BS.ByteString, BS.ByteString)
-  takeit res str= 
-   if BS.null str then empty else 
-      if token `BS.isPrefixOf` str 
-          then  return (toLazyByteString res ,BS.drop (BS.length token) str)
-          else  if not $ BS.null str then takeit (  res <> (lazyByteString $ BS.singleton $ BS.head str)) $ BS.tail str else empty
-    
-    
+  takeit res str
+    | BS.null str = empty
+    | token `BS.isPrefixOf` str = return (toLazyByteString res ,BS.drop (BS.length token) str)
+    | not $ BS.null str = takeit (  res <> (lazyByteString $ BS.singleton $ BS.head str)) $ BS.tail str
+    | otherwise = empty
+
+
 -- | read an Integer
 integer :: TransIO Integer
-integer= withGetParseString $ \str -> 
-           case BS.readInteger str of  
-             Just  x -> return  x
-             Nothing -> empty
+integer= withGetParseString $ \str ->
+           maybe empty return (BS.readInteger str)
 
 -- | parse an hexadecimal number
 hex ::  TransIO Int
@@ -123,14 +120,14 @@ hex = withGetParseString $ \s ->  parsehex (-1) s
 
               t= BS.tail s
               v'= if v== -1 then 0 else v
-              x = if h >= '0' && h <= '9' then v' * 16 + ord(h) -ord '0'
-                        else if h >= 'A' && h <= 'F' then  v' * 16 + ord h -ord 'A' +10
-                        else if h >= 'a' && h <= 'f' then  v' * 16 + ord h -ord 'a' +10
-                        else -1
+              x | h >= '0' && h <= '9' = v' * 16 + ord(h) -ord '0'
+                | h >= 'A' && h <= 'F' = v' * 16 + ord h -ord 'A' +10
+                | h >= 'a' && h <= 'f' = v' * 16 + ord h -ord 'a' +10
+                | otherwise = -1
           case (v,x) of
               (-1,-1) -> empty
-              (v, -1) -> return (v,s)  
-              (_, x) -> parsehex x t           
+              (v, -1) -> return (v,s)
+              (_, x) -> parsehex x t
 {-
 integer= do
     s <- tTakeWhile isNumber
@@ -146,10 +143,8 @@ integer= do
 
 -- | read an Int
 int :: TransIO Int
-int= withGetParseString $ \str -> 
-           case BS.readInt str of  
-             Just  x -> return  x
-             Nothing -> empty
+int= withGetParseString $ \str ->
+           maybe empty return (BS.readInt str)
 {-
 int= do 
     s <- tTakeWhile isNumber
@@ -161,23 +156,23 @@ int= do
             | otherwise=  stoi (x *10 + (ord (BS.head s) - ord '0')) (BS.tail s)
 -}
 -- | read a double in floating point/scientific notation
-double :: TransIO Double 
-double= do 
+double :: TransIO Double
+double= do
     ent  <- integer  -- takes the sign too
     frac <- fracf
     exp <- expf
-     
-    return $ (fromIntegral  ent * (10 ^ exp)) +- (( (fromIntegral $ fst $ fromJust $ BS.readInteger frac)) 
-                       /(10 ^ (fromIntegral (BS.length frac) - exp)))
-    where 
+
+    return $ (fromIntegral  ent * 10 ^ exp) +- (( fromIntegral $ fst $ fromJust $ BS.readInteger frac)
+                       /10 ^ (fromIntegral (BS.length frac) - exp))
+    where
     (+-) a b= if a >= 0 then a + b else a - b
 
-    fracf= do 
-       tChar '.' 
+    fracf= do
+       tChar '.'
        tTakeWhile isDigit
       <|> return "0"
-    
-    expf= do 
+
+    expf= do
         tChar 'e' <|> tChar 'E'
         int
       <|> return 0
@@ -193,7 +188,7 @@ chainManyTill op p end= scan
       where
       scan  = do {try end ; return mempty }
             <|>
-              (op) <$> p <*> scan
+              op <$> p <*> scan
               -- do{ x <- p; xs <- scan; return (x `op` xs) }
 
 -- -- | keep the parse context unmodified even if the parser succeed
@@ -203,10 +198,10 @@ chainManyTill op p end= scan
 
 between open close p = do{ open; x <- p; close; return x }
 
-symbol = string 
-         
-parens p        = between (symbol "(") (symbol ")") p  -- !> "parens "
-braces p        = between (symbol "{") (symbol "}") p  -- !> "braces "
+symbol = string
+
+parens = between (symbol "(") (symbol ")")  -- !> "parens "
+braces = between (symbol "{") (symbol "}")  -- !> "braces "
 angles p        = between (symbol "<") (symbol ">") p  -- !> "angles "
 brackets p      = between (symbol "[") (symbol "]") p  -- !> "brackets "
 
@@ -222,7 +217,7 @@ sepBy
 sepBy p sep  = sepBy1 p sep <|> return []
 
 
-sepBy1 = chainSepBy1 (:) 
+sepBy1 = chainSepBy1 (:)
 
 
 chainSepBy chain p sep= chainSepBy1 chain p sep <|> return mempty
@@ -236,9 +231,9 @@ chainSepBy1 chain p sep= do{ x <- p
                         ; return (x `chain` xs)
                         }
                         -- !> "chainSepBy "
-       
+
 chainMany chain v= (chain <$> v <*> chainMany chain v) <|> return mempty
-       
+
 commaSep p      = sepBy p comma
 semiSep p       = sepBy p semi
 
@@ -253,7 +248,7 @@ dropTillEndOfLine= withGetParseString $ \str -> return ((),BS.dropWhile ( /= '\n
 
 parseString= do
     tr "parseString"
-    dropSpaces 
+    dropSpaces
     r <- tTakeWhile (not . isSpace)
     return r
 
@@ -261,21 +256,21 @@ parseString= do
 -- | take characters while they meet the condition. if no char matches, it returns empty
 tTakeWhile :: (Char -> Bool) -> TransIO BS.ByteString
 tTakeWhile cond= -- parse (BS.span cond)
-    withGetParseString $ \s -> do 
+    withGetParseString $ \s -> do
       let ret@(h,_)= BS.span cond s
       --return () !> ("takewhile'",h,t)
       if BS.null h then empty else return ret
-      
-   
-   
+
+
+
 -- | take characters while they meet the condition and drop the next character
 tTakeWhile' :: (Char -> Bool) -> TransIO BS.ByteString
 tTakeWhile' cond= withGetParseString $ \s -> do
    let (h,t)= BS.span cond s
   --  return () !> ("takewhile'",h,t)
-   if BS.null h then empty else return (h, if BS.null t then t else BS.tail t) 
+   if BS.null h then empty else return (h, if BS.null t then t else BS.tail t)
 
- 
+
 just1 f x= let (h,t)= f x in (Just h,t)
 
 -- | take n characters 
@@ -370,16 +365,16 @@ withGetParseString3 parser=  do
 
 withGetParseString ::   (BS.ByteString -> TransIO (a,BS.ByteString)) -> TransIO a
 withGetParseString parser=  Transient $ do
-  
-    ParseContext readMore s done <- gets parseContext 
- 
+
+    ParseContext readMore s done <- gets parseContext
+
     let loop = unsafeInterleaveIO $ do
           r <-readIORef done
           if r  then return mempty else do
             (mr,_) <- runTransient readMore
-            case mr of 
-              Nothing -> mempty 
-              Just(SMore r) ->  return r <> do 
+            case mr of
+              Nothing -> mempty
+              Just(SMore r) ->  return r <> do
                                               d <- readIORef done
                                               if d then mempty else loop
 
@@ -421,7 +416,7 @@ giveParseString= (noTrans $ do
    let loop = unsafeInterleaveIO $ do
            (mr,_) <-  runTransient readMore
 
-           case mr of 
+           case mr of
             Nothing -> mempty
             Just(SMore r) ->  (r <>) `liftM` loop
             Just(SLast r) ->  (r <>) `liftM` loop
@@ -430,12 +425,12 @@ giveParseString= (noTrans $ do
 
 -- | drop from the stream until a condition is met
 tDropUntil cond= withGetParseString $ \s -> f s
-  where 
+  where
   f s= if BS.null s then return ((),s) else if cond s then return ((),s) else f $ BS.tail s
 
 -- | take from the stream until a condition is met
 tTakeUntil cond= withGetParseString $ \s -> f mempty s
-  where 
+  where
   f  r s= if BS.null s then return (r,s) else if cond s then return (r,s) else f (BS.snoc r $ BS.head s) $ BS.tail s
 
 -- | add the String at the beginning of the stream to be parsed
@@ -443,8 +438,8 @@ tPutStr s'= withGetParseString $ \s -> return ((),s'<> s)
 
 -- | True if the stream has finished
 isDone :: TransIO Bool
-isDone=  noTrans $ do 
-    ParseContext _ _ done<- gets parseContext 
+isDone=  noTrans $ do
+    ParseContext _ _ done<- gets parseContext
     liftIO $ readIORef done
 
 dropUntilDone= (withGetParseString $ \s -> do
@@ -456,8 +451,8 @@ dropUntilDone= (withGetParseString $ \s -> do
             -- if end then return((), s) else loop $ BS.tail s
     loop s)
    <|> return()
-    
-               
+
+
 
 -- | return the portion of the string not parsed
 -- it is useful for testing purposes:
@@ -477,80 +472,18 @@ getParseBuffer= do
 
 -- | empty the buffer
 clearParseBuffer :: TransIO ()
-clearParseBuffer= 
+clearParseBuffer=
    modify$ \s -> s{parseContext= let ParseContext readMore _ d= parseContext s in ParseContext readMore mempty d}
 
 -- | Used for debugging. It shows the next N characters in the parse buffer 
-showNext msg n= do 
+showNext msg n= do
    r <- tTake n
    liftIO $ print (msg,r);
    modify $ \s -> s{parseContext= (parseContext s){buffer= r <>buffer(parseContext s)}}
 
 
-u= undefined 
-
-class Typeable a => ToRest a where
-  toRest :: a -> TransIO  BS.ByteString
-  toRest x=  return $ "$" <> (BS.pack $ map toLower (typeOfR x))
-
-instance ToRest () where
-  toRest _ = return ""
-
-instance ToRest String where
-  toRest _= return "$string"
-
-instance ToRest BS.ByteString where
-  toRest _= return $ "$string"
-
-instance ToRest Int 
-
-instance ToRest Integer
-
-instance (ToRest a,  ToRest b) => ToRest (a,b) where
-    toRest x =   (toRest $ fst x) <>  "/" <>  (toRest $ snd x)
 
 
-instance (ToRest a, ToRest b, ToRest c) => ToRest(a,b,c) where
-    toRest x=  (toRest $ fst x) <>  "/" <>  (toRest $ snd x) <> "/" <>  (toRest $ thr x)
-      where
-      fst (a,_,_)= a
-      snd (_,b,_)= b
-      thr (_,_,c)= c
-
-instance (ToRest a, ToRest b,ToRest c,ToRest d) => ToRest(a,b,c,d) where
-    toRest x= (toRest $ fst x) <> "/" <>  (toRest $ snd x) <>  "/" <> (toRest $ thr x) <> "/" <> (toRest $ frt x)
-      where
-      fst (a,_,_,_)= a
-      snd (_,b,_,_)= b
-      thr (_,_,c,_)= c
-      frt (_,_,_,d)= d
-
-typeOfR x= show $ typeOf x --  "$" <> map toLower ( show (typeOf x))
-  -- let t= typeOf x 
-  -- in if t== typeOf (u:: String) || t==typeOf (u :: BS.ByteString) || t==typeOf (u :: BS.ByteString) then "string"
-  --    else map toLower $ show t
-
--- | write a message and parse a complete line from the console
-inputParse :: (Typeable b) => TransIO b  -> String -> TransIO b
-inputParse parse  message= r 
-  where 
-  r= do
-    liftIO $ putStr (message ++ " ") {-(message  <> " type: " <> BS.unpack (toRest $ t r) ) -} >> hFlush stdout
-    str <- react (addConsoleAction message message) (return ())   
-    liftIO $ delConsoleAction message  
-
-    -- let (str',rest)= span (/= '/') str
-
-    -- liftIO $ putStrLn str
-    (r,rest) <- withParseString (BS.pack str) $  (,) <$> parse <*> giveParseString  
-              
-    liftIO $ do writeIORef rconsumed $ Just rest
-    return r
-
-  t :: TransIO a -> a
-  t= u
-        
-        
 -- infixl 0 |-
 
 -- | Chain two parsers. The motivation is to parse a chunked HTTP response which contains
@@ -610,9 +543,9 @@ inputParse parse  message= r
 --        return () !> ("TAKEV",r)
 --        liftIO $ threadDelay 5000000
 --        return r
-           
 
-  
+
+
 --   putv v s= liftIO $ do
 --      proc <-   readIORef v -- :: TransIO (StreamData BS.ByteString -> IO())
 --      return  () !> ("PUTV", s)
@@ -657,7 +590,7 @@ p |- q =  do
           if isNothing pc then tr "FINNNNNNNNNNNNNNNNNNNNNNNN" >> empty  else do
             d <- liftIO $ readIORef done
             if d then do  tr "sendDone";liftIO  $ putMVar v SDone; repeatIt else do
-                r <- p 
+                r <- p
 
                 liftIO  $ putMVar v r  -- `catch` \(_ :: BlockedIndefinitelyOnMVar) -> return  False
 

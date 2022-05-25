@@ -19,7 +19,9 @@ module Transient.Move.Utils (initNode,initNodeDef, initNodeServ, inputNodes, sim
 --import Transient.Base
 import Transient.Internals
 import Transient.Logged
+import Transient.Console
 import Transient.Move.Internals
+import Transient.Move.Web
 import Control.Applicative
 import Control.Monad.State
 import Data.IORef
@@ -31,6 +33,7 @@ import qualified Data.ByteString.Lazy.Char8 as BS
 import Control.Exception hiding(onException)
 import System.IO.Unsafe
 import Data.TCache(syncCache)
+
 rretry= unsafePerformIO $ newIORef False
 
 -- | ask in the console for the port number and initializes a node in the port specified
@@ -94,8 +97,11 @@ getNodeParams  =
           liftIO $ createNode host port
          <|> getCookie
          <|> commit
-         
+#ifndef ghcjs_HOST_OS
+         <|> optionEndpoints
+#endif         
     where
+      
     commit= do
                     option "save" "commit the current execution state"
                     liftIO $ syncCache

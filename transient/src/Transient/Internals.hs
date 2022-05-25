@@ -42,9 +42,6 @@ import           Control.Concurrent
 import           Data.Maybe
 import           Data.List
 import           Data.IORef
-import           System.Environment
-import           System.IO
-import           System.IO.Error
 
 
 import           Data.String
@@ -56,41 +53,41 @@ import           System.Directory
 
 
 
-#ifdef DEBUG
-
-import           Debug.Trace
-import           System.Exit
-
-
--- #ifdef ghcjs_HOST_OS11
--- import           GHCJS.Foreign
--- import           Data.JSString(JSString)
--- import           GHCJS.Types(JSVal)
--- import           GHCJS.Marshal(fromJSVal)
-
--- import qualified GHCJS.Perch as P(Perch,clearChildren,span,noHtml,build,id,(!))
-
--- #endif 
-
--- tshow :: Show a => a -> x -> x
--- tshow= Debug.Trace.traceShow
-
--- {-# INLINE (!>) #-}
--- (!>) :: Show a => b -> a -> b
--- (!>) x y =  trace (show(unsafePerformIO myThreadId, y))  x
--- infixr 0 !>
-
--- {-# NOINLINE spaces #-}
--- spaces = take (unsafePerformIO $ readIORef rindent) $ repeat ' '
 
 
 
-indent :: MonadIO m => m ()
-indent = liftIO $ modifyIORef' rindent $ \n-> n + 4
-outdent :: MonadIO m => m ()
-outdent= liftIO $ modifyIORef' rindent $ \n-> n - 4
 
-#else
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 trace _ x= x
 -- tshow ::  a -> x -> x
 -- tshow _ y= y
@@ -103,7 +100,7 @@ indent, outdent :: MonadIO m => m ()
 indent= return()
 outdent= return()
 
-#endif
+
 {-# NOINLINE rindent #-}
 rindent= unsafePerformIO $ newIORef 0
 -- tr x= return () !>   unsafePerformIO (printColor x)
@@ -186,8 +183,8 @@ data ParseContext  = ParseContext { more   :: TransIO  (StreamData BSL.ByteStrin
                                   , done   :: IORef Bool} deriving Typeable
 
 -- | To define primitives for all the transient monads:  TransIO, Cloud and Widget
-class MonadState EventF m => TransMonad m 
-instance  MonadState EventF m => TransMonad m 
+class MonadState EventF m => TransMonad m
+instance  MonadState EventF m => TransMonad m
 
 
 instance MonadState EventF TransIO where
@@ -213,8 +210,8 @@ liftTrans  mx= do
     r <- noTrans mx
     case r of
             Nothing -> empty
-            Just x  -> return x 
-    
+            Just x  -> return x
+
 -- emptyEventF :: ThreadId -> IORef (LifeCycle, BS.ByteString) -> MVar [EventF] -> EventF
 emptyEventF th label par childs =
   EventF { event      = mempty
@@ -332,56 +329,56 @@ instance Functor TransIO where
   fmap f mx = do
     x <- mx
     return $ f x
-    
+
 
 instance Applicative TransIO where
   pure a  = Transient . return $ Just a
 
   mf <*> mx = do -- do f <- mf; x <- mx ; return $ f x
-    
+
     r1 <- liftIO $ newIORef Nothing
     r2 <- liftIO $ newIORef Nothing
     fparallel r1 r2 <|> xparallel r1 r2
-    
+
     where
 
     fparallel r1 r2= do
-      f <- mf 
+      f <- mf
       liftIO $ (writeIORef r1 $ Just f)
-      mr <- liftIO (readIORef r2) 
+      mr <- liftIO (readIORef r2)
       case mr of
-            Nothing -> empty 
+            Nothing -> empty
             Just x  -> return $ f x
-          
+
     xparallel r1 r2 = do
-      
+
       mr <- liftIO (readIORef r1)
       case mr of
             Nothing -> do
 
               p <- gets execMode
-              
+
               if p== Serial then empty else do
                        x <- mx
                        liftIO $ (writeIORef r2 $ Just x)
-                       
+
                        mr <- liftIO (readIORef r1)
                        case mr of
-                         Nothing -> empty 
+                         Nothing -> empty
                          Just f  -> return $ f x
 
-              
+
             Just f -> do
               x <- mx
               liftIO $ (writeIORef r2 $ Just x)
               return $ f x
 
 
-     
+
 
 data ExecMode = Remote | Parallel | Serial
   deriving (Typeable, Eq, Show)
-  
+
 -- | stop the current computation and does not execute any alternative computation
 fullStop :: TransIO stop
 fullStop= do modify $ \s ->s{execMode= Remote} ; stop
@@ -429,9 +426,9 @@ instance Monad TransIO where
 
 setEventCont :: TransIO a -> (a -> TransIO b) -> StateIO ()
 setEventCont x f  = modify $ \EventF { fcomp = fs, .. }
-                           -> EventF { xcomp = x 
+                           -> EventF { xcomp = x
                                      , fcomp = unsafeCoerce f :  fs
-                                     , .. } 
+                                     , .. }
 
 -- #else
 -- setEventCont  x f id = modify $ \EventF { fcomp = fs, .. }
@@ -453,7 +450,7 @@ setEventCont x f  = modify $ \EventF { fcomp = fs, .. }
 
 --     torender <- getData `onNothing` (return  P.noHtml)
 --     tr "build de runWidget"
-    
+
 --     liftIO $ P.build torender e >> return()
 
 --     return mr
@@ -507,14 +504,14 @@ instance MonadIO TransIO where
 instance Monoid a => Monoid (TransIO a) where
   mempty      = return mempty
 
-#if MIN_VERSION_base(4,11,0) 
-  mappend  = (<>) 
-  
+
+  mappend  = (<>)
+
 instance (Monoid a) => Semigroup (TransIO a) where
   (<>)=  mappendt
-#else
-  mappend= mappendt
-#endif
+
+
+
 
 mappendt x y = mappend <$> x <*> y
 
@@ -536,7 +533,7 @@ instance MonadPlus TransIO where
     mx <- runTrans x
 
     was <- gets execMode
-    
+
     if was == Remote
 
       then return Nothing
@@ -559,7 +556,7 @@ readWithErr n line =
 newtype ParseError= ParseError String
 
 instance Show ParseError where
-   show (ParseError s)= "ParseError " ++ s 
+   show (ParseError s)= "ParseError " ++ s
 
 instance Exception ParseError
 
@@ -567,7 +564,7 @@ read' s= case readsPrec' 0 s of
     [(x,"")] -> x
 
     _  -> throw $ ParseError $ "reading " ++ s
-    
+
 
 
 readsPrec' n = unsafePerformIO . readWithErr n
@@ -619,7 +616,7 @@ class AdditionalOperators m where
   atEnd  = (<***)
 
 
-   
+
 instance AdditionalOperators TransIO where
 
   --(**>) :: TransIO a -> TransIO b -> TransIO b
@@ -766,7 +763,7 @@ removeChild st= do
     mparent <- liftIO $ readIORef $ parent st
     case mparent of
      Nothing -> return ()
-     Just parent ->  modifyMVar (children parent) $ \ths -> 
+     Just parent ->  modifyMVar (children parent) $ \ths ->
                     return (filter (\st' -> threadId st' /= threadId st) ths,())
                   -- !> ("removeChild",threadId st, "from",threadId parent)
 
@@ -781,7 +778,7 @@ removeChild st= do
 --                             [] -> return []
 --                             st':_ -> readMVar $ children st'
 --                     return (xs ++ ys,sts)
-       
+
 
 --        case sts of
 --           [] -> return()
@@ -797,7 +794,7 @@ oneThread :: TransIO a -> TransIO a
 oneThread comp = do
     st  <- noTrans $ cloneInChild "oneThread" >>= \st -> put st >> return st
     -- put st
-      
+
     let rchs= children st
     liftIO $ writeIORef (labelth st) (DeadParent,mempty)
     x   <- comp
@@ -808,7 +805,7 @@ oneThread comp = do
     -- liftIO $ mapM_ (killChildren1 th) chs
 
     return x
-     
+
 -- kill all the children except one
 killChildren1 :: ThreadId  ->  EventF -> IO ()
 killChildren1 th state = do
@@ -826,12 +823,12 @@ killChildren1 th state = do
 
 --   x <- comp
 --   chs <- liftIO $ readMVar rchs
-  
+
 --   liftIO $ mapM_ killChildren1 chs
 
 --   return x
 --   where 
-  
+
 --   killChildren1 ::  EventF -> IO ()
 --   killChildren1  state = do
 --       forkIO $ do
@@ -850,7 +847,7 @@ labelState l =  do
   liftIO $ atomicModifyIORef (labelth st) $ \(status,prev) -> ((status,  prev <> BS.pack "," <> l), ())
 
 -- | return the threadId associated with an state (you can see all of them with the console option 'ps')
-threadState thid= do   
+threadState thid= do
   st <- findState match =<<  topState
   return  st :: TransIO EventF
   where
@@ -868,7 +865,7 @@ removeState thid= do
       match st= do
          (_,lab) <-liftIO $ readIORef $ labelth st
          return $ if BS.isInfixOf thid lab then True else False
-    
+
 
 printBlock :: MVar ()
 printBlock = unsafePerformIO $ newMVar ()
@@ -893,43 +890,7 @@ showThreads st = liftIO $ withMVar printBlock $ const $ do
         mapM_ (showTree $ n + 2) $ reverse chs
   showTree 0 st
 {-
-#ifdef DEBUG
-diffThreads :: (TransMonad m, MonadIO m) => m ()
-diffThreads=  do
-    liftIO $ takeMVar printBlock
-    liftIO $ putStrLn ""
-    liftIO $ putStrLn "THREAD CHANGES"
-    liftIO $ putStrLn ".............."
-    list <- getData `onNothing`  return [] 
-    list' <- threadString
-    setData list'
-    let dif = getGroupedDiff  list  list'
-    liftIO $ mapM putStrLn list'
-    liftIO $ putStrLn $ ppDiff (dif :: [Diff [String]]) 
-    liftIO $ putMVar printBlock ()
-  where
-  -- threadString :: TransIO [String]
-  threadString = do
-    st <- topState
-    mythread <- liftIO myThreadId
-    let showTree n ch = liftIO $ do
-            (state, label) <- liftIO $ readIORef $ labelth ch
-            chs <- liftIO $ readMVar $ children ch
-
-            (return 
-                [(take n $ repeat ' ')++
-
-                    if  label == mempty
-                        then  show $ threadId ch
-                        else  show label ++ drop 8 (show (threadId ch))
-                    -- when (state == Dead) $ putStr " dead" -- 
-                    ++  " " ++ show state ++ if mythread == threadId ch then " <--" else ""
-                ]) 
-
-                <> ((return . concat =<< mapM (showTree $ n + 2) (reverse chs)) ) :: IO [String]
-    liftIO $ showTree 0 st
-
-#endif
+# 933 "/home/user/transient-stack/transient/src/Transient/Internals.hs"
 
 -}
 -- | Return the state of the thread that initiated the transient computation
@@ -939,7 +900,7 @@ topState :: (TransMonad m, MonadIO m) => m EventF
 topState = do
   st <- get
   toplevel st
-  where 
+  where
     toplevel st = do
       par <- liftIO $ readIORef $ parent st
       case par of
@@ -956,7 +917,7 @@ topState = do
 
 --     showThreads $ fromJust curparent
 --     topState >>= showThreads
-    
+
 
 
 
@@ -992,10 +953,10 @@ getStateFromThread th top = resp
 -}
 
 -- | find the first computation state which match a filter  in the subthree of states
-findState :: (MonadIO m, Alternative m) => (EventF -> m Bool) -> EventF -> m EventF 
+findState :: (MonadIO m, Alternative m) => (EventF -> m Bool) -> EventF -> m EventF
 findState filter top= do
-   r <- filter top 
-   if r then return top 
+   r <- filter top
+   if r then return top
         else do
           sts <- liftIO $ readMVar $ children top
           foldl (<|>) empty $ map (findState filter) sts
@@ -1012,7 +973,7 @@ getStateFromThread th top= getstate  =<< findState (matchth th) top
      where resp= case M.lookup (typeOf $ typeResp resp) $ mfData st of
               Just x  -> return . Just $ unsafeCoerce x
               Nothing -> return Nothing
-              
+
    typeResp :: m (Maybe x) -> x
    typeResp = undefined
 
@@ -1111,7 +1072,7 @@ killBranch' cont = do
 
   let thisth  = threadId  cont
       mparent = parent    cont
-  
+
   killChildren $ children cont
   par <- liftIO $ readIORef $ parent cont
 
@@ -1206,7 +1167,7 @@ modifyData' f  v= do
   let (ma,nmap)=  M.insertLookupWithKey alterf t (unsafeCoerce v) (mfData st)
   put st { mfData =nmap}
   return $ if isNothing ma then v else unsafeCoerce f $ fromJust  ma
-  where 
+  where
   t          = typeOf v
   alterf  _ _ x = unsafeCoerce $ f $ unsafeCoerce x
 
@@ -1240,7 +1201,7 @@ withIndexData
       Typeable k,
       Typeable a, Ord k) =>
      k -> a -> (a -> a) -> m (M.Map k a)
-withIndexData i n f= 
+withIndexData i n f=
       modifyData' (\map -> case M.lookup i map of
                               Just x -> M.insert i (f x) map
                               Nothing -> map <> (M.singleton i n)) (M.singleton i n)
@@ -1257,7 +1218,7 @@ newtype Ref a = Ref (IORef a)
 -- It is polimorphic. Each type has his own reference
 -- It return the associated IORef, so it can be updated in the IO monad
 newRState:: (MonadIO m,TransMonad m, Typeable a) => a -> m (IORef a)
-newRState x= do 
+newRState x= do
     ref@(Ref rx) <- Ref <$> liftIO (newIORef x)
     setData  ref
     return rx
@@ -1343,7 +1304,7 @@ data StreamData a =
     | SDone                 -- ^ No more, we are done
     | SError SomeException  -- ^ An error occurred
     deriving (Typeable, Show,Read)
-    
+
 instance Functor StreamData where
     fmap f (SMore a)= SMore (f a)
     fmap f (SLast a)= SLast (f a)
@@ -1406,9 +1367,9 @@ sample action interval = do
   v    <- liftIO action
   prev <- liftIO $ newIORef v
   waitEvents (loop action prev) <|> return v
-  where 
+  where
   loop action prev = loop'
-    where 
+    where
     loop' = do
             threadDelay interval
             v  <- action
@@ -1424,7 +1385,7 @@ abduce = async $ return ()
 -- is managed with the thread control primitives of transient
 fork :: TransIO () -> TransIO ()
 fork proc= (abduce >> proc >> empty) <|> return()
- 
+
 
 -- | Run an IO action one or more times to generate a stream of tasks. The IO
 -- action returns a 'StreamData'. When it returns an 'SMore' or 'SLast' a new
@@ -1457,27 +1418,27 @@ parallel ioaction = Transient $ do
 loop parentc rec = forkMaybe False parentc $ \cont -> do
 
   liftIO $ atomicModifyIORef (labelth cont) $ \(_,label) -> ((Listener,label),())
-  
+
   let loop' = do
         (t,lab) <- readIORef $ labelth parentc
-        if t==Dead  then  tr ("Dead parent",t,lab,threadId parentc) >> return(Nothing,cont)  else do 
+        if t==Dead  then  tr ("Dead parent",t,lab,threadId parentc) >> return(Nothing,cont)  else do
           --  tr("loop", unsafePerformIO $ myThreadId)
-            
+
             atomicModifyIORef (labelth cont)$ \(_,lab)-> ((Parent, lab),())
 
             mdat <- rec  `catch` \(e :: SomeException) -> return $ SError e
             case mdat of
-                se@(SError _)  -> setworker cont >> iocont  se    cont 
+                se@(SError _)  -> setworker cont >> iocont  se    cont
                 SDone          -> do
                   setworker cont
                   -- (_,cont') <- 
-                  iocont  SDone cont 
+                  iocont  SDone cont
                   -- exceptBack cont' $ toException $ Finish $ show $ unsafePerformIO myThreadId
 
                 last@(SLast _) -> do
                   setworker cont
                   -- (_,cont') <- 
-                  iocont  last  cont 
+                  iocont  last  cont
                   -- exceptBack cont' $ toException $ Finish $ show $ unsafePerformIO myThreadId
 
                 more@(SMore _) -> do
@@ -1486,7 +1447,7 @@ loop parentc rec = forkMaybe False parentc $ \cont -> do
                   -- liftIO $ print (t,unsafePerformIO myThreadId)
                   if t==Dead  then return r else loop'
                   -- loop'
-                  
+
 
           where
           setworker cont=  liftIO $ atomicModifyIORef (labelth cont) $ \(_,lab) -> ((Alive,lab),())
@@ -1513,11 +1474,11 @@ loop parentc rec = forkMaybe False parentc $ \cont -> do
         Nothing -> forkIt rparent  proc
         Just sem  -> do
           dofork <- waitQSemB onemore sem
-          if dofork 
-            then forkIt rparent proc 
+          if dofork
+            then forkIt rparent proc
             else ( proc parent   >>= \(_,cont) -> exceptBackg cont $ Finish $ show (unsafePerformIO myThreadId,"loop thread ended"))
-                              `catch` \e ->do exceptBack parent e 
-              
+                              `catch` \e ->do exceptBack parent e
+
 
   forkIt rparentState  proc= do
      chs <- liftIO $ newMVar []
@@ -1525,37 +1486,37 @@ loop parentc rec = forkMaybe False parentc $ \cont -> do
     --  let cont = parentState{parent=Just parentState,children=   chs, labelth= label}
      label <- newIORef (Alive, BS.pack "work")
 
-     void $ forkFinally1  (do   
+     void $ forkFinally1  (do
          th <- myThreadId
          tr "thread init"
          let cont'= parentState{parent=rparentState, children= chs, labelth= label,threadId=th}
          when(not $ freeTh parentState )$ hangThread parentState cont'
-                                   
+
 
          proc cont'  )  -- `catch` execute Finish porque es una excepción no tratada. pero para eso hay que quitar el catch inicial?
                                     -- no porque el estado se conserva hasta el primer exception handler, 
                                     -- por lo que en el ultimo habdler en keep hay que ejecutar el finish.
          $ \me -> do
-           
+
           --  th <- myThreadId
           --  print ("acaba",th)
-           
+
            case maxThread parentState of
-               Just sem -> signalQSemB sem              
+               Just sem -> signalQSemB sem
                Nothing -> return ()
-         
-           
+
+
            (status,_) <- liftIO $ readIORef label
 
-           case me of  
+           case me of
               Left ( e) -> do
                   exceptBack parentState e -- tiene que hacerse antes de  free, a no ser que se haga hangFrom
                   freelogic  rparentState parentState label
-                  
+
                   exceptBackg parentState  $ Finish $ show (unsafePerformIO myThreadId,e)
                   return()
 
-              Right(_,lastCont) -> do 
+              Right(_,lastCont) -> do
                       freelogic  rparentState parentState label
                       tr ("finalizing normal",threadId lastCont, unsafePerformIO $ readIORef $ labelth lastCont)
                       exceptBackg lastCont  $ Finish $ show (unsafePerformIO myThreadId,"async thread ended")
@@ -1566,15 +1527,15 @@ loop parentc rec = forkMaybe False parentc $ \cont -> do
 
 
   -- forkFinally1 :: IO a -> (Either SomeException a -> IO ()) -> IO ThreadId
-  forkFinally1 action and_then = 
+  forkFinally1 action and_then =
        mask $ \restore ->  forkIO $ Control.Exception.try (restore action) >>= and_then
 
 freelogic rparentState parentState label =do
   if(freeTh parentState  ) then return False else do -- if was not a free thread
     Just actualParent <-readIORef rparentState
-    th <- myThreadId  
-    
-    
+    th <- myThreadId
+
+
     (can,lab) <- atomicModifyIORef label $ \(l@(status,lab)) ->
       {-
       -- threads 0 $ choose.... la primera iteracion cierra
@@ -1589,9 +1550,9 @@ freelogic rparentState parentState label =do
         Listener -> return()
         _ -> free th
       -}
-      ((case status of Alive -> Dead ; Parent -> DeadParent; _ -> status, lab),l) 
+      ((case status of Alive -> Dead ; Parent -> DeadParent; _ -> status, lab),l)
     -- los procesos que acaban de morir sin hijos (deadparent) tambien deben liberarse
-    if ({- can /= Parent && can /= DeadParent && -} can /= Listener) 
+    if ({- can /= Parent && can /= DeadParent && -} can /= Listener)
       then do free th actualParent  ; return True
       else return False
                   -- !> ("th",th,"actualParent",threadId actualParent,can,lab)
@@ -1610,14 +1571,14 @@ free th env = do
 
            (typ,_) <- readIORef $ labelth env
            tr ("freeing:",th,typ,"in",threadId env,"childs parent", length sbs',map threadId sbs',isJust (unsafePerformIO $ readIORef $ parent env))
-           if (null sbs' && typ /= Listener && isJust (unsafePerformIO $ readIORef $ parent env)) 
+           if (null sbs' && typ /= Listener && isJust (unsafePerformIO $ readIORef $ parent env))
             -- free the parent
               then  do
-                (typ,_) <- readIORef $ labelth env 
+                (typ,_) <- readIORef $ labelth env
                 if typ==DeadParent
                   then do
                       tr "DEADPARENT"
-                      free (threadId env) (fromJust $ unsafePerformIO $ readIORef  $ parent env)  
+                      free (threadId env) (fromJust $ unsafePerformIO $ readIORef  $ parent env)
                       -- return True 
                   else return False -- if typ== Parent then return True else return False
               else return False
@@ -1626,7 +1587,7 @@ free th env = do
          else return False
        where
        drop processed th []= (processed,False)
-       drop processed th (evtss@(ev:evts))| th ==  threadId ev= 
+       drop processed th (evtss@(ev:evts))| th ==  threadId ev=
                                       let u= unsafePerformIO
                                           typ= fst (u $ readIORef $ labelth ev)
                                       in if typ==DeadParent && length (u (readMVar $ children ev))==0
@@ -1659,7 +1620,7 @@ killChildren childs  = do
            mapM_ (\th -> do
               (status,_) <- atomicModifyIORef (labelth th) $ \(l@(status,label)) ->
                     ((if status== Alive then Dead else status, label),l)
-              when (status /= Listener && status /= Parent) $ killThread $ threadId th  {- !> ("killChildren",threadId th, status)-}) ths  >> return ()  
+              when (status /= Listener && status /= Parent) $ killThread $ threadId th  {- !> ("killChildren",threadId th, status)-}) ths  >> return ()
                               -- como choose es parent, no lo puede matar.
            mapM_ (killChildren . children) ths
         -- return ()
@@ -1709,382 +1670,6 @@ react setHandler iob= Transient $ do
           j@(Just _) -> do
             put cont{event=Nothing}
             return $ unsafeCoerce j
-      
-
--- * Non-blocking keyboard input
-
--- getLineRef= unsafePerformIO $ newTVarIO Nothing
-
-
--- | listen stdin and triggers a new task every time the input data
--- matches the first parameter.  The value contained by the task is the matched
--- value i.e. the first argument itself. The second parameter is a message for
--- the user. The label is displayed in the console when the option match.
-option :: (Typeable b, Show b, Read b, Eq b) =>
-          b -> String  -> TransIO b
-option =  optionf False
-
--- Implements the same functionality than `option` but only wait for one input
-option1 :: (Typeable b, Show b, Read b, Eq b) =>
-          b -> String  -> TransIO b
-option1= optionf True
-
-
-optionf :: (Typeable b, Show b, Read b, Eq b) =>
-          Bool -> b -> String  -> TransIO b
-optionf flag ret message  = do
-  let sret= if typeOf ret == typeOf "" then unsafeCoerce ret else show ret
-  let msg= "Enter  "++sret++"\t\tto: " ++ message++"\n"
-  inputf flag sret msg Nothing ( == sret)  
-  liftIO $ putStr "\noption: " >> putStrLn sret
-  -- abduce
-  return ret
-
--- | General asynchronous console input.
--- 
--- inputf <remove input listener after sucessful or not> <listener identifier> <prompt> 
---      <Maybe default value> <validation proc>
-inputf ::  (Show a, Read a,Typeable a)  => Bool -> String -> String -> Maybe a -> (a -> Bool)  -> TransIO a
-inputf remove ident message mv cond = do
-  liftIO $ putStr message >> hFlush stdout 
-  -- let ide = BS.pack ident 
-  -- removeState ide
-  -- labelState ide
-  
-  str <- react (addConsoleAction ident message) (return ())   
-  -- need to remove previous element in task list
-          
-  when remove $  liftIO $ delConsoleAction ident 
-  c <- liftIO $ readIORef rconsumed
-  if isJust c then returnm mv else do
-    let res = read2 str 
-    case   res  of
-      Nothing -> do (liftIO $ when (isJust mv) $ putStrLn ""); returnm mv 
-      Just (x,rest)  -> if cond x 
-                        then liftIO $ do
-                          writeIORef rconsumed $ Just $ dropspaces rest  
-                          print x
-                          -- hFlush stdout
-                          return x
-                
-                        else do liftIO $ when (isJust mv) $ putStrLn ""
-                                returnm mv
-  
-  where
-  returnm (Just x)= return x
-  returnm _ = empty
-
-
-
-  read2 :: (Typeable a,Read a) =>String -> Maybe (a,String)
-  read2 s= r 
-      where
-      typ :: Maybe (a,String) -> a
-      typ= undefined
-      typr= typeOf(typ r)
-      r = if typr== typeOf ""                 then  let (r1,rest)= span(\x ->  (not $ elem x separators)) s in Just (unsafeCoerce r1,dropspaces rest) -- span
-          else if typr == typeOf (BS.pack "")  then  let (r1,rest)= span(\x -> (not $ elem x separators)) s in Just (unsafeCoerce $ BS.pack r1, dropspaces rest)  -- until separator
-          else if typr == typeOf (BSL.pack "") then  let (r1,rest)= span(\x -> (not $ elem x separators)) s in Just (unsafeCoerce $ BSL.pack r1,dropspaces rest)
-          else case reads s of
-              [(x,rest)] -> Just (x,dropspaces rest)
-              _ ->  Nothing
-
-dropspaces s= dropWhile (\x ->elem x separators) s
-separators= "/:\t\n "
-
-
--- | Waits on stdin and return a value when a console input matches the
--- predicate specified in the first argument.  The second parameter is a string
--- to be displayed on the console before waiting.
-input :: (Typeable a, Read a,Show a) =>  (a -> Bool) -> String -> TransIO a
-input= input' Nothing
-
--- | `input` with a default value
-input' :: (Typeable a, Read a,Show a) => Maybe a -> (a -> Bool) -> String -> TransIO a
-input' mv cond prompt= do  
-  --liftIO $ putStr prompt >> hFlush stdout 
-  inputf True "input" prompt  mv cond 
-
-
-
-
-rcb= unsafePerformIO $ newIORef [] :: IORef [ (String,String,String -> IO())]
-
-addConsoleAction :: String -> String -> (String ->  IO ()) -> IO ()
-addConsoleAction name message cb= atomicModifyIORef rcb $ \cbs ->  
-              ( filter ((/=) name . fst) cbs <> [(name,message, cb)]  ,())
- where
- fst (x,_,_)= x
-
-delConsoleAction :: String -> IO ()
-delConsoleAction name= atomicModifyIORef rcb $ \cbs -> (filter ((/=) name . fst) cbs,())
- where
- fst (x,_,_)= x
-
-
-reads1 s=x where
-      x= if typeOf(typeOfr x) == typeOf "" then unsafeCoerce[(s,"")] else readsPrec' 0 s
-      typeOfr :: [(a,String)] ->  a
-      typeOfr  = undefined
-
-read1 s= let [(x,"")]= reads1 s  in x
-
-
-rprompt= unsafePerformIO $ newIORef "> "
-inputLoop= do
-    prompt <- readIORef rprompt
-    when (not $ null prompt) $ do putStr prompt ; hFlush stdout
-    line <- getLine
-    --threadDelay 1000000
-
-    processLine line
-
-    
-    inputLoop
-   `catch`  \(SomeException _) -> inputLoop -- myThreadId >>= killThread 
-
-
-{-# NOINLINE rconsumed #-}
-rconsumed = unsafePerformIO $ newIORef Nothing
--- {-# NOINLINE lineprocessmode #-}
--- lineprocessmode= unsafePerformIO $ newIORef False
-
-processLine line =   do
-       mbs <- readIORef rcb
-       process 5 mbs line
-  where
-  process :: Int -> [(String,String,String -> IO())] -> String -> IO ()
-  process _ _ []= writeIORef rconsumed Nothing >> return ()
-     
-  process 0 [] line= do
-    let (r,rest) = span(\x -> (not $ elem x "/: ")) line
-    hPutStr  stderr r >> hPutStrLn stderr ": can't read, skip"
-    mbs <- readIORef rcb
-    writeIORef rconsumed Nothing
-    process 5 mbs $ dropspaces rest
-  
-  process n [] line= do
-    mbs <- readIORef rcb
-    process (n-1) mbs line
-
-  process n mbs line= do
-       let cb = trd $ head mbs
-       cb line
-
-       r <- atomicModifyIORef' rconsumed $ \res -> (Nothing,res)
-       let restLine=  fromMaybe line r
-       --si se ha consumido leer la lista de callbacks otra vez
-       mbs' <- if isJust r then readIORef rcb else return $ tail mbs
-       process n mbs' restLine  
-    where
-    trd (_,_,x)=x
-
-  {-
-processLine r = do
-    linepro <- readIORef lineprocessmode
-    if linepro then do
-            mapM' invokeParsers [r]
-       else do
-            let rs = breakSlash [] r
-            mapM' invokeParsers rs
-
-    where
-    invokeParsers x= do
-       mbs <- readIORef rcb
-       mapM_ (\cb -> cb x) $ map (\(_,_,p)-> p) mbs
-       
-    mapM' _ []= return ()
-    mapM' f (xss@(x:xs)) =do
-        f x
-        r <- readIORef rconsumed
-
-        if  r
-          then do
-            writeIORef riterloop 0
-            writeIORef rconsumed False
-            mapM' f xs
-
-          else do
-            threadDelay 1000
-            n <- atomicModifyIORef riterloop $ \n -> (n+1,n)
-            if n==1
-              then do
-                when (not $ null x) $ hPutStr  stderr x >> hPutStrLn stderr ": can't read, skip"
-                writeIORef riterloop 0
-                writeIORef rconsumed False
-                mapM' f xs
-              else mapM' f xss
-
-    riterloop= unsafePerformIO $ newIORef 0
-
-breakSlash :: [String] -> String -> [String]
-breakSlash [] ""= [""]
-breakSlash s ""= s
-breakSlash res ('\"':s)=
-    let (r,rest) = span(/= '\"') s
-    in breakSlash (res++[r]) $ tail1 rest
-
-breakSlash res s=
-    let (r,rest) = span(\x -> (not $ elem x "/: ")) s
-    in breakSlash (res++[r]) $ tail1 rest
-
-tail1 []= []
-tail1 x= tail x
-
--- >>> breakSlash [] "test.hs/0/\"-prof -auto\""
--- ["test.hs","0","-prof -auto"]
---
-
--}
-
-
--- | Wait for the execution of `exit` and return the result or the exhaustion of thread activity
-
-stay rexit=  takeMVar rexit
-     `catch` \(e :: BlockedIndefinitelyOnMVar) -> return Nothing
-
-newtype Exit a= Exit a deriving Typeable
-
--- | Runs the transient computation in a child thread and keeps the main thread
--- running until all the user threads exit or some thread 'exit'.
---
--- The main thread provides facilities for accepting keyboard input in a
--- non-blocking but line-oriented manner. The program reads the standard input
--- and feeds it to all the async input consumers (e.g. 'option' and 'input').
--- All async input consumers contend for each line entered on the standard
--- input and try to read it atomically. When a consumer consumes the input
--- others do not get to see it, otherwise it is left in the buffer for others
--- to consume. If nobody consumes the input, it is discarded.
---
--- A @/@ in the input line is treated as a newline.
---
--- When using asynchronous input, regular synchronous IO APIs like getLine
--- cannot be used as they will contend for the standard input along with the
--- asynchronous input thread. Instead you can use the asynchronous input APIs
--- provided by transient.
---
--- A built-in interactive command handler also reads the stdin asynchronously.
--- All available options waiting for input are displayed when the
--- program is run.  The following commands are available:
---
--- 1. @ps@: show threads
--- 2. @log@: inspect the log of a thread
--- 3. @end@, @exit@: terminate the program
---
--- An input not handled by the command handler can be handled by the program.
---
--- The program's command line is scanned for @-p@ or @--path@ command line
--- options.  The arguments to these options are injected into the async input
--- channel as keyboard input to the program. Each line of input is separated by
--- a @/@. For example:
---
--- >  foo  -p  ps/end
---
-keep :: Typeable a => TransIO a -> IO (Maybe a)
-keep mx = do
-   liftIO $ hSetBuffering stdout LineBuffering
-   rexit <- newEmptyMVar
-   void $ forkIO $ do
---       liftIO $ putMVar rexit  $ Right Nothing
-        let logFile= "trans.log"
-
-        void $ runTransient $ do
-
-           liftIO $ removeFile logFile `catch`  \(e :: IOError) -> return ()
-
-           onException $ \(e :: SomeException) -> do
-             case fromException e of 
-              Just BlockedIndefinitelyOnSTM -> return () 
-              _ -> do
-                liftIO $ do
-                  th <- myThreadId
-                  putStrLn $ show th ++ ": " ++ show e
-                back $ Finish $ show  (unsafePerformIO myThreadId,e)
-                --showThreads top`
-                --liftIO $ appendFile logFile $ show e ++ "\n" -- `catch` \(e:: IOError) -> exc
-              
-           
-           onException $ \(e :: IOException) -> do
-             when (ioeGetErrorString e ==  "resource busy") $ do
-                 liftIO $ do print e ; putStrLn "EXITING!!!";  putMVar rexit Nothing
-                 empty
-
-           onException $ \ThreadKilled ->  do
-             back $ Finish $ show  (unsafePerformIO myThreadId,ThreadKilled)
-             empty
-
-          --  onException $ \(Finish _) -> empty
-
-
-           st <- get
-           setData $ Exit rexit
-           
-           do
-            --  do abduce ; mx -- ; back $ Finish $ show $ (unsafePerformIO myThreadId,"main thread ended")
-            --  <|> 
-                 do
-                   option "options" "show all options"
-                   mbs <- liftIO $ readIORef rcb
-
-                   liftIO $ mapM_  (\c ->do putStr c; putStr "|") $ map (\(fst,_,_) -> fst)mbs
-
-                   d <- input' (Just "n") (\x -> x=="y" || x =="n" || x=="Y" || x=="N") "\nDetails? N/y "
-                   when  (d == "y") $
-                       let line (x,y,_)= putStr y  -- do putStr x; putStr "\t\t"; putStrLn y
-                       in liftIO $ mapM_ line  mbs
-                   liftIO $ putStrLn ""
-                   empty
-            <|> do
-                   option "ps" "show threads"
-                   liftIO $ showThreads st
-                   empty
-            <|> do
-                    option "errs" "show exceptions log"
-                    c <- liftIO $ readFile logFile `catch` \(e:: IOError) -> return ""
-                    liftIO . putStrLn $  if null c then  "no errors logged" else c
-                    empty
-                   {-
-            <|> do
-                   option "log" "inspect the log of a thread"
-                   th <- input (const True)  "thread number>"
-                   ml <- liftIO $ getStateFromThread th st
-                   liftIO $ print $ fmap (\(Log _ _ log _) -> reverse log) ml
-                   empty
-                   -}
-
-
-            <|> do
-                   option "end" "exit"
-                   liftIO $ putStrLn  "exiting..."
-                   abduce
-
-                   st <-threadState $ fromString "input"
-                   liftIO $ killThread $ threadId st
-                  --  killChilds
-                   liftIO $ putMVar rexit Nothing
-                   top <- topState
-                   liftIO $ killChildren $ children top
-                   liftIO $ killThread $ threadId top
-                   empty
-
-
-#ifndef ghcjs_HOST_OS
-            <|> do 
-                  abduce 
-                  liftIO $ execCommandLine
-                  labelState (fromString "input") 
-                  liftIO inputLoop 
-                  empty
-#endif
-            <|>    
-                   do abduce; mx -- back $ Finish $ show (unsafePerformIO myThreadId,"main thread ended")
-        -- tr "EXCEPTBACKG"
-        -- -- si el error se produce en un thread que no es el principal, no se recoje. 
-        -- -- back si lo recoje, pero no hace caso de empty.
-        -- exceptBackg cont $ Finish $ show (unsafePerformIO myThreadId,"main thread ended")
-        -- return ()
-
-   stay rexit
 
 
 
@@ -2097,96 +1682,10 @@ keep mx = do
 -- more threads running
 --
 
--- keep' :: Typeable a => TransIO a -> IO  (Maybe a)
--- keep' mx  = do
---    liftIO $ hSetBuffering stdout LineBuffering
---    rexit <- newEmptyMVar 
---    void $ forkIO $ do
---           runTransient $ do
---               onException $ \(e :: SomeException ) -> do
---                 --  top <- topState
---                  liftIO $ do
---                     th <- myThreadId
---                     putStr $ show th
---                     putStr ": "
---                     print e
---                     -- putStrLn "Threads:"
---                     -- showThreads top
---                  empty
-              
---               onException $ \(e :: IOException) -> 
---                  when (ioeGetErrorString e ==  "resource busy") $ do
---                      liftIO $ do  print e ; putStrLn "EXITING!!!"; putMVar rexit Nothing
---                      liftIO $ putMVar rexit Nothing
---                      empty
-              
---               onException $ \ThreadKilled -> empty
---               -- onException $ \(Finish _) -> empty
 
 
---               setData $ Exit rexit
 
---               mx 
---               back $ Finish "main thread"
-
-
---           return ()
---    threadDelay 10000
---    forkIO $ execCommandLine
---    stay rexit
-
-keep' :: TransIO a -> IO [a]
-keep' mx = keepCollect 0 0 mx
-
-keepCollect n time mx  = do
-    hSetBuffering stdout LineBuffering
-    rexit <- newEmptyMVar 
-    void $ forkIO $ do
-        void $ runTransient $ do
-            onException $ \(e :: SomeException ) -> do
-            --  top <- topState
-                liftIO $ do
-                  th <- myThreadId
-                  putStr $ show th
-                  putStr ": "
-                  print e
-                -- putStrLn "Threads:"
-                -- showThreads top
-                -- empty
-                back $ Finish $ show  (unsafePerformIO myThreadId,e)
-
-            onException $ \(e :: IOException) -> 
-                when (ioeGetErrorString e ==  "resource busy") $ do
-                    liftIO $ do  print e ; putStrLn "EXITING!!!"; putMVar rexit []
-                    liftIO $ putMVar rexit []
-                    empty
-            
-            onException $ \ThreadKilled -> do
-                 back $ Finish $ show  (unsafePerformIO myThreadId,ThreadKilled)
-                 liftIO $ putMVar rexit []
-                 empty
-
-
-            
-            r <- collect' n time  mx 
-            liftIO $ putMVar rexit  r
-        `catch` \(e :: BlockedIndefinitelyOnMVar) -> putMVar rexit []
-    threadDelay 10000
-    forkIO execCommandLine
-    takeMVar rexit  `catch` \(e :: BlockedIndefinitelyOnMVar) -> return []
-
-execCommandLine :: IO ()
-execCommandLine= do
-    args <- getArgs
-    let mindex =  findIndex (\o ->  o == "-p" || o == "--path" ) args
-    when (isJust mindex) $ do
-         let i= fromJust mindex +1
-         when (length  args >= i) $ do
-           let path=  args !! i 
-           --print $ drop (i-1) args
-           --putStr "Executing: " >> print  path
-           threadDelay 100000
-           processLine  path
+newtype Exit a= Exit a deriving Typeable
 
 
 -- | Exit the main thread with a result, and thus all the Transient threads (and the
@@ -2212,33 +1711,33 @@ collect' number time proc' = hookedThreads $ do
     -- liftIO $ atomicModifyIORef (labelth cont) $ \(status, lab) -> ((Parent, lab), ())
 
     let proc= do
-            
+
             i <- proc'
             liftIO $ atomicModifyIORef res $ \n-> (i:n,())
             empty
 
         timer =  do
-            guard (time > 0) 
+            guard (time > 0)
             -- addThreads 1
             anyThreads abduce
             -- labelState $ fromString "timer"
-            liftIO $ threadDelay time 
+            liftIO $ threadDelay time
             liftIO $ writeIORef done True
             th <- liftIO myThreadId
             liftIO $ killChildren1 th cont
 
-            liftIO $ readIORef res 
+            liftIO $ readIORef res
 
         check   (Finish reason) = do
-            hasnot <- hasNoChildThreads cont 
+            hasnot <- hasNoChildThreads cont
             rs <- liftIO $ readIORef res
-            guard $ hasnot || (number > 0 && length rs >= number)  
+            guard $ hasnot || (number > 0 && length rs >= number)
             f <- liftIO $ atomicModifyIORef done $ \x ->(True,x) -- previous onFinish not triggered?
-            if f then backtrack 
+            if f then backtrack
               else do
                 -- tr "forward" 
-                forward (Finish ""); 
-                
+                forward (Finish "");
+
         --  -- the finished thread is free. It must be "hanged" -- 
                 st <- noTrans $ do
                     th <- liftIO $ myThreadId
@@ -2253,10 +1752,10 @@ collect' number time proc' = hookedThreads $ do
                 -- liftIO $ readIORef res
                 return rs
 
-    localBack (Finish "") $ timer <|> (anyThreads abduce >> (proc `onBack` check) ) 
+    localBack (Finish "") $ timer <|> (anyThreads abduce >> (proc `onBack` check) )
 
 
-    
+
 -- | look up in the parent chain for a parent state/thread that is still active
 findAliveParent st=  do
       par <- readIORef (parent st) `onNothing`  error "findAliveParent: Nothing"
@@ -2338,9 +1837,9 @@ registerBack witness f  = Transient $ do
    md <- getData `asTypeOf` (Just <$> return (backStateOf witness))
 
    case md of
-        Just (Backtrack b []) ->  setData $ Backtrack b  [cont] 
+        Just (Backtrack b []) ->  setData $ Backtrack b  [cont]
         Just (bss@(Backtrack b (bs@((EventF _ x'  _ _ _ _ _ _ _ _ _ _ _):_)))) ->
-          when (isNothing b) $ 
+          when (isNothing b) $
                 setData $ Backtrack b (cont:bs)
 
         Nothing ->  setData $ Backtrack mwit [cont]
@@ -2385,7 +1884,7 @@ retry= forward ()
 back :: (Typeable b, Show b) => b -> TransIO a
 back reason =  do
   -- tr "back"
-  bs <- getData  `onNothing`  return (backStateOf  reason)           
+  bs <- getData  `onNothing`  return (backStateOf  reason)
   goBackt  bs                                                    --  !>"GOBACK"
 
   where
@@ -2456,7 +1955,7 @@ newtype Finish= Finish String deriving Show
 -- under it. in this case the finalization action is executed.
 -- it does not work with `freeThreads`.
 onFinish exc= do
-  cont <- getCont 
+  cont <- getCont
   onFinishCont cont (return())  exc
 
 -- | A binary onFinish which will return a result when all the threads of the first operand terminates so it can return a result. 
@@ -2488,11 +1987,11 @@ onFinishCont cont proc mx= do
                 dead <- isDead cont
                 this <- get
                 let isthis = threadId this == threadId cont
-                    is = nochild && (dead ||isthis) 
-                guard is  
+                    is = nochild && (dead ||isthis)
+                guard is
                 -- previous onFinish not triggered?
                 f <- liftIO $ atomicModifyIORef done $ \x ->(if x then x else not x,x)
-                if f then backtrack else 
+                if f then backtrack else
                     mx reason
     -- anyThreads abduce  -- necessary for controlling threads 0
 
@@ -2501,7 +2000,7 @@ onFinishCont cont proc mx= do
     isDead st= liftIO $ do
       (can,_) <- readIORef $ labelth st
       return $ can==DeadParent
-            
+
 -- | Abort finish. Stop executing more finish actions and resume normal
 -- execution.  Used inside 'onFinish' actions.
 -- NOT RECOMMENDED FINISH ACTIONS SHOULD NOT BE ABORTED. USE EXCEPTIONS INSTEAD
@@ -2523,11 +2022,11 @@ onWaitThreads   mx= do
                 dead <- isDead cont
                 this <- get
                 let isthis = threadId this == threadId cont
-                    is = noactive && (dead || isthis) 
-                guard is  
+                    is = noactive && (dead || isthis)
+                guard is
                 -- previous onFinish not triggered?
                 f <- liftIO $ atomicModifyIORef done $ \x ->(if x then x else not x,x)
-                if f then backtrack else 
+                if f then backtrack else
                     mx reason
     -- anyThreads abduce  -- necessary for controlling threads 0
 
@@ -2538,7 +2037,7 @@ onWaitThreads   mx= do
       return $ can==DeadParent
 {-# NOINLINE noactiveth #-}
 noactiveth st=
-    return $ and $ map (\st' -> (let l=fst (label st')in l == Parent || l == DeadParent)  && 
+    return $ and $ map (\st' -> (let l=fst (label st')in l == Parent || l == DeadParent)  &&
                                 (null (childs st') || (ex $ noactiveth st'))) $ childs st
     where
     childs= ex . readMVar . children
@@ -2559,7 +2058,7 @@ hasNoChildThreads st= do  -- necesario saber si no tiene threads Y NO TIENE LOOP
     chs <- liftIO $ readMVar $ children st
     -- liftIO $ print ("nomorethreads=",map threadId chs,unsafePerformIO myThreadId)
     -- topState >>= showThreads
-    return $ null chs 
+    return $ null chs
 
 
 -- | open a resouce `a` and close it when it is no longer used.
@@ -2621,8 +2120,8 @@ tmask proc= Transient $ do
   -- liftIO $ print "end MASK"
   put st'
   return mx
-  
-onException' :: Exception e => TransIO a -> (e -> TransIO a) -> TransIO a 
+
+onException' :: Exception e => TransIO a -> (e -> TransIO a) -> TransIO a
 onException' mx f= onAnyException mx $ \e -> do
             --return () !>  "EXCEPTION HANDLER EXEC" 
             case fromException e of
@@ -2634,11 +2133,11 @@ onException' mx f= onAnyException mx $ \e -> do
                Just e' -> f e'
 
 
-   
+
   where
   onAnyException :: TransIO a -> (SomeException ->TransIO a) -> TransIO a
   onAnyException mx exc= ioexp  `onBack` exc
- 
+
   ioexp    = Transient $ do
     st <- get
 
@@ -2646,7 +2145,7 @@ onException' mx f= onAnyException mx $ \e -> do
       (do
         case event st of
           Nothing -> do
-                r <- runTrans  mx  
+                r <- runTrans  mx
                 modify $ \s -> s{event= Just $ unsafeCoerce r}
                 runCont st
               --  was <- gets execMode -- getData `onNothing` return Serial
@@ -2663,7 +2162,7 @@ onException' mx f= onAnyException mx $ \e -> do
     return mr
 
 exceptBack ::  EventF -> SomeException -> IO (Maybe a, EventF)
-exceptBack  =  exceptBackg 
+exceptBack  =  exceptBackg
 
 exceptBackg :: (Typeable e, Show e) => EventF -> e -> IO (Maybe a, EventF)
 exceptBackg st e= do
@@ -2674,9 +2173,9 @@ exceptBackg st e= do
 -- The second argument is executed before every re-execution
 -- if the second argument executes `empty` the execution is aborted.
 
-whileException :: Exception e =>  TransIO b -> (e -> TransIO())  -> TransIO b 
+whileException :: Exception e =>  TransIO b -> (e -> TransIO())  -> TransIO b
 whileException mx fixexc =  mx `catcht` \e -> do fixexc e; whileException mx fixexc
-  
+
 -- | Delete all the exception handlers registered till now.
 cutExceptions :: TransIO ()
 cutExceptions= backCut  (undefined :: SomeException)
@@ -2700,8 +2199,8 @@ continue = forward (undefined :: SomeException)   -- !> "CONTINUE"
 --
 -- The semantic is the same than `catch` but the computation and the exception handler can be multirhreaded
 catcht :: Exception e => TransIO b -> (e -> TransIO b) -> TransIO b
-catcht mx exc= localExceptionHandlers $ onException' mx  $ \e  ->  continue >> exc e 
-    
+catcht mx exc= localExceptionHandlers $ onException' mx  $ \e  ->  continue >> exc e
+
 
 catcht' :: Exception e => TransIO b -> (e -> TransIO b) -> TransIO b
 catcht' mx exc= do
@@ -2711,12 +2210,12 @@ catcht' mx exc= do
                  passed <- liftIO $ readIORef rpassed
                 --  return () !> ("CATCHT passed", passed)
                  if not passed then continue >> exc e else do
-                    Backtrack r stack <- getData  `onNothing`  return (backStateOf  e)      
+                    Backtrack r stack <- getData  `onNothing`  return (backStateOf  e)
                     setData $ Backtrack r $ tail stack
-                    back e 
+                    back e
                     -- return () !> "AFTER BACK"
                     empty )
-                    
+
          liftIO $ writeIORef rpassed True
          return r
    where
@@ -2737,10 +2236,10 @@ catcht' mx exc= do
 -- >      throw $ ErrorCall "asdasd"
 -- 
 -- the latter print "hello". If you use `throwt` instead, it prints "world"     
-     
+
 throwt :: Exception e => e -> TransIO a
 
-throwt =  back . toException 
+throwt =  back . toException
 
 -- | to register exception handlers within the computation passed in the parameter. The handlers do not apply outside
 --

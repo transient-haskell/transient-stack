@@ -270,4 +270,5 @@ where
 
 
 import    Transient.Internals
+import    Transient.Console
 import    Transient.Logged hiding (exec, wait)

@@ -56,7 +56,9 @@ library
             process -any,
             random -any,
             text -any,
-            aeson -any
+            aeson -any,
+            data-default,
+            syb
             --primitive < 0.6.4.0
             -- entropy <= 0.3.6, 
     build-depends:
@@ -69,6 +71,7 @@ library
         -- Transient.MapReduce
         Transient.Move.Internals
         Transient.Move.Utils
+        Transient.Move.Web
         -- Transient.Move.Services
         -- Transient.Move.PubSub
     build-depends:
@@ -250,7 +253,8 @@ executable test5
             vector,
             TCache,
             data-default,
-            syb
+            syb,
+            random
             
         hs-source-dirs: tests
         main-is: test5.hs

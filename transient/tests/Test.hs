@@ -477,7 +477,7 @@ testcollect0=  keep $ do
        r <-  sync $ collect' 1 t proc
        tr("timeout",length r)
        case r of
-          []  -> empty         !> "TIMEOUT EMPTY"
+          []  -> empty         -- !> "TIMEOUT EMPTY"
           mr:_ -> case mr of
              Nothing -> error "error"
              Just r -> return r   

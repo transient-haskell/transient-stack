@@ -10,8 +10,6 @@ import Control.Monad.State
 
 import Control.Exception as CE
 
-
-
 data EVar a= EVar  (TChan (StreamData a)) deriving  Typeable
 
 

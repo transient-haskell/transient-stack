@@ -1,4 +1,4 @@
-#!/usr/bin/env execthirdlinedocker.sh
+
 --  info: use sed -i 's/\r//g' file if report "/usr/bin/env: ‘execthirdlinedocker.sh\r’: No such file or directory"
 -- LIB=/projects/transient-stack/ && ghc  -DDEBUG -threaded  -i${LIB}/transient/src -i${LIB}/transient-universe/src -i${LIB}/transient-universe-tls/src -i${LIB}/axiom/src   $1 && ./`basename $1 .hs` ${2} ${3}
 
@@ -8,14 +8,16 @@
 -- cd /projects/transient && cabal install -f debug --force-reinstalls && cd ../transient-universe && cabal install --force-reinstalls &&  runghc $1 $2 $3 $4
 
 {-# LANGUAGE ScopedTypeVariables, FlexibleInstances, OverloadedStrings,ExistentialQuantification #-}
-{-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE DeriveGeneric,DeriveAnyClass #-}
 module Main where
 
 import Transient.Base
 import Transient.Move.Internals
+import Transient.Move.Web
 import Transient.Parse
 import Transient.Internals
 import Transient.Move.Utils
+import Transient.Parse
 import Control.Applicative
 import Control.Monad.IO.Class
 import Control.Monad.State
@@ -30,11 +32,10 @@ import System.IO.Unsafe
 import Data.IORef
 import qualified Data.ByteString.Lazy.Char8 as BS
 import Data.Typeable
-import Data.TCache hiding (onNothing)
-import Data.TCache.DefaultPersistence
+-- import Data.TCache.DefaultPersistence
 import Data.Default
 import Data.Aeson
-import GHC.Generics 
+import GHC.Generics
 -- main2= keep $ do 
 --      i <- threads 0 $ choose[0..]
 --      abduce
@@ -84,10 +85,10 @@ main4 = do initTLS; keep $ initNode $ inputNodes <|> hi
         
 -}
 
-      
 
 
-  
+
+
 -- test11= localIO $ print "hello world"
 -- test10= do
 --     localIO $ putStrLn "hello world"
@@ -105,7 +106,7 @@ instance Loggable WORLD2
 
 save= local $ do
     option ("save" :: String) "save execution state"
-    liftIO $ syncCache
+    liftIO syncCache
 
 data INTER= INTER deriving (Read,Show)
 
@@ -122,6 +123,10 @@ mainseq= keep $ initNode $ do
 
     minput "" (if number== number' then "YES" else "NO") :: Cloud()
 
+main= keep $ initNode $ do
+  (str,POSTData test) <- minput "id" "enter a string and a test value "
+  minput "next" "next step" :: Cloud ()
+  localIO $ print (str:: String, test :: Test)
 
 
 {-
@@ -148,11 +153,11 @@ las URL se presentan secuencialmente o acumulativamente?
 
 
 mainequal= keep $ initNode $ do
-    
+
     -- r <- minput "x" "init2" :: Cloud String
     -- localIO $ print r
     -- tienen igual el hash de closure:
-    r <- ((local abduce :: Cloud ()) >> (local empty <|> minput "a" "a") ) <|> do local $return() ;( minput "b" "b")
+    r <- ((local abduce :: Cloud ()) >> local empty <|> minput "a" "a" ) <|> do local $return() ;minput "b" "b"
     localIO $ putStrLn r
 
 mainsimple= keep $ initNode $ do
@@ -175,7 +180,7 @@ Locks debe recuperarse
 acceder al contexto del llamante
 usar el stack como almacenamiento para locks y tcache?
   NO: estarian repetidos en cada stack de ejecucion
--} 
+-}
 -- locks = getDBRef "lockList"
 -- instance Indexable [InputData] where
 --   key= const "lockList"
@@ -205,12 +210,12 @@ mainsimplw= keep $ initNode $ Cloud $ restore1 <|> do
   liftIO $ print r
   log <- getLog
   liftIO $ print (fulLog log,toPath $fulLog log,toPathLon $ fulLog log)
-  
+
 restore1= do
         option "res" "restore1"  :: TransIO String
         s    <- input (const True) "sesion  >"
         clos <- input (const True) "closure >"
-        noTrans $ restoreClosure s clos 
+        noTrans $ restoreClosure s clos
 
 {-
 minput que soporte entrada post
@@ -238,49 +243,54 @@ minput que soporte entrada post
          mirar si hay post  
 
 -}
-data BODY= BODY [BS.ByteString] deriving (Typeable,Show)
-data POSTD=  forall a.(Default a,ToJSON a)=> POSTD a
-instance ToRest POSTD where
-  toRest (POSTD x)= do
-    nelem <- process $ encode (def `asTypeOf` x)
-    modifyData' (\(BODY xs) -> BODY $ nelem:xs) (BODY [nelem]) 
-    return ""
-    where
-    process ::  BS.ByteString -> TransIO (BS.ByteString)
-    process s= do
-      frags <- withParseString s $ many $ do
-                prev <- tTakeUntilToken "\""
-                var <- tTakeUntilToken "\""
-                val <- chainManyTill BS.cons anyChar ( sandbox $ tChar ',' <|> tChar '}')
-                sep <- anyChar -- tChar ',' <|> tChar '}'
-              
-                return $  prev <> "\"" <> var <> "\":" <> "$" <> var <> BS.singleton sep
-      return $ BS.concat frags
-      -- where
-      -- mod var val =
-      --   if BS.head val == '\"' then "\"" <> "$" <> var <> "\""  else "$" <> var
+-- newtype BODY= BODY [BS.ByteString] deriving (Typeable,Show)
+-- newtype POSTD a=   POSTD a deriving (Typeable, Show ,Read)
+-- instance (Typeable a, Read a, Show a) => Loggable (POSTD a)
+-- instance (Typeable a, Show a, Read a,Default a,ToJSON a) => ToRest (POSTD a) where
+--   toRest (POSTD x)= do
+--     nelem <- process $ encode (def `asTypeOf` x)
+--     return mempty{reqbody=nelem}
+--     where
+--     process ::  BS.ByteString -> TransIO BS.ByteString
+--     process s= do
+--       frags <- withParseString s $ many $ do
+--                 prev <- tTakeUntilToken "\""
+--                 var <- tTakeUntilToken "\""
+--                 val <- chainManyTill BS.cons anyChar ( sandbox $ tChar ',' <|> tChar '}')
+--                 sep <- anyChar -- tChar ',' <|> tChar '}'
 
-data Test= Test{a:: Int} deriving (Generic)
+--                 return $  prev <> "\"" <> var <> "\":" <> "$" <> var <> BS.singleton sep
+--       return $ BS.concat frags
+--       -- where
+--       -- mod var val =
+--       --   if BS.head val == '\"' then "\"" <> "$" <> var <> "\""  else "$" <> var
+
+-- data Test= Test{a:: Int} deriving (Generic,Show,Read,Typeable)
 
 
-instance ToJSON Test
+-- instance ToJSON Test
 
-instance Default Test
+-- instance Default Test
 
-main=  keep $ initNode $ do
-  (a,b,c) <- minput "go" "go"
-  localIO $ print (a :: BS.ByteString, b:: BS.ByteString,c :: Int) -- (a :: Int,b :: String, c :: Int)
+mainpar=   keep $ do r <- opval  1  * opval 2 ; liftIO $ print ("result",r :: Int)
+  where
+  opval op = option (op :: Int) ("parameter " ++ show op) >> input (const True) "val?"
 
-mainguess= keep $ initNode $ do 
+
+data Test= Test{field1 :: String, field2 :: Int} deriving (Generic, Read, Show, Typeable,Default,ToJSON, FromJSON)
+
+
+maingame= keep $ initNode $ do
   local $  newRState ([] :: [InputData]) >> return ()
-  id :: String   <- minput "id" "enter your id "  
+  id :: String   <- minput "id" "enter your id "
   newSessionState id
   id' <- local getSessionState <|> return "NO CALLER"
   localIO $ print ("CALLER",id' :: String)
   myGameSequence id  <|> otherGames
   where
   myGameSequence id= do
-    number ::Int <- minput "lock" "enter a lock number" 
+    
+    number ::String <- minput "lock" "enter a lock number"
     local $ ttr (id :: String,"locked",number)
     number' <- minput ("guess"++ id) ("guess a number for user " ++ id)  <|> addToOptions
     id' <- local $ getSessionState <|>  return "no caller state"
@@ -289,7 +299,7 @@ mainguess= keep $ initNode $ do
 
   addToOptions :: Loggable a => Cloud a
   addToOptions=  do
-        idata :: InputData <- local getState 
+        idata :: InputData <- local getState
         -- liftIO $ atomically $ do
         lcks :: [InputData] <- local getRState --  readDBRef locks `onNothing` return []
         local $ setRState $ idata:lcks -- writeDBRef locks $ idata:lcks 
@@ -363,7 +373,7 @@ maindistgame= keep $ initNode $ inputNodes <|> do
 -}
 
 maindist =  keep' $  initNode $ inputNodes <|>  do
-    local $ option  ("go" :: String) "go" 
+    local $ option  ("go" :: String) "go"
     node <- local $ getNodes >>= return . (!! 1)
     x <- local $ return HELLO
     -- h <- runAt node $ do
@@ -371,23 +381,23 @@ maindist =  keep' $  initNode $ inputNodes <|>  do
     --        localIO $ return WORLD
     h <- wormhole node $ loggedc $ do
           loggedc teleport
-          localIO $ print x 
+          localIO $ print x
           r <- localIO $ return WORLD
           teleport
           return r
-         
+
     local $ do
       log <-getLog
       tr log
       liftIO $ print h
 
     -- h <- runAt node $ do
-         
+
     --      localIO $ print x 
     --      localIO $ return WORLD2
     h <- wormhole node $  do
           loggedc teleport
-          localIO $ print x 
+          localIO $ print x
           r <- localIO $ return WORLD2
           teleport
           return r
@@ -400,7 +410,7 @@ maindist =  keep' $  initNode $ inputNodes <|>  do
 --         i <-  atRemote $ do 
 --                 showURL
 --                 localIO $ print "hello"
-                
+
 --                 i <- local $   threads 0 $ choose[1:: Int ..]
 --                 localIO $ threadDelay 1000000
 --                 return i
@@ -451,7 +461,7 @@ maindist =  keep' $  initNode $ inputNodes <|>  do
 --    proc v1=do
 --       --v <-  liftIO . atomically $ dupTChan v1
 --       liftIO $ print "PROC"
-      
+
 --       (async $ do (readMVar v1) >>= print)
 
 {-
@@ -504,9 +514,9 @@ mainsample= keep $ initNode $ do
 --   r <- (async (return "1") ) <> (async (return "2")) <|> (do liftIO $ threadDelay 10000000;async (print "3") >> empty)
 
 --   --r <- (getMailbox <> getMailbox) <|> (do liftIO $ threadDelay 10000000; putMailbox (1 :: Int) >> empty)
-  
+
 --   liftIO $ print (r :: String)
-  
+
 -- test12= do
 --     local $ option "r" "run"
 --     ns <- local getNodes
@@ -519,8 +529,8 @@ mainsample= keep $ initNode $ do
 --             n <- getMyNode
 --             liftIO $ threadDelay 5000000
 --             return "hello from 3000" 
-            
-            
+
+
 -- test1= do
 --     local $ option "r" "run"
 --     n <- local $ do ns <- getNodes; return $ ns !! 1
@@ -533,7 +543,7 @@ mainsample= keep $ initNode $ do
 --                     empty
 
 --     localIO $ print (r :: String)
-   
+
 -- test= do
 --         let content= "hello world hello"
 --         local $ option "r" "run"  

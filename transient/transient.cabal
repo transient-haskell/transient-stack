@@ -49,6 +49,7 @@ library
                      Transient.Internals
                      Transient.Logged
                      Transient.Parse
+                     Transient.Console
 
 
 
