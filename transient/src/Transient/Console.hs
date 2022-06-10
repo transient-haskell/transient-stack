@@ -445,24 +445,25 @@ execCommandLine = do
       threadDelay 100000
       processLine path
 
-u = undefined
+-- u = undefined
 
 -- | write a message and parse a complete line from the console
 inputParse :: (Typeable b) => TransIO b -> String -> TransIO b
 inputParse parse message = r
   where
     r = do
-      liftIO $ putStr (message ++ " " {-(message  <> " type: " <> BS.unpack (toRest $ t r) ) -}) >> hFlush stdout
+      liftIO $ putStr (message ++ " " ) >> hFlush stdout
       str <- react (addConsoleAction message message) (return ())
       liftIO $ delConsoleAction message
 
       -- let (str',rest)= span (/= '/') str
 
       -- liftIO $ putStrLn str
+      liftIO $ print str
       (r, rest) <- withParseString (BSL.pack str) $ (,) <$> parse <*> giveParseString
 
       liftIO $ do writeIORef rconsumed $ Just rest
       return r
 
-    t :: TransIO a -> a
-    t = u
+    -- t :: TransIO a -> a
+    -- t = u

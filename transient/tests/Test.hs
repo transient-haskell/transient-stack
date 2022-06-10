@@ -6,6 +6,7 @@
 
 
 import Transient.Internals 
+import Transient.Console
 import Transient.EVars
 import Transient.Logged
 import Transient.Parse
@@ -52,10 +53,9 @@ import Unsafe.Coerce
 --   if num > 10_000) break;
 -- ```
 
-main= keep $ do
-    option "init" "init" :: TransIO String
-    n <- input (const True) "your name>" 
-    option n n
+main= keep' $ do
+    r <- sync $ collect' 1 1000000 $ (return "hello" >> empty) <|> return "world"
+    liftIO $ print r
 
 {-
 mainyield= keep' $ do

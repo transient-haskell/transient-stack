@@ -50,45 +50,15 @@ import qualified Data.ByteString.Lazy.Char8             as BSL
 import           Data.Typeable
 import           Control.Monad.Fail
 import           System.Directory
+import qualified Debug.Trace as Debug
 
+-- #ifdef DEBUG
+trace= Debug.trace 
+-- #else
 
+-- trace _ x= x
+-- #endif
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-trace _ x= x
 -- tshow ::  a -> x -> x
 -- tshow _ y= y
 
@@ -117,7 +87,7 @@ printColor x= unsafePerformIO $ do
 
     -- 256 colors
     -- let col= toHex $ (read  (drop 9(show th))) `mod` 255
-    -- putStr $ "\x1b[38;5;"++ col++ "m" ++ show (th,x) ++  "\x1b[0m\n"
+    -- return $ "\x1b[38;5;"++ col++ "m" ++ show (th,x) ++  "\x1b[0m\n"
   -- where
   -- toHex :: Int -> String
   -- toHex 0= mempty

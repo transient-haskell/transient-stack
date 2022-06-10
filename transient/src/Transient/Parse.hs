@@ -35,14 +35,21 @@ import Control.Concurrent
 import Data.Maybe
 import Data.Typeable
 
+-- {-#INLINE newDone#-}
+-- newDone= unsafePerformIO $ newIORef False
 -- | set a stream of strings to be parsed
-setParseStream :: TransMonad m =>  TransIO (StreamData BS.ByteString) -> m ()
-setParseStream iox=  modify $ \s -> s{execMode=Serial,parseContext= ParseContext iox "" (unsafePerformIO $ newIORef False)} -- setState $ ParseContext iox ""
+
+setParseStream :: (TransMonad m,MonadIO m) =>  TransIO (StreamData BS.ByteString) -> m ()
+setParseStream iox=  do
+   done <- liftIO $ newIORef False
+   modify $ \s -> s{execMode=Serial,parseContext= ParseContext iox "" done} -- (let io=unsafePerformIO $ newIORef False in io `seq` io)} -- setState $ ParseContext iox ""
 
 
 -- | set a string to be parsed
-setParseString :: TransMonad m => BS.ByteString -> m ()
-setParseString x = modify $ \s -> s{execMode=Serial,parseContext= ParseContext (return SDone) x (unsafePerformIO $ newIORef False)} --  setState $ ParseContext (return SDone) x 
+setParseString :: (TransMonad m,MonadIO m) => BS.ByteString -> m ()
+setParseString x =  do
+   done <- liftIO $ newIORef False
+   modify $ \s -> s{execMode=Serial,parseContext= ParseContext (return SDone) x done} -- newDone} --  setState $ ParseContext (return SDone) x 
 
 -- Set the ByteString environment for the parser parameter. At the end, it restores the original parse context.
 withParseString ::  BS.ByteString -> TransIO a -> TransIO a
@@ -362,16 +369,19 @@ withGetParseString3 parser=  do
 -- The tuple that the parser returns should be :  (what it returns, what should remain to be parsed)
 
 
-
+{-#INLINE withGetParseString#-}
 withGetParseString ::   (BS.ByteString -> TransIO (a,BS.ByteString)) -> TransIO a
 withGetParseString parser=  Transient $ do
 
     ParseContext readMore s done <- gets parseContext
-
+    
     let loop = unsafeInterleaveIO $ do
           r <-readIORef done
-          if r  then return mempty else do
+          if r  then do
+              -- tr "DONE in withGetParseString" 
+              return mempty else do
             (mr,_) <- runTransient readMore
+            tr ("READMORE1",mr)
             case mr of
               Nothing -> mempty
               Just(SMore r) ->  return r <> do
@@ -506,74 +516,19 @@ showNext msg n= do
 -- The output is nondeterministic: it can return 0, 1 or more results
 --
 -- example: https://t.co/fmx1uE2SUd
--- (|--) :: TransIO (StreamData BS.ByteString) -> TransIO b -> TransIO b
--- p |-- q =  do
---   --addThreads 1
---   v  <- liftIO $ newIORef undefined -- :: TransIO (MVar (StreamData BS.ByteString -> IO ()))
---   initq v <|> initp v
---     -- `catcht`  \(_ :: BlockedIndefinitelyOnMVar) -> empty
--- -- TODO #2 use react instrad of MVar's? need buffering-contention
---   where
---   initq v= do
---     --abduce
---     r <-withParseStream (takev v ) q
---     liftIO $ print "AFGRT WITH"
---     return r
-
---   initp v= do
---     --abduce
-
---     return () !> "INITP"
---     repeatIt
---     where
---     repeatIt= do 
---         r <- p
---         putv  v r
---         return () !> "AFTER PUTV"
---         repeatIt
---         empty
---         -- return () !> ("putMVar")
---         -- t <-liftIO  $ (putv v r >> return True)  `catcht` \(_ :: BlockedIndefinitelyOnMVar) -> return  False
---         -- if t then repeatIt  else empty
-
---   takev v= do 
---        return () !> "BEFORE TAKEV"
---        --modify $ \s -> s{execMode= Remote}
---        r <- react (writeIORef v) (return()) 
---        return () !> ("TAKEV",r)
---        liftIO $ threadDelay 5000000
---        return r
-
-
-
---   putv v s= liftIO $ do
---      proc <-   readIORef v -- :: TransIO (StreamData BS.ByteString -> IO())
---      return  () !> ("PUTV", s)
---      proc s
-
-
-
-
-
-
-
-
-
-
-
-(|-) :: TransIO (StreamData BS.ByteString) -> TransIO b -> TransIO b
-p |- q =  do
-  --addThreads 1
-  pcontext <- liftIO $ newIORef $ Just undefined
-  v  <- liftIO $ newEmptyMVar
-  initp v pcontext <|> initq v pcontext
--- `catcht`  \(_ :: BlockedIndefinitelyOnMVar) -> empty
+(|-) :: TransIO (StreamData BS.ByteString) -> TransIO a -> TransIO a
+producer |- qonsumer =  sandbox $ do
+    pcontext <- liftIO $ newIORef $ Just undefined
+    v  <- liftIO $ newEmptyMVar
+    initp v pcontext <|> initq v pcontext
 
   where
   initq v pcontext= do
     --abduce
-    setParseStream (do r <- liftIO $ takeMVar v; tr ("rec",fmap (BS.take 10) r); return r)--  `catch`  \(_:: SomeException) -> return SDone ) 
-    r <- q
+    
+    setParseStream (liftIO $ takeMVar' v)--  `catch`  \(_:: SomeException) -> return SDone ) 
+    tr "CONSUMER"
+    r <- qonsumer
     dropUntilDone
     Just p <- liftIO $ readIORef pcontext
     liftIO $ writeIORef pcontext Nothing -- !> "WRITENOTHING"
@@ -581,18 +536,26 @@ p |- q =  do
     modify $ \ s -> s{parseContext= p{done=done pc}}
     return r
 
+  takeMVar' v= do
+    r <- takeMVar v
+    tr ("TAKEMVAR",r)
+    return r
+  putMVar' v x= do
+    tr ("PUTMVAR",x)
+    putMVar v x
+
   initp v pcontext= do
     abduce
     ParseContext _ _ done <- gets parseContext
-
+    liftIO $ writeIORef done False
     let repeatIt= do
           pc <- liftIO $ readIORef pcontext
           if isNothing pc then tr "FINNNNNNNNNNNNNNNNNNNNNNNN" >> empty  else do
             d <- liftIO $ readIORef done
-            if d then do  tr "sendDone";liftIO  $ putMVar v SDone; repeatIt else do
-                r <- p
-
-                liftIO  $ putMVar v r  -- `catch` \(_ :: BlockedIndefinitelyOnMVar) -> return  False
+            if d then do  tr "sendDone";liftIO  $ putMVar' v SDone; repeatIt else do
+                r <- producer
+                tr ("PRODUCED",r)
+                liftIO  $ putMVar' v r  -- `catch` \(_ :: BlockedIndefinitelyOnMVar) -> return  False
 
                 p <- gets parseContext
                 liftIO $ writeIORef pcontext $ Just p

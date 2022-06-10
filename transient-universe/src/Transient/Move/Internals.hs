@@ -15,8 +15,8 @@
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE ExistentialQuantification #-}
 {-# LANGUAGE FlexibleContexts #-}
-{-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE OverlappingInstances #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards #-}
@@ -300,19 +300,22 @@ local mx = Cloud $
     -- menter <- getData
     tr ("PARSESTRING", "recover", parseString, recover log)
     when (BS.null parseString) $ do
-      conn <- getData `onNothing` error "no connection"
-      Closure a b ns <- getIndexData (idConn conn) `onNothing` return (Closure 0 "0" [])
-      when (null ns) $ do
-        -- log <- getLog
-        let end = getEnd $ fulLog log
-        tr ("END=", end, fulLog log)
-        tr ("setIndexdata", idConn conn, a, b, end)
-        setIndexData (idConn conn) (Closure a b end)
+      mconn <- getData  -- `onNothing` error "no connection"
+      case mconn of 
+       Nothing -> return ()
+       Just conn -> do
+        Closure a b ns <- getIndexData (idConn conn) `onNothing` return (Closure 0 "0" [])
+        when (null ns) $ do
+          -- log <- getLog
+          let end = getEnd $ fulLog log
+          tr ("END=", end, fulLog log)
+          tr ("setIndexdata", idConn conn, a, b, end)
+          setIndexData (idConn conn) (Closure a b end)
 
-        --modifyData' (\log -> log{fromCont=True})  $ error "no log"
+          --modifyData' (\log -> log{fromCont=True})  $ error "no log"
 
+          return ()
         return ()
-      return ()
     -- delState EnterLocal
 
     return r
@@ -908,6 +911,8 @@ callNodes' nodes op init proc = loggedc' $ Prelude.foldr op init $ Prelude.map (
 sendRawRecover con r =
   do
     c <- liftIO $ readIORef $ connData con
+    tr ("CONDATA2",isJust c)
+    
     con' <- case c of
       Nothing -> do
         tr "CLOSED CON"
@@ -919,8 +924,8 @@ sendRawRecover con r =
             return r
       Just _ -> return con
     sendRaw con' r
-    `whileException` \(SomeException _) ->
-      liftIO $ writeIORef (connData con) Nothing
+    `whileException` \(SomeException e) ->do
+      liftIO $ print e; empty -- liftIO $ writeIORef (connData con) Nothing
 
 sendRaw con r = do
   let blocked = isBlocked con
@@ -931,7 +936,8 @@ sendRaw con r = do
         tr ("sendRaw", r)
         case c of
           Just (Node2Web sconn) -> liftIO $ WS.sendTextData sconn r
-          Just (Node2Node _ sock _) ->
+          Just (Node2Node _ sock _) ->do
+            tr "NODE2NODE"
             SBS.sendMany sock (BL.toChunks r)
           Just (TLSNode2Node ctx) ->
             sendTLSData ctx r
@@ -1435,6 +1441,7 @@ exclusiveCon mx = do
 -- check for cached connection and return it, otherwise tries to connect with connect1 without cookie check
 mconnect' :: Node -> TransIO Connection
 mconnect' node' = exclusiveCon $ do
+  tr ("MCONNECT",node')
   conn <- do
     node <- fixNode node'
     nodes <- getNodes
@@ -1456,9 +1463,7 @@ mconnect' node' = exclusiveCon $ do
             r <- mconnect1 node
             tr "after mconnect1"
             return r
-  -- ctx <- liftIO $ readIORef $ istream conn
-  -- modify $ \s -> s{parseContext= ctx}
-  -- liftIO $ print  "SET PARSECONTEXT"
+
   setState conn
 
   return conn
@@ -1497,7 +1502,7 @@ mconnect1 (node@(Node host port _ services)) = do
   --                  _ -> return isTLSIncluded
 
   tr ("NEED TLS", needTLS)
-  (conn, parseContext) <-
+  (conn, parseContext) <-  -- fromJust <$> (connectNode2Node host port needTLS)
     checkSelf node
       <|> timeout 1000000 (connectNode2Node host port needTLS)
       <|> timeout 1000000 (connectWebSockets host port needTLS)
@@ -1507,6 +1512,7 @@ mconnect1 (node@(Node host port _ services)) = do
   tr "before end connection"
 
   setState conn
+
   modify $ \s -> s {execMode = Serial, parseContext = parseContext}
 
   -- "write node connected in the connection"
@@ -1514,6 +1520,8 @@ mconnect1 (node@(Node host port _ services)) = do
   -- "write connection in the node"
   liftIO $ modifyMVar_ (fromJust $ connection node) . const $ return [conn]
   addNodes [node]
+
+
 
   return conn
   where
@@ -1542,7 +1550,7 @@ mconnect1 (node@(Node host port _ services)) = do
       r <- sync $ collect' 1 t proc
       tr ("timeout", length r)
       case r of
-        [] -> empty -- !> "TIMEOUT EMPTY"
+        [] -> tr "TIMEOUT EMPTY" >> empty -- !> "TIMEOUT EMPTY"
         mr : _ -> case mr of
           Nothing -> throw $ ConnectionError "Bad cookie" node
           Just r -> return r
@@ -1562,7 +1570,7 @@ mconnect1 (node@(Node host port _ services)) = do
       tr "BEFORE HANDSHAKE"
 
       sock <- liftIO $ connectTo' size host $ show port
-      let cdata = (Node2Node u sock (error $ "addr: outgoing connection"))
+      let cdata = (Node2Node undefined sock (error $ "addr: outgoing connection"))
       cdata' <- liftIO $ readIORef rcdata
 
       --input <-  liftIO $ SBSL.getContents sock
@@ -1587,8 +1595,9 @@ mconnect1 (node@(Node host port _ services)) = do
       --modify $ \s ->s{parseContext=ParseContext (do NS.close sock ; return SDone) input} --throw $ ConnectionError "connection closed" node) input}
       modify $ \s -> s {execMode = Serial, parseContext = pcontext}
       --modify $ \s ->s{execMode=Serial,parseContext=ParseContext (SMore . BL.fromStrict <$> recv sock 1000) mempty}
-
+      tr "BEFORE HANDSHAKE"
       when (isTLSIncluded && needTLS) $ maybeClientTLSHandshake host sock mempty
+      tr "AFTER HNDSHAKE"
 
     connectNode2Node host port needTLS = do
       -- onException $ \(e :: SomeException) -> empty
@@ -1634,6 +1643,7 @@ mconnect1 (node@(Node host port _ services)) = do
 
       --mynode <- getMyNode
       parseContext <- gets parseContext
+      tr "CONNECTNODE2NODE"
       return $ Just (conn, parseContext)
 
     connectWebSockets host port needTLS = connectWebSockets1 host port "/" needTLS
@@ -1688,7 +1698,7 @@ isLocal host =
 --  True
 --
 parseBody headers = case lookup "Transfer-Encoding" headers of
-  Just "chunked" -> dechunk |- deserialize
+  Just "chunked" ->  dechunk |-  deserialize
   _ -> case fmap (read . BC.unpack) $ lookup "Content-Length" headers of
     Just length -> do
       msg <- tTake length
@@ -1701,13 +1711,17 @@ parseBody headers = case lookup "Transfer-Encoding" headers of
 dechunk =
   do
     n <- numChars
+    tr("dechunk",n)
     if n == 0
-      then do string "\r\n"; return SDone
+      then do
+         string "\r\n"
+         tr "RETURN SDONE"
+         return SDone
       else do
         r <- tTake $ fromIntegral n -- !> ("numChars",n)
         --tr ("message", r)
         trycrlf
-        tr "SMORE1"
+        tr ("SMORE1",r)
         return $ SMore r
     <|> return SDone -- !> "SDone in dechunk"
   where
@@ -1875,6 +1889,7 @@ mconnect node' = do
 
 connectTo' :: Int -> NS.HostName -> NS.ServiceName -> IO NS.Socket
 connectTo' bufSize host port = do
+  tr ("HOSTPORT", host, port)
   addr <- resolve
   open addr
   where
@@ -1884,6 +1899,8 @@ connectTo' bufSize host port = do
     open addr = bracketOnError (NS.openSocket addr) NS.close $ \sock -> do
       NS.setSocketOption sock NS.RecvBuffer bufSize
       NS.setSocketOption sock NS.SendBuffer bufSize
+      NS.setSocketOption sock NS.ReuseAddr  10
+
       NS.connect sock $ NS.addrAddress addr
       return (sock :: NS.Socket)
 #else

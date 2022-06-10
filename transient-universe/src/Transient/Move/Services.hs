@@ -53,6 +53,8 @@ import Transient.Logged
 import Transient.Parse
 import Transient.Move.Internals
 import Transient.Move.Utils
+import Transient.Console
+import Transient.Move.Web
 
 import Control.Monad.State
 import System.IO (hFlush,stdout) 
@@ -352,7 +354,7 @@ callService service params = local $ empty
 setRemoteJob :: BSS.ByteString -> Node -> TransIO () 
 setRemoteJob thid node= do
       JobGroup map  <- getRState <|> return (JobGroup M.empty)
-      setRState $ JobGroup $ M.insert thid (node,0) map
+      setRState $ JobGroup $ M.insert thid (node,BSS.pack "0-0") map
 
 data KillRemoteJob = KillRemoteJob BSS.ByteString deriving (Read,Show, Typeable)  
 instance Loggable KillRemoteJob
@@ -641,10 +643,9 @@ serve  serv= do
 
 
 -- callHTTPService :: (Subst1 a String, fromJSON b) =>  Node -> String -> a -> Cloud ( BS.ByteString)
-callHTTPService node service vars=  local $ do
+callHTTPService node service vars=  onAll $ do
   newVar "hostnode"  $ nodeHost node
   newVar "hostport"  $ nodePort node
-  
 
   callString <-  emptyIfNothing $ lookup "HTTPstr" service
 
@@ -692,7 +693,7 @@ controlNodeService node=  send <|> receive
             let nname= nodeHost node ++":" ++ show(nodePort node)
             
             liftIO $ putStr "Controlling node " >> print nname
-            liftIO $ writeIORef  lineprocessmode True
+            -- liftIO $ writeIORef  lineprocessmode True
             oldprompt <- liftIO $ atomicModifyIORef rprompt $ \oldp -> ( nname++ "> ",oldp)
             cbs <- liftIO $ atomicModifyIORef rcb $ \cbs -> ([],cbs) -- remove local node options
             setState (oldprompt,cbs)                                             -- store them
@@ -706,7 +707,7 @@ controlNodeService node=  send <|> receive
          local $ option "endcontrol"  "end controlling node"
          killRemoteJob (monitorOfNode node) $ controlToken
          local $ do
-            liftIO $ writeIORef lineprocessmode False
+            -- liftIO $ writeIORef lineprocessmode False
             liftIO $ putStrLn "end controlling remote node"
             (oldprompt,cbs) <- getState
             liftIO $ writeIORef rcb cbs -- restore local node options
@@ -739,7 +740,7 @@ controlNode node= send <|> receive
          local abduce
          local $ do
             let nname= nodeHost node ++":" ++ show(nodePort node)
-            liftIO $ writeIORef lineprocessmode True
+            -- liftIO $ writeIORef lineprocessmode True
             liftIO $ putStr "Controlling node " >> print nname
             
             oldprompt <- liftIO $ atomicModifyIORef rprompt $ \oldp -> ( nname++ "> ",oldp)
@@ -754,7 +755,7 @@ controlNode node= send <|> receive
          local $ option "endcontrol"  "end controlling node"
          killRemoteJob  node $ controlToken
          local $ do
-            liftIO $ writeIORef lineprocessmode False
+            -- liftIO $ writeIORef lineprocessmode False
             liftIO $ putStrLn "end controlling remote node"
             (oldprompt,cbs) <- getState
             liftIO $ writeIORef rcb cbs -- restore local node options

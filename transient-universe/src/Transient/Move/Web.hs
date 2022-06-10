@@ -10,7 +10,8 @@
 
 #ifndef ghcjs_HOST_OS
 
-module Transient.Move.Web where
+module Transient.Move.Web(minput,sendOption,sendFragment,optionEndpoints,ToRest(..),POSTData(..),InputData(..)
+,getSessionState,setSessionState,newSessionState,rawHTTP,serializetoJSON,deserializeJSON) where
 
 import Control.Applicative
 import Control.Concurrent.MVar
@@ -43,14 +44,13 @@ import Unsafe.Coerce
 
 --------------------------WEB--------------------------------------
 
--- {-# NOINLINE opCounter #-}
--- opCounter= unsafePerformIO $ newIORef (1 ::Int)
+
 
 data InitSendSequence = InitSendSequence
 
 data IsCommand = IsCommand deriving (Show)
 
-data InputData = InputData {idInput, message :: String, hTTPReq :: HTTPReq} deriving (Show, Read, Typeable)
+data InputData = InputData {idInput :: String, message :: BS.ByteString, hTTPReq :: HTTPReq} deriving (Show, Read, Typeable)
 
 instance Loggable InputData
 
@@ -83,12 +83,12 @@ instance Semigroup HTTPReq where
       (c <> c')
       (d <> d')
 
-minput :: (Loggable a, ToRest a) => String -> String -> Cloud a
-minput ident msg = response
+minput :: (Loggable a, ToRest a,ToJSON b) => String -> b -> Cloud a
+minput ident msg' = response
   where
+    msg= encode msg'
     response = do
       -- idSession <- local $ fromIntegral <$> genPersistId
-
       modify $ \s -> s {execMode = if execMode s == Remote then Remote else Parallel}
       local $ do
         log <- getLog
@@ -128,7 +128,7 @@ minput ident msg = response
       liftIO $ atomicModifyIORef' endpoints $ \endpts -> (M.insert ident httpreq endpts, ())
 
       if null ident
-        then do liftIO $ putStrLn msg; empty
+        then do liftIO $ putStrLn $ BS.unpack msg; empty
         else do
           Context n st <-
             getState <|> do
@@ -139,15 +139,14 @@ minput ident msg = response
           let ref = getDBRef "0"
           liftIO $ atomically $ writeDBRef ref $ Context 0 st
 
-          option ident $ msg <> "\t\"endpt " <> ident <> "\" for endpoint details" -- <> "\turl:\t"<> BS.unpack url
+          option ident $ BS.unpack msg <> "\t\"endpt " <> ident <> "\" for endpoint details" -- <> "\turl:\t"<> BS.unpack url
           setState IsCommand
 
           ctx :: Context <- liftIO $ atomically $ readDBRef ref `onNothing` error "minput: no context"
           setState ctx
-
-          if typeOf response /= typeOf (undefined :: TransIO ())
+          if typeOf response /= typeOf (undefined :: Cloud ())
             then do
-              r <- inputParse deserialize msg
+              r <-  inputParse deserialize $ BS.unpack msg
 
               return r
             else return $ unsafeCoerce ()
@@ -172,7 +171,7 @@ minput ident msg = response
                 checkComposeJSON conn
 
                 -- insertar typeof response
-                let tosend = str "{ \"msg\"=\"" <> str msg <> str "\", \"req\"=\"" <> encode httpreq <> str "\"}"
+                let tosend = str "{ \"msg\":" <>  msg <> str ", \"req\":" <> encode httpreq <> str "}"
                 let l = fromIntegral $ BS.length tosend
 
                 -- for HTTP 1.0 no chunked encoding:
@@ -257,7 +256,7 @@ sendOption msg req = do
     s' <- giveParseString
     return $ s <> "/0/0/" <> intt id <> "/" <> s'
 
-  sendFragment $ "{ \"msg\"=\"" <> BS.pack msg <> "\", \"req\"= \"" <> encode (req {requrl = url'}) <> "\"}"
+  sendFragment $ "{ \"msg\":\"" <>  msg <> "\", \"req\":" <> encode (req {requrl = url'}) <> "}"
   where
     intt = BS.pack . show
 
@@ -311,20 +310,50 @@ instance {-# OVERLAPPABLE #-} (Typeable a, ToJSON a, FromJSON a) => Loggable a w
 
 class  Typeable a => ToRest a where
   toRest :: a -> TransIO HTTPReq
-  toRest x=  return $ mempty{requrl= lowertype x}
+  toRest x=  return $ mempty{requrl= "/"<> lowertype x}
+    where
+    lowertype x = "$" <> BS.pack (map toLower (typeOfR x))
+    typeOfR x = show $ typeOf x
 
-lowertype x = "/$" <> BS.pack (map toLower (typeOfR x))
-   where typeOfR x = show $ typeOf x
+jsonType x=do 
+  -- si tipo empieza por(
+     -- es una tupla, cojer el tipo, cambiar ( por [, meter $ delante de los tokens, cambiar [Char] por string
+  let types = show $ typeOf x
+  withParseString (BS.pack types) $ tuple <|> list <|> single 
+  where
+  tuple=  parens $ "[" <> "$" <> type1  <> chainMany (<>) (comma <> "$" <> type1) <> "]"
+  list=  (sandbox (string "[Cha") >> single) <|> ("$list_of_" <>  (brackets $ "[" <> tTakeWhile (/= ']')) <> "]s")
+                                                                                    -- chainManyTill BS.cons anyChar (sandbox $ tChar ']')
+  single=  "$" <> (stringFix <$>  chainMany BS.cons (toLower <$> anyChar))
+  type1= stringFix <$> tTakeWhile (\c -> c /= ',' && c /= ')')  >>= varunique
+                       -- 
+                       -- chainManyTill BS.cons anyChar (sandbox $ tChar ',' <|> tChar ')')
 
+  
+  stringFix r
+    | BS.null r = r
+    | otherwise = if BS.head r == '[' then  "string" else  BS.map toLower r
+
+  
+data Vars= Vars[BS.ByteString]
+varunique s= do
+  Vars vars <- getState <|> let v= Vars [] in setState v >> return v
+  if null $ filter (== s) vars then do setState $ Vars (s:vars); return s
+                                else varunique $ BS.snoc s 'x'
 
 instance {-# OVERLAPPABLE #-}  (Default a, ToJSON a, Typeable a) => ToRest (POSTData a) where
-  toRest (POSTData x) =
+  toRest (POSTData x) = 
     do
+      setState $ Vars[]
       pc <- process $ encode (def `asTypeOf` x)
       return $ mempty {reqtype = POST, reqbody = pc}
-      <|> return mempty{reqtype=POST,reqbody=lowertype x}
+     <|> do
+       t <- jsonType x
+       return mempty{reqtype=POST,reqbody= t}
     where
-      process json =
+
+      process json = withParseString json $ do
+        sandbox $ tChar '{'
         BL.concat
           <$> withParseString
             json
@@ -334,11 +363,14 @@ instance {-# OVERLAPPABLE #-}  (Default a, ToJSON a, Typeable a) => ToRest (POST
  
                 tDropUntilToken ":"
                 dropSpaces
-                isq <-anyChar
+                isq <- anyChar
+                
+                -- chainManyTill BS.cons anyChar (sandbox $ tChar ',' <|> tChar '}')
+                tTakeWhile (\c -> c /= ',' && c /= '}')
 
-                chainManyTill BS.cons anyChar (sandbox $ tChar ',' <|> tChar '}')
                 sep <- anyChar -- tChar ',' <|> tChar '}'
-                let r = prev <> "\\\"" <> var <> "\\\": " <> q isq <> "$" <> var <> q isq <> BS.singleton sep
+                var' <- varunique var
+                let r = prev <> "\\\"" <> var <> "\\\": " <> q isq <> "$" <> var' <> q isq <> BS.singleton sep
                 return r
             )
         where
@@ -436,19 +468,31 @@ deserializeJSON = do
   where
     jsElem :: TransIO BS.ByteString -- just delimites the json string, do not parse it
     jsElem = dropSpaces >> (jsonObject <|> array <|> atom)
+
     atom = elemString
-    array = (brackets $ return "[" <> return "{}" <> chainSepBy mappend (return "," <> jsElem) (tChar ',')) <> return "]"
-    jsonObject = (braces $ return "{" <> chainMany mappend jsElem) <> return "}"
+
+    array =   try emptyList <|> (brackets $ return "[" <> jsElem <>  ( chainMany mappend (comma <>jsElem)) ) <> return "]"
+
+    emptyList= string "[" <> (dropSpaces >> string "]")
+
+    jsonObject = try emptyObject <|> (braces $ return "{" <> field  <>  (chainMany mappend (comma <> field)) ) <> return "}"
+
+    emptyObject= string "{" <> (dropSpaces >> string "}")
+
+    field =
+      dropSpaces >> string "\"" <> tTakeWhile (/= '\"') <> string "\""
+        <> (dropSpaces >> string ":" <> (dropSpaces >> jsElem))
+
     elemString = do
       dropSpaces
-      tTakeWhile (\c -> c /= '}' && c /= ']')
+      tTakeWhile (\c -> c /= '}' && c /= ']' && c /= ',')
 
 instance {-# OVERLAPPING #-} Loggable Value where
   serialize = serializetoJSON
   deserialize = deserializeJSON
 
 rawHTTP :: Loggable a => Node -> String -> TransIO a
-rawHTTP node restmsg = do
+rawHTTP node restmsg = sandbox $ do
   abduce -- is a parallel operation
   tr ("***********************rawHTTP", nodeHost node)
   --sock <- liftIO $ connectTo' 8192 (nodeHost node) (PortNumber $ fromIntegral $ nodePort node)
@@ -456,7 +500,10 @@ rawHTTP node restmsg = do
   c <-
     do
       c <- mconnect' node
-      tr "after mconnect'"
+      tr ("after mconnect'")
+      cc <- liftIO $ readIORef $ connData c
+      tr ("CONDATA",isJust cc)
+
       sendRawRecover c $ BS.pack restmsg
 
       c <- getState <|> error "rawHTTP: no connection?"
@@ -465,7 +512,7 @@ rawHTTP node restmsg = do
       liftIO $ takeMVar blocked
       tr "after blocked"
       ctx <- liftIO $ readIORef $ istream c
-
+      
       liftIO $ writeIORef (done ctx) False
       modify $ \s -> s {parseContext = ctx} -- actualize the parse context
       return c
@@ -502,8 +549,10 @@ rawHTTP node restmsg = do
     <|> do
       Raw body <- parseBody headers
       error $ show (hdrs, body) --  decode the body and print
-  result <- parseBody headers
+  tr ("HEADERS",headers)
 
+  result <- parseBody headers
+  tr ("RESULT BODY",result)
   when
     ( vers == http10
         ||

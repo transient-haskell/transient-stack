@@ -706,6 +706,7 @@ logged mx = do
 
         let full= fulLog log
         rest <- getParseBuffer -- giveParseString
+
         tr ("parseString",rest)
         let log'= if BS.null rest {-&& typeOf(type1 res) /= typeOf () -}then log{recover=False}  else log
         process rest full log'

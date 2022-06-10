@@ -156,7 +156,7 @@ optionAt= do
     port <- input  (const True) "port of the node? "
     liftIO $ createNode host port
   do
-    localIO $ writeIORef lineprocessmode False
+    -- localIO $ writeIORef lineprocessmode False
 
     inp <- local $ inputf False "input1" (show node)  Nothing (const True)  
     (runAt node  $ local $ do 

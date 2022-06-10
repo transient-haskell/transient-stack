@@ -13,7 +13,8 @@ module Main where
 
 import Transient.Base
 import Transient.Move.Internals
-import Transient.Move.Web
+import Transient.Move.Web hiding (minput)
+import qualified Transient.Move.Web as Web(minput)
 import Transient.Parse
 import Transient.Internals
 import Transient.Move.Utils
@@ -36,6 +37,9 @@ import Data.Typeable
 import Data.Default
 import Data.Aeson
 import GHC.Generics
+import Data.List
+import Data.Char
+
 -- main2= keep $ do 
 --      i <- threads 0 $ choose[0..]
 --      abduce
@@ -87,13 +91,22 @@ main4 = do initTLS; keep $ initNode $ inputNodes <|> hi
 
 
 
+str2= "0001\r\n2\r\n0\r\n\r\n"
+
+main= keep $  do
+  setParseString "333"
+  string "333e" <|> return ""
+  
+  snap <- withParseString str2 $ do
+     dechunk |- int
+
+  liftIO $ print snap
+  
 
 
--- test11= localIO $ print "hello world"
--- test10= do
---     localIO $ putStrLn "hello world"
---     local $ return (42 :: Int)
---     teleport
+
+minput ::  (Loggable a, ToRest a) => String -> String -> Cloud a
+minput a b= Web.minput a (BS.pack b)
 
 data HELLO= HELLO deriving (Read,Show)
 instance Loggable HELLO
@@ -123,7 +136,7 @@ mainseq= keep $ initNode $ do
 
     minput "" (if number== number' then "YES" else "NO") :: Cloud()
 
-main= keep $ initNode $ do
+mainpost= keep $ initNode $ do
   (str,POSTData test) <- minput "id" "enter a string and a test value "
   minput "next" "next step" :: Cloud ()
   localIO $ print (str:: String, test :: Test)
@@ -277,8 +290,8 @@ mainpar=   keep $ do r <- opval  1  * opval 2 ; liftIO $ print ("result",r :: In
   opval op = option (op :: Int) ("parameter " ++ show op) >> input (const True) "val?"
 
 
-data Test= Test{field1 :: String, field2 :: Int} deriving (Generic, Read, Show, Typeable,Default,ToJSON, FromJSON)
-
+data Test= Test{field1 :: String, field2 :: Int} deriving (Generic,Default,ToJSON, FromJSON)
+data Test1= Test1{f1 :: [Int],f2 :: String} deriving (Generic,Default,ToJSON, FromJSON)
 
 maingame= keep $ initNode $ do
   local $  newRState ([] :: [InputData]) >> return ()
@@ -313,12 +326,18 @@ maingame= keep $ initNode $ do
 
 
 
-mainhelloworld= keep  $ initNode $ do
-  h <- minput "hello"  "hello"
-  w <- minput "world" "world"
-  minput "" (h++w) :: Cloud ()
-
-
+mainpath= keep $ initNode $ do
+    minput "init" "init game" :: Cloud ()
+    left <|> right
+    where
+    left= do
+      minput "left" "go to left"  :: Cloud ()
+      whatever
+    right= do
+      minput "right" "go to right" :: Cloud ()
+      whatever
+    whatever= localIO $ print "wathever"
+      
 {-
 -- | initili
 newRPState x= onAll $ newRState x

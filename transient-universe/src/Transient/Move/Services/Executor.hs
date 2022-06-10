@@ -97,7 +97,7 @@ controlNodeProcess cmdline= do
       send exnode= do
          local abduce
          local $ do
-            liftIO $ writeIORef lineprocessmode True
+            -- liftIO $ writeIORef lineprocessmode True
             oldprompt <- liftIO $ atomicModifyIORef rprompt $ \oldp -> ( takeWhile (/= ' ') cmdline++ "> ",oldp)
             cbs <- liftIO $ atomicModifyIORef rcb $ \cbs -> ([],cbs) -- remove local node options
             setState (oldprompt,cbs)                                             -- store them
@@ -118,7 +118,7 @@ controlNodeProcess cmdline= do
          endcontrol exnode
          
       endcontrol exnode= do
-         localIO $ writeIORef lineprocessmode False
+         -- localIO $ writeIORef lineprocessmode False
          killRemoteJob exnode  controlToken
          local $ do
 
