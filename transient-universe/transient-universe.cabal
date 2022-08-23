@@ -73,6 +73,7 @@ library
         Transient.Move.Utils
         Transient.Move.Web
         Transient.Move.Services
+        Transient.Move.IPFS
         -- Transient.Move.PubSub
     build-depends:
         base >4 && <5,
@@ -238,47 +239,47 @@ library
 --     hs-source-dirs: tests src .
 --     ghc-options: -threaded -rtsopts -fno-ignore-asserts
 
-executable test5
-        build-depends:
-            containers,
-            transformers -any,
-            transient >= 0.8.0.0,
-            transient-universe,
-            process >= 1.6.4.0,
-            directory,
-            bytestring, 
-            aeson,
-            time,
-            mtl,
-            vector,
-            TCache,
-            data-default,
-            syb,
-            random
+-- executable test5
+--         build-depends:
+--             containers,
+--             transformers -any,
+--             transient >= 0.8.0.0,
+--             transient-universe,
+--             process >= 1.6.4.0,
+--             directory,
+--             bytestring, 
+--             aeson,
+--             time,
+--             mtl,
+--             vector,
+--             TCache,
+--             data-default,
+--             syb,
+--             random
             
-        hs-source-dirs: tests
-        main-is: test5.hs
+--         hs-source-dirs: tests
+--         main-is: test5.hs
     
-        build-depends:
-            base >4 && <5
+--         build-depends:
+--             base >4 && <5
 
-executable flow
-        build-depends:
-            containers,
-            transformers -any,
-            transient >= 0.8.0.0,
-            transient-universe,
-            process >= 1.6.4.0,
-            directory,
-            bytestring, 
-            aeson,
-            time,
-            mtl,
-            vector,
-            TCache
+-- executable flow
+--         build-depends:
+--             containers,
+--             transformers -any,
+--             transient >= 0.8.0.0,
+--             transient-universe,
+--             process >= 1.6.4.0,
+--             directory,
+--             bytestring, 
+--             aeson,
+--             time,
+--             mtl,
+--             vector,
+--             TCache
             
-        hs-source-dirs: tests
-        main-is: flow.hs
+--         hs-source-dirs: tests
+--         main-is: flow.hs
     
-        build-depends:
-            base >4 && <5
+--         build-depends:
+--             base >4 && <5
