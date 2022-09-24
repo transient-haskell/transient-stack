@@ -74,6 +74,7 @@ library
         Transient.Move.Web
         Transient.Move.Services
         Transient.Move.IPFS
+        Transient.Move.Job
         -- Transient.Move.PubSub
     build-depends:
         base >4 && <5,
@@ -86,7 +87,7 @@ library
         transient >= 0.8.0.0
     default-language: Haskell2010
     hs-source-dirs: src .
-    ghc-options:  
+    ghc-options:  -w
 
 -- executable monitorService
 
@@ -263,23 +264,26 @@ library
 --         build-depends:
 --             base >4 && <5
 
--- executable flow
---         build-depends:
---             containers,
---             transformers -any,
---             transient >= 0.8.0.0,
---             transient-universe,
---             process >= 1.6.4.0,
---             directory,
---             bytestring, 
---             aeson,
---             time,
---             mtl,
---             vector,
---             TCache
+executable flow
+        build-depends:
+            containers,
+            transformers -any,
+            transient >= 0.8.0.0,
+            transient-universe,
+            process >= 1.6.4.0,
+            directory,
+            bytestring, 
+            aeson,
+            time,
+            mtl,
+            vector,
+            TCache,
+            old-time,
+            syb
             
---         hs-source-dirs: tests
---         main-is: flow.hs
+            
+        hs-source-dirs: tests
+        main-is: flow.hs
     
---         build-depends:
---             base >4 && <5
+        build-depends:
+            base >4 && <5
