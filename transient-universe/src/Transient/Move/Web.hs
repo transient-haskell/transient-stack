@@ -6,12 +6,12 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE UndecidableInstances #-}
-{-# LANGUAGE CPP #-}
+{-# LANGUAGE CPP, LambdaCase #-}
 
 #ifndef ghcjs_HOST_OS
 
-module Transient.Move.Web(minput,sendOption,sendFragment,optionEndpoints,ToRest(..),POSTData(..),InputData(..)
-,getSessionState,setSessionState,newSessionState,rawHTTP,serializetoJSON,deserializeJSON) where
+module Transient.Move.Web  (minput,out,public,published,ToRest,POSTData(..),HTTPReq(..)
+ ,getSessionState,setSessionState,newSessionState,rawHTTP,serializetoJSON,deserializeJSON,IsCommand,optionEndpoints,getCookie,setCookie) where
 
 import Control.Applicative
 import Control.Concurrent.MVar
@@ -41,7 +41,7 @@ import Transient.Logged
 import Transient.Move.Internals
 import Transient.Parse
 import Unsafe.Coerce
-
+import Data.List
 --------------------------WEB--------------------------------------
 
 
@@ -51,6 +51,8 @@ data InitSendSequence = InitSendSequence
 data IsCommand = IsCommand deriving (Show)
 
 data InputData = InputData {idInput :: String, message :: BS.ByteString, hTTPReq :: HTTPReq} deriving (Show, Read, Typeable)
+data InputDatas= InputDatas String [InputData]deriving (Show, Read, Typeable)
+instance TC.Indexable InputDatas where key (InputDatas key _)= key
 
 instance Loggable InputData
 
@@ -96,26 +98,26 @@ minput ident msg' = response
         let closLocal = hashClosure log
         closdata@(Closure sess closRemote _) <- getIndexData (idConn conn) `onNothing` return (Closure 0 "0" [])
         mynode <- getMyNode
-        ctx@(Context idcontext _) <-
+        ctx@(Context idcontext _) <- 
           getState <|> do
             ctx <- Context <$> genSessionId <*> return (M.empty)
+            tr("CONTEXR from 0",ctx)
             setState ctx
             return ctx
         let idSession = idcontext
         let urlbase =
               str "http://" <> str (nodeHost mynode) <> str ":" <> intt (nodePort mynode)
                 </> str ident
-                </> intt idSession
-                </> BL.fromStrict closRemote
-                </> intt sess
-                </> intt idcontext ::
-                BS.ByteString
+                </> "S" <> intt idSession
+                -- </> BL.fromStrict closRemote
+                -- </> intt sess
+                -- </> intt idcontext ::
+                -- BS.ByteString
 
         params <- toRest $ type1 response
 
         let httpreq = mempty {requrl = urlbase} <> params :: HTTPReq
         setState $ InputData ident msg httpreq
-
         connected log ctx idSession conn closLocal sess closRemote httpreq <|> commandLine conn log httpreq
 
     commandLine conn log httpreq = do
@@ -125,9 +127,9 @@ minput ident msg' = response
       -- do not continue if not is in command mode or there is no connection
       guard (isJust mcommand || case cdata of Just Self -> True; _ -> False)
 
-      liftIO $ atomicModifyIORef' endpoints $ \endpts -> (M.insert ident httpreq endpts, ())
 
       if null ident
+        -- if no ident it is just a message with no further option
         then do liftIO $ putStrLn $ BS.unpack msg; empty
         else do
           Context n st <-
@@ -136,23 +138,31 @@ minput ident msg' = response
               setState ctx
               return ctx
 
-          let ref = getDBRef "0"
-          liftIO $ atomically $ writeDBRef ref $ Context 0 st
+          let ref = getDBRef $ show n
+          liftIO $ atomically $ writeDBRef ref $ Context n st
 
           option ident $ BS.unpack msg <> "\t\"endpt " <> ident <> "\" for endpoint details" -- <> "\turl:\t"<> BS.unpack url
           setState IsCommand
 
-          ctx :: Context <- liftIO $ atomically $ readDBRef ref `onNothing` error "minput: no context"
+          ctx@(Context idc _) <- liftIO $ atomically $ readDBRef ref `onNothing` error "minput: no context"
           setState ctx
-          if typeOf response /= typeOf (undefined :: Cloud ())
-            then do
-              r <-  inputParse deserialize $ BS.unpack msg
 
-              return r
-            else return $ unsafeCoerce ()
+          r <- 
+            if typeOf response /= typeOf (undefined :: Cloud ())
+              then do
+                r <-  inputParse deserialize $ BS.unpack msg
+
+                return r
+              else return $ unsafeCoerce () 
+          (_,r') <- logged $ return(idc,r)
+          return r'
 
     connected log ctx@(Context idcontext _) idSession conn closLocal sess closRemote httpreq = do
       liftIO $ atomically $ writeDBRef (getDBRef $ show idcontext) ctx -- store the state, the id will be in the URL
+      Endpoints endpts <- getEndpoints
+      let nend= (str ident, httpreq)
+      setRState $ Endpoints  $ M.insert (str ident) httpreq endpts -- (nend: (endpts \\ [nend]) )
+      tr ("ADDED ENDPOINT",ident,httpreq)
       (idcontext' :: Int, result) <- do
         pstring <- giveParseString
         if (not $ recover log) || BS.null pstring
@@ -162,11 +172,12 @@ minput ident msg' = response
             ty <- liftIO $ readIORef $ connData conn
             case ty of
               Just Self -> do
-                -- liftIO $ print url
                 receive conn (Just $ BC.pack ident) idSession
+                delState IsCommand
                 tr "SELF XXX"
 
-                logged $ error "insuficient parameters 1" -- read the response
+                logged $ liftIO $ do error "insuficient parameters 1"; empty -- read the response
+
               _ -> do
                 checkComposeJSON conn
 
@@ -184,13 +195,16 @@ minput ident msg' = response
 
                 receive conn (Just $ BC.pack ident) idSession
                 tr "after receive"
+                delState IsCommand
                 delRState InitSendSequence
                 logged $ error "not enough parameters 2" -- read the response, error if response not logged
           else do
             receive conn (Just $ BC.pack ident) idSession
-            tr "else"
+            delState IsCommand
+            tr ("else",ident)
             logged $ error "insuficient parameters 3" -- read the response
             -- maybe another user from other context continues the program
+      tr ("MINPUT RESULT",idcontext',result)
       mncontext <- recoverContext idcontext'
       when (isJust mncontext) $ setState (fromJust mncontext :: Context)
       return result `asTypeOf` return (type1 response)
@@ -221,21 +235,77 @@ minput ident msg' = response
       where
         r = error $ show $ typeOf r
 
-endpoints = unsafePerformIO $ newIORef M.empty
+
+-- endpoints = unsafePerformIO $ newIORef M.empty
+
+
+-- | makes a `minput` available for  `published`. His endpoint will be available for all the users
+public key inp= inp  <|> add key
+  where
+  add  :: Loggable a => String ->  Cloud a
+  add k= local $ do
+        idata :: InputData  <-  getState
+        liftIO $ withResource(InputDatas k undefined) $ \case 
+                    Nothing                  -> InputDatas k [idata]
+                    Just(InputDatas k lcks) -> InputDatas k $ idata:lcks 
+
+        -- InputDatas k lcks <-  liftIO $ getResource (InputDatas k undefined) `onNothing` return (InputDatas k [])
+        -- liftIO $  withResources []  [InputDatas k $ idata:lcks] 
+        empty
+
+-- | make available all the endpoints published by `public` with the given key
+published k=  local $ do
+    InputDatas _ inputdatas <-  liftIO $ getResource (InputDatas k undefined)  `onNothing` return (InputDatas k []) -- getRState
+    tr ("PUBLISHED", inputdatas)
+    
+    mcommand <- getData :: TransIO (Maybe IsCommand)
+    -- do not continue if not is in command mode or there is no connection
+    if (isNothing mcommand) 
+      then do foldr (<|>) empty $ map (\(InputData id msg url) ->  sendOption msg url) inputdatas; empty
+      else do
+            foldr (<|>) empty $ map (\(InputData id msg url) ->  optionl id  (BS.unpack msg <> "\t\"endpt " <> id <> "\" for endpoint details")  url) inputdatas
+    where
+    optionl id msg url = do
+      Endpoints endpts <- getEndpoints
+      setRState $ Endpoints $ M.insert (str id) url endpts -- ((str id, url): endpts)
+
+      option id msg
+      pars' <- input (const True) "enter the parameters > "
+      tr ("PARS'",pars')
+      -- substitute spaces by '/'
+      pars <- withParseString (BS.pack pars') $ chainMany mappend (tTakeWhile' (/= ' ') <> ((tChar ' ' >>tTakeWhile' (==' ') >> "/") <|> mempty)) 
+      tr("PARS",pars)
+      let p = requrl url
+      (cl,s,cl',s',ids) <- withParseString p $  do 
+           string "http://" ; tTakeWhile' (/='/') 
+           (,,,,) <$> tTakeWhile' (/='/') <*> tTakeWhile' (/='/')  <*> tTakeWhile' (/='/') <*> tTakeWhile' (/='/') <*> tTakeWhile' (/='/')
+      tr("CL S",cl,s,cl',s',ids)
+      Transient $ processMessage (read $ BS.unpack s) (BS.toStrict cl)  (read $ BS.unpack s') (BS.toStrict cl') (Right $ lazyByteString $ ids <> "/" <> pars) False
+      return()
+
+newtype Endpoints= Endpoints (M.Map BS.ByteString HTTPReq)
+getEndpoints= getRState <|> return (Endpoints M.empty)
+           
 
 optionEndpoints = do
+  newRState $ Endpoints M.empty
   option ("endpt" :: String) "info about a endpoint"
-  ident <- input (const True) "enter the option for which you want to know the interface >"
-  endpts <- liftIO $ readIORef endpoints
-  let murl = M.lookup (ident :: String) endpts
+  Endpoints endpts <- getEndpoints
+  liftIO $ do putStr "endpoints available: "; print $ M.keys endpts
+  ident:: BS.ByteString <- input (const True) "enter the option for which you want to know the interface >"
+  
+  let murl = M.lookup ident  endpts
   case murl of
-    Nothing -> liftIO $ putStrLn $ "there's no URL for " <> ident
-    Just req -> liftIO $ putStrLn $ "\n" <> (BS.unpack $ ("curl " <>
+    Nothing ->  liftIO $ do putStr $ "there's no URL for " ; print ident
+    Just req -> printURL req
+  empty
+  where
+  printURL req= liftIO $ putStrLn $ "\n" <> (BS.unpack $ ("curl " <>
                     (if reqtype req== GET then mempty else ("-H 'content-type: application/json' -XPOST -d " <>
                        "\"" <> reqbody req) <> "\" ")) <> requrl req )
-  empty
 
--- | add the fragments of the beguinning and the end of the JSON packet
+-- | add the chunked fragments of the beguinning '[', the comma separator and the end ']' of the JSON packet for a set of `minput` statements
+-- that are sent in parallel (for example, with the alterenative operator)
 checkComposeJSON conn = do
   ms <- getRData -- avoid more than one onWaitthread, add "{" at the beguinning of the response
   -- and send the final chunk when no thread is active.
@@ -243,10 +313,46 @@ checkComposeJSON conn = do
     Nothing -> do
       onWaitThreads $ const $ msend conn $ str "1\r\n]\r\n0\r\n\r\n"
       setRState InitSendSequence
-      msend conn "1\r\n[\r\n"
+      cookies <- getCookiesStr
+      liftIO $ print cookies
+      msend conn cookies
+      msend conn "\r\n1\r\n[\r\n"
+      delState $ Cookies []
+
     Just InitSendSequence -> msend conn $ str "2\r\n\n,\r\n"
-  where
-    str = BS.pack
+  
+str = BS.pack
+
+newtype Cookies= Cookies  [(BS.ByteString,BS.ByteString)]
+
+getCookies= getState <|> return (Cookies [])
+
+getCookiesStr= do
+  Cookies cs <- getCookies
+  return $  BS.concat (map (\(n,v)->  "Set-Cookie: " <> n <>"="<> v <> "\r\n" ) cs) 
+               
+setCookie name valueandparams=  do
+  Cookies cs <- getCookies
+  setState $ Cookies $ (name,valueandparams):cs
+
+getCookie name= do
+  HTTPHeaders _ headers :: HTTPHeaders <- getState <|>  return (HTTPHeaders undefined [])
+  liftIO $ print headers
+  let receivedCookie= lookup "Cookie:" headers
+
+  liftIO $ print ("cookie", receivedCookie)
+  case receivedCookie of
+    Just str->  (withParseString (BS.fromStrict str) search) <|> return Nothing
+    Nothing -> return Nothing
+    where
+    search= do
+       d <- isDone 
+       if d then return Nothing else do
+                dropSpaces
+                name' <- tTakeWhile' (/='=')
+                val <- tTakeWhile' (/=';')
+                liftIO $ print (name',val)
+                if name'== name then return $ Just val else search
 
 sendOption msg req = do
   Context id _ <- getState <|> error "sendOption:no minput context, use `minput`"
@@ -260,8 +366,12 @@ sendOption msg req = do
   where
     intt = BS.pack . show
 
+-- | include JSON data in the response
+out :: ToJSON a => a -> TransIO ()
+out= sendFragment . encode 
+
+
 --  | Send a JSON fragment
-sendFragment :: BS.ByteString -> TransIO ()
 sendFragment tosend = do
   let l = fromIntegral $ BS.length tosend
   conn <- getState
@@ -287,6 +397,7 @@ newSessionState x = local $ do
   ctx <- Context <$> genSessionId <*> return (M.singleton (show $ typeOf x) (toLazyByteString $ serialize x))
   setState ctx
 
+-- | set a session value of the given type that last across all the navigation of a given user
 setSessionState x = do
   modifyData'
     (\(Context n map) -> (Context n $ M.insert (show $ typeOf x) (toLazyByteString $ serialize x) map))
@@ -485,7 +596,8 @@ deserializeJSON = do
 
     elemString = do
       dropSpaces
-      tTakeWhile (\c -> c /= '}' && c /= ']' && c /= ',')
+      (string "\"" <> tTakeWhile ( /= '\"' ) <> string "\"" )  <|>
+         tTakeWhile (\c -> c /= '}' && c /= ']' && c /= ',')
 
 instance {-# OVERLAPPING #-} Loggable Value where
   serialize = serializetoJSON
@@ -532,8 +644,7 @@ rawHTTP node restmsg = sandbox $ do
   modify $ \s -> s {execMode = Serial}
   let blocked = isBlocked c -- TODO: the same flag is used now for sending and receiving
   tr "after send"
-  --showNext "NEXT" 100
-  --try (do r <-tTake 10;liftIO  $ print "NOTPARSED"; liftIO $ print  r; empty) <|> return()
+
   first@(vers, code, _) <-
     getFirstLineResp <|> do
       r <- notParsed
@@ -548,7 +659,7 @@ rawHTTP node restmsg = sandbox $ do
   guard (BC.head code == '2')
     <|> do
       Raw body <- parseBody headers
-      error $ show (hdrs, body) --  decode the body and print
+      error $ "Transient.Move.Web: ERROR in REQUEST: \n" <> restmsg  <> show body <> "\nRESPONSE HEADERS:\n " <> show hdrs 
   tr ("HEADERS",headers)
 
   result <- parseBody headers
