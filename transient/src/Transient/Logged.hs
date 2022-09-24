@@ -107,12 +107,12 @@ class (Show a, Read a,Typeable a) => Loggable a where
     deserializePure :: BS.ByteString -> Maybe(a, BS.ByteString)
     deserializePure s = r
       where
-      r= case reads $ BS.unpack s   of -- `traceShow` ("deserialize",typeOf $ typeOf1 r,s) of
+      r= case readsErr $ BS.unpack s   of -- `traceShow` ("deserialize",typeOf $ typeOf1 r,s) of
            []       -> Nothing  -- !> "Nothing"
            (r,t): _ -> return (r, BS.pack t)
-
-      -- typeOf1 :: Maybe(a, BS.ByteString) -> a
-      -- typeOf1= undefined
+      {-# INLINE readsErr #-}
+      readsErr s=unsafePerformIO $ return(reads s) `catch`\(e :: SomeException) ->  return []
+      
 
     deserialize ::  TransIO a
     deserialize = x
@@ -574,7 +574,7 @@ substwait ld build = fromJust $ substwait1 ld build
     (log',[LX (LD log)]) -> let mr=  (LD log) `substwait1` build  --   LD $ log'++[LX $ (LD log) `substwait` build]
                             in case mr of
                               Nothing -> Just $ LD $ l ++ [LE build]
-                              Just x   -> Just $ LD [LX  x]
+                              Just x   -> Just $ LD $ log' ++ [LX  x]
 
 
 #ifndef ghcjs_HOST_OS

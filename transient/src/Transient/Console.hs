@@ -1,7 +1,7 @@
 {-# LANGUAGE ScopedTypeVariables,CPP #-}
 
 
-module Transient.Console where
+module Transient.Console(keep, keep',keepCollect,option, option1, input, input', inputf, inputParse, processLine,rprompt,rcb) where
 
 import Control.Applicative
 import Control.Concurrent
@@ -164,12 +164,13 @@ inputLoop =
     `catch` \(SomeException _) -> inputLoop -- myThreadId >>= killThread
 
 {-# NOINLINE rconsumed #-}
+rconsumed :: IORef (Maybe String)
 rconsumed = unsafePerformIO $ newIORef Nothing
 
--- {-# NOINLINE lineprocessmode #-}
--- lineprocessmode= unsafePerformIO $ newIORef False
 
-processLine line = do
+-- | execute a set of console commands separated by '/', ':' or space that are consumed by the console input primitives
+processLine line = liftIO $ do
+  tr ("LINE",line)
   mbs <- readIORef rcb
   process 5 mbs line
   where
@@ -181,9 +182,11 @@ processLine line = do
       mbs <- readIORef rcb
       writeIORef rconsumed Nothing
       process 5 mbs $ dropspaces rest
+
     process n [] line = do
       mbs <- readIORef rcb
       process (n -1) mbs line
+
     process n mbs line = do
       let cb = trd $ head mbs
       cb line
@@ -260,14 +263,14 @@ stay rexit =
     `catch` \(e :: BlockedIndefinitelyOnMVar) -> return Nothing
 
 -- | Runs the transient computation in a child thread and keeps the main thread
--- running until all the user threads exit or some thread 'exit'.
+-- running until all the user threads exit or some thread `exit`.
 --
--- The main thread provides facilities for accepting keyboard input in a
+-- The main thread provides facilities for interpreting keyboard input in a
 -- non-blocking but line-oriented manner. The program reads the standard input
 -- and feeds it to all the async input consumers (e.g. 'option' and 'input').
 -- All async input consumers contend for each line entered on the standard
 -- input and try to read it atomically. When a consumer consumes the input
--- others do not get to see it, otherwise it is left in the buffer for others
+-- it disspears from the buffer, otherwise it is left in the buffer for others
 -- to consume. If nobody consumes the input, it is discarded.
 --
 -- A @/@ in the input line is treated as a newline.
@@ -281,18 +284,15 @@ stay rexit =
 -- All available options waiting for input are displayed when the
 -- program is run.  The following commands are available:
 --
--- 1. @ps@: show threads
--- 2. @log@: inspect the log of a thread
--- 3. @end@, @exit@: terminate the program
---
--- An input not handled by the command handler can be handled by the program.
---
+-- entering @options y@ show the available options
+----
 -- The program's command line is scanned for @-p@ or @--path@ command line
 -- options.  The arguments to these options are injected into the async input
 -- channel as keyboard input to the program. Each line of input is separated by
 -- a @/@. For example:
 --
 -- >  foo  -p  ps/end
+
 keep :: Typeable a => TransIO a -> IO (Maybe a)
 keep mx = do
   liftIO $ hSetBuffering stdout LineBuffering
@@ -337,12 +337,13 @@ keep mx = do
             do
               option "options" "show all options"
               mbs <- liftIO $ readIORef rcb
+              let filteryn x = x == "y" || x == "n" || x == "Y" || x == "N"
+              prefix <- input' (Just "") (not . filteryn) "prefix? " 
+              liftIO $ mapM_ (\c -> when (prefix `isPrefixOf` c) $ do putStr c; putStr "|") $ map (\(fst, _, _) -> fst) mbs
 
-              liftIO $ mapM_ (\c -> do putStr c; putStr "|") $ map (\(fst, _, _) -> fst) mbs
-
-              d <- input' (Just "n") (\x -> x == "y" || x == "n" || x == "Y" || x == "N") "\nDetails? N/y "
-              when (d == "y") $
-                let line (x, y, _) = putStr y -- do putStr x; putStr "\t\t"; putStrLn y
+              d <- input' (Just "n") filteryn "\nDetails? N/y "
+              when (d == "y" || d =="Y") $
+                let line (x, y, _) = when (prefix `isPrefixOf` x) $ putStr y -- do putStr x; putStr "\t\t"; putStrLn y
                  in liftIO $ mapM_ line mbs
               liftIO $ putStrLn ""
               empty
@@ -391,9 +392,18 @@ keep mx = do
             -- return ()
   stay rexit
 
+-- | It is the same as `keep` but with no console interaction, although a command line string of commands with the option -p could be passed as parameter to the program.
 keep' :: TransIO a -> IO [a]
-keep' mx = keepCollect 0 0 mx
+keep' mx = keepCollect 0 0 $ do
+  do
+    abduce
+    liftIO $ threadDelay 10000
+    fork $ liftIO $ execCommandLine
+    empty
+  <|> mx
 
+-- | gather all the results returned by all the thread. It waits for a certain number of results and for a certain time (0 as first parameter means "all the results", 0 in the second paramenter means "until all thread finish"). It is the same than `collect'` but it returns in the IO monad.
+keepCollect :: Int -> Int -> TransIO a0 -> IO [a0]
 keepCollect n time mx = do
   hSetBuffering stdout LineBuffering
   rexit <- newEmptyMVar
@@ -425,11 +435,10 @@ keepCollect n time mx = do
               liftIO $ putMVar rexit []
               empty
 
-            r <- collect' n time mx
+            r <- collect' n time $  mx
             liftIO $ putMVar rexit r
         `catch` \(e :: BlockedIndefinitelyOnMVar) -> putMVar rexit []
-  threadDelay 10000
-  forkIO execCommandLine
+
   takeMVar rexit `catch` \(e :: BlockedIndefinitelyOnMVar) -> return []
 
 execCommandLine :: IO ()
@@ -447,7 +456,7 @@ execCommandLine = do
 
 -- u = undefined
 
--- | write a message and parse a complete line from the console
+-- | write a message and parse a complete line from the console. The parse is constructed with 'Transient.Parse' primitives
 inputParse :: (Typeable b) => TransIO b -> String -> TransIO b
 inputParse parse message = r
   where
@@ -461,8 +470,8 @@ inputParse parse message = r
       -- liftIO $ putStrLn str
       liftIO $ print str
       (r, rest) <- withParseString (BSL.pack str) $ (,) <$> parse <*> giveParseString
-
-      liftIO $ do writeIORef rconsumed $ Just rest
+      tr ("REST",rest)
+      liftIO $ do writeIORef rconsumed $ Just  $ BSL.unpack rest
       return r
 
     -- t :: TransIO a -> a

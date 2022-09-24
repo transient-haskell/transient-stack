@@ -198,10 +198,7 @@ chainManyTill op p end= scan
               op <$> p <*> scan
               -- do{ x <- p; xs <- scan; return (x `op` xs) }
 
--- -- | keep the parse context unmodified even if the parser succeed
--- tryKeep parse= do
---    s <- giveParseString
---    withParseString s parse
+
 
 between open close p = do{ open; x <- p; close; return x }
 
@@ -231,7 +228,7 @@ chainSepBy chain p sep= chainSepBy1 chain p sep <|> return mempty
 
 -- take a byteString of elements separated by a separator and  apply the desired operator to the parsed results
 chainSepBy1
-  :: (Monad m, Monoid b, Alternative m) =>
+  :: (MonadIO m, TransMonad m,Alternative m, Monoid b) =>
      (a -> b -> b) -> m a -> m x -> m b
 chainSepBy1 chain p sep= do{ x <- p
                         ; xs <- chainMany chain (sep >> p)
@@ -239,7 +236,15 @@ chainSepBy1 chain p sep= do{ x <- p
                         }
                         -- !> "chainSepBy "
 
-chainMany chain v= (chain <$> v <*> chainMany chain v) <|> return mempty
+chainMany chain v= (do isDone >>= guard; return mempty) <|> (chain <$> v <*> chainMany chain v) <|> return mempty
+-- chainMany chain v=  do
+--                  t <- isDone
+--                  tr ("isdone",t)
+--                  if t then return mempty else 
+--                   (do x <- v; xs <- chainMany chain v; return $ x `chain` xs) <|> 
+--                    return mempty
+
+-- chainMany chain v=  (liftA2 chain v  (chainMany chain v)) <|> return mempty
 
 commaSep p      = sepBy p comma
 semiSep p       = sepBy p semi
@@ -266,7 +271,8 @@ tTakeWhile cond= -- parse (BS.span cond)
     withGetParseString $ \s -> do
       let ret@(h,_)= BS.span cond s
       --return () !> ("takewhile'",h,t)
-      if BS.null h then empty else return ret
+      -- if BS.null h then empty else 
+      ret `seq` return ret
 
 
 
@@ -275,7 +281,8 @@ tTakeWhile' :: (Char -> Bool) -> TransIO BS.ByteString
 tTakeWhile' cond= withGetParseString $ \s -> do
    let (h,t)= BS.span cond s
   --  return () !> ("takewhile'",h,t)
-   if BS.null h then empty else return (h, if BS.null t then t else BS.tail t)
+  --  if BS.null h then empty else 
+   h `seq` return (h, if BS.null t then t else BS.tail t)
 
 
 just1 f x= let (h,t)= f x in (Just h,t)
@@ -447,8 +454,8 @@ tTakeUntil cond= withGetParseString $ \s -> f mempty s
 tPutStr s'= withGetParseString $ \s -> return ((),s'<> s)
 
 -- | True if the stream has finished
-isDone :: TransIO Bool
-isDone=  noTrans $ do
+isDone :: (MonadIO m,TransMonad m) => m Bool
+isDone=   do
     ParseContext _ _ done<- gets parseContext
     liftIO $ readIORef done
 
@@ -538,10 +545,10 @@ producer |- qonsumer =  sandbox $ do
 
   takeMVar' v= do
     r <- takeMVar v
-    tr ("TAKEMVAR",r)
+    -- tr ("TAKEMVAR",r)
     return r
   putMVar' v x= do
-    tr ("PUTMVAR",x)
+    -- tr ("PUTMVAR",x)
     putMVar v x
 
   initp v pcontext= do

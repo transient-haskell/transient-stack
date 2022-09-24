@@ -52,12 +52,12 @@ import           Control.Monad.Fail
 import           System.Directory
 import qualified Debug.Trace as Debug
 
--- #ifdef DEBUG
+#ifdef DEBUG
 trace= Debug.trace 
--- #else
+#else
 
--- trace _ x= x
--- #endif
+trace _ x=  x
+#endif
 
 -- tshow ::  a -> x -> x
 -- tshow _ y= y
@@ -1351,8 +1351,9 @@ sample action interval = do
 abduce = async $ return ()
 
 
--- | fork an independent process. It is equivalent to forkIO. The thread created 
--- is managed with the thread control primitives of transient
+
+-- | fork an independent process. It is equivalent to forkIO. The thread(s) created 
+-- are managed with the thread control primitives of transient
 fork :: TransIO () -> TransIO ()
 fork proc= (abduce >> proc >> empty) <|> return()
 
@@ -1482,14 +1483,15 @@ loop parentc rec = forkMaybe False parentc $ \cont -> do
               Left ( e) -> do
                   exceptBack parentState e -- tiene que hacerse antes de  free, a no ser que se haga hangFrom
                   freelogic  rparentState parentState label
-
-                  exceptBackg parentState  $ Finish $ show (unsafePerformIO myThreadId,e)
+                  th <- myThreadId
+                  exceptBackg parentState  $ Finish $ show (th,e)
                   return()
 
               Right(_,lastCont) -> do
                       freelogic  rparentState parentState label
                       tr ("finalizing normal",threadId lastCont, unsafePerformIO $ readIORef $ labelth lastCont)
-                      exceptBackg lastCont  $ Finish $ show (unsafePerformIO myThreadId,"async thread ended")
+                      th <- myThreadId
+                      exceptBackg lastCont  $ Finish $ show (th,"async thread ended")
                       return()
 
 
@@ -1723,7 +1725,6 @@ collect' number time proc' = hookedThreads $ do
                 return rs
 
     localBack (Finish "") $ timer <|> (anyThreads abduce >> (proc `onBack` check) )
-
 
 
 -- | look up in the parent chain for a parent state/thread that is still active
