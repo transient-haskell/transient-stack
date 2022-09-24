@@ -1,5 +1,5 @@
 {-#LANGUAGE OverloadedStrings, FlexibleContexts, ScopedTypeVariables,DeriveDataTypeable,FlexibleInstances,UndecidableInstances #-}
-module Transient.Move.IPFS(setIPFS) where
+module Transient.Move.IPFS where -- (setIPFS) where
 import Data.TCache as TC
 import Data.TCache.DefaultPersistence as TC
 import Transient.Base
@@ -53,10 +53,10 @@ ipfsAddmUpload body = [("service","IPFS"),("type","HTTP")
               "Content-Type: multipart/form-data; boundary=---------------------------735323031399963166993862150\r\n"<>
               "Content-Length: "<> show (Prelude.length body1)<>"\r\n\r\n" <> body1)]
    where
-   body1= tcachedir <> body <> fileend
+   body1= body <> fileend
 
    tcachedir=  "-----------------------------735323031399963166993862150\r\n"<>
-      "Content-Disposition: form-data; name=\"file\"; filename=\"tcachedata\"\r\n" <>
+      "Content-Disposition: form-data; name=\"file\"; filename=\"/tcachedata\"\r\n" <>
       "Content-Type: application/x-directory\r\n\r\n" 
 
    fileend=  "-----------------------------735323031399963166993862150--"
@@ -97,7 +97,7 @@ jsonFilter field (Raw reg)= withParseString reg $ filt field reg
         
 
 
-lockuptable= "dappflowlockup"
+lockuptabledef= "dappflowlockup"
 
 
 -- | get either the IPNS id of the index table or Nothing from the command line
@@ -107,82 +107,84 @@ lockuptable= "dappflowlockup"
 --
 -- The progran also look for the data by inspecting the local IPNS identifier "dappflowlockup"
 
-chooseIPFS =  do
-  mid :: [String] <-  collect' 1 500000  fromOption 
-  if null mid then return Nothing else return $ Just $ head mid
-
+chooseIPFS =  
+  getIPFSid 
+  <|> do
+    mid :: [String] <- collect' 1 500000  fromOption 
+    let lockuptable= if null mid then lockuptabledef else head mid
+    liftIO $ writeIORef ripnsid lockuptable
+    return lockuptable
+    
   where
   fromOption= do
-    option1 ("ipnsid" :: String) "give the IPNS id of the program data"
-    input (const True) "enter nisid: "
-
-
+    option1 ("ipns" :: String) "give the IPNS key name of the program data"
+    input (const True) "enter ipns name: "
 
   getIPFSid= do
-    option ("ipnsid?" :: String) "ask for the id of the data"
-    ipns <- liftIO $ readIORef ripnsid
-    liftIO $ print ipns
+    option ("ipns?" :: String) "ask for the id of the data"
+    lockuptable <- liftIO $ readIORef ripnsid
+    liftIO $ putStrLn lockuptable
+    empty
     
     -- setIPFS mid
   
-ripnsid= unsafePerformIO $ newIORef "No saved data"
+ripnsid= unsafePerformIO $ newIORef "No saved data yet"
       
 -- | Set IPFS persistence for TCache registers and for all the closure data. it needs a local IPFS daemon.
 -- It uses the interface https://docs.ipfs.tech/reference/kubo/rpc/#getting-started
--- It uses chooseIPFS to set the IPNS address of the data to be used
-setIPFS = do
+-- It uses chooseIPFS to set the IPNS key name of the data to be used. 
+setIPFS = localExceptionHandlers $ do
       onException $ \(ConnectionError _ _) -> do
             liftIO $ putStrLn $ "Is the ipfs daemon running?"
             empty
         
+      lockuptable <- chooseIPFS
 
-      mid <- chooseIPFS
-      (ipnsid, lockupt) <- if isJust mid 
-        then  do
-          Raw tablestr <- callService ipfsCat $ "/ipns/" <> fromJust mid
-          liftIO $ print tablestr
 
-          let table= read $ BS.unpack tablestr
-          liftIO $ atomically $ flushDBRef persistDBRef
-          return (fromJust mid,table)
+      -- (ipnsid, lockupt) <- if isJust mid 
+        -- then  do
+        --   Raw tablestr <- callService ipfsCat $ "/ipns/" <> fromJust mid
+
+        --   let table= read $ BS.unpack tablestr
+        --   liftIO $ atomically $ flushDBRef persistDBRef
+        --   return (fromJust mid,table)
+        -- else do
+      Raw r <- callService ipnsList () 
+
+      liftIO $ atomically $ flushDBRef persistDBRef -- the connection uses this DBRef before IPFS storage is being set
+
+      let m = (decode r :: Maybe (M.Map String [Maybe (M.Map String String)]))
+      guard (isJust m) <|> error "ipnsList error"
+      let map = fromJust m
+          mlist =  M.lookup "Keys" map
+          mlist'= if isJust mlist then fromJust mlist else [] :: [Maybe (M.Map String String)]
+          ks = filter (\mm -> case mm of Nothing -> False; Just m ->  M.lookup "Name" m ==  Just lockuptable) $  mlist'
+
+      (ipnsid,table) <- if null ks
+        then do
+            ipnsid <- callService ipnsKeyGen (lockuptable :: String) >>=  jsonFilter "Id"
+            return (BS.unpack ipnsid,M.empty)
         else do
-          Raw r <- callService ipnsList () 
-
-          liftIO $ atomically $ flushDBRef persistDBRef -- the connection uses this DBRef before IPFS storage is being set
-
-          let m = (decode r :: Maybe (M.Map String [Maybe (M.Map String String)]))
-          guard (isJust m) <|> error "ipnsList error"
-          let map = fromJust m
-              mlist =  M.lookup "Keys" map
-              mlist'= if isJust mlist then fromJust mlist else [] :: [Maybe (M.Map String String)]
-              ks = filter (\mm -> case mm of Nothing -> False; Just m ->  M.lookup "Name" m == Just lockuptable) $  mlist'
- 
-          if null ks
-            then do
-                ipnsid <- callService ipnsKeyGen (lockuptable :: String) >>=  jsonFilter "Id"
-                return (BS.unpack ipnsid,M.empty)
-            else do
-                let ipnsid= fromJust $  M.lookup "Id" $ fromJust $ head ks 
-                Raw tablestr <- callService ipfsCat ("/ipns/" <>  ipnsid)
-                let table= read  $ BS.unpack tablestr
-                return (ipnsid,table)
+            let ipnsid= fromJust $  M.lookup "Id" $ fromJust $ head ks 
+            Raw tablestr <- callService ipfsCat ("/ipns/" <>  ipnsid)
+            let table= read  $ BS.unpack tablestr
+            return (ipnsid,table)
 
      
-      rindex <- liftIO $ newIORef  lockupt
+      rindex <- liftIO $ newIORef  table
       let iPFSPersist= TC.Persist {
           readByKey = \k -> do
-            r <- keep' $ do
-              let mipns = M.lookup k lockupt
+            r <- keepCollect 1 0  $ do
+              let mipns = M.lookup k table
               if isNothing mipns 
                 then return Nothing
                 else do
                   Raw r <- callService ipfsCat (BS.unpack $ fromJust mipns) 
-                  
-                
                   return $ Just r
             return $ head r,
+
           write = \k content -> do
-                    keep' $ do 
+                    keepCollect 1 0 $ do 
                              ipfsid <- callService (ipfsAddmUpload(addFile k $ BS.unpack content)) () >>= jsonFilter "Hash"
                              liftIO $ atomicModifyIORef rindex $ \m -> (M.insert k ipfsid m,())
                     return(),
@@ -190,18 +192,17 @@ setIPFS = do
           delete = \k -> error $ show ("deleting",k)
           }
       liftIO $ TC.setDefaultPersist iPFSPersist
-      fork $ saveIndex ipnsid rindex
+      fork $ saveIndex lockuptable ipnsid rindex
   where
-  saveIndex ipnsid rindex= do
+  saveIndex lockuptable ipnsid rindex= do
     react'  setCond  -- activated after each cycle of save to disk of modified registers in the cache
     index <- liftIO $ readIORef rindex
     ipfsid <- callService (ipfsAddmUpload (addFile (lockuptable :: String) $ show index)) () >>=  jsonFilter "Hash" 
-    r<- callService ipnsPublish ("/ipfs/" <> BS.unpack ipfsid :: String , lockuptable :: String) >>= jsonFilter "Name"
-    liftIO $ putStrLn $ "Program state saved at: /ipns/" <> show r
-    liftIO $ writeIORef ripnsid r
+    r <- callService ipnsPublish ("/ipfs/" <> BS.unpack ipfsid :: String , lockuptable :: String) >>= jsonFilter "Name"
+    liftIO $ putStrLn $ "Program state saved at: /ipns/" <> BS.unpack  r
     return()
     where
-    -- callback to set up an action when the writing of registers finish
+    -- callback that set up an action when writing of registers finish
     setCond :: (() -> IO ()) -> IO ()
     setCond fx= TC.setConditions (return ())  (fx ())
     
