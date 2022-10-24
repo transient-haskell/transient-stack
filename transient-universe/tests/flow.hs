@@ -4,7 +4,7 @@
 
 --  mkdir -p ./static && ghcjs --make   -i../transient/src -i../transient-universe/src  -i../axiom/src -i../ghcjs-perch/src $1 -o static/out && runghc   -i../transient/src -i../transient-universe/src -i../axiom/src   $1 ${2} ${3}
 
-{-# LANGUAGE ScopedTypeVariables,RecordWildCards #-}
+{-# LANGUAGE ScopedTypeVariables,RecordWildCards,DeriveAnyClass #-}
 
 module Main where
 
@@ -14,12 +14,15 @@ import           System.Environment
 import           System.IO
 import           Transient.Internals
 import           Transient.Logged
+import           Transient.EVars
 import           Transient.Parse
+import           Transient.Console
 import           Transient.Indeterminism
 import           Transient.Logged
 import           Transient.EVars
 import           Transient.Move.Internals
 import           Transient.Move.Utils
+import           Transient.Move.Web 
 import           Control.Applicative
 import           System.Info
 import           Control.Concurrent
@@ -40,6 +43,12 @@ import qualified Data.Map as M
 import System.Directory
 import Control.Monad.State
 import Data.Maybe
+import System.Time
+import Control.Concurrent
+import Data.Aeson
+import Unsafe.Coerce
+import Data.String
+
 mainrerun = keep $ rerun "config" $ do
   logged $ liftIO $ do
      putStrLn "configuring the program"
@@ -272,7 +281,7 @@ showNetworkRequest conn= do
     Nothing   -> "Nothing"
     Just Self -> "Self"
     Just (HTTPS2Node ctx) -> "HTTPS2Node"
-    Just (HTTP2Node _ sock _) -> "HTTP2Node"
+    Just (HTTP2Node _ sock _ _) -> "HTTP2Node"
     _ ->  "Other"
 guardNetworkRequest conn= do
     cdata <- liftIO $ readIORef $ connData conn
@@ -298,19 +307,19 @@ guardNetworkRequest conn= do
 
 haply x= x <|> return()
 
-
+{-
 flowAssign=  do
 
       cont <- get
       log <- getLog
-      let rthis= getDBRef "0-0"-- TC.key this
+      let rs= getDBRef "0-0"-- TC.key this
 
       tr ("assign",log)
       when (not $ recover log) $ do
 
         let this=LocalClosure{
                 localCon= 0,
-                prevClos= rthis, 
+                prevClos= rs, 
                 localLog=   fulLog log, -- codificar en flow.hs
                 localClos= 0, -- hashClosure log,
                 localEnd=getEnd $ fulLog log, -- codificar en flow.hs
@@ -318,9 +327,9 @@ flowAssign=  do
 
         tr ("end", localEnd this, fulLog log)
 
-        liftIO $ atomically $ writeDBRef rthis this
-      setState $ PrevClos rthis
-
+        liftIO $ atomically $ writeDBRef rs this
+      setState $ PrevClos rs
+-}
 {-
 processMessage para que reciba de un proceso IO
 actualmente recibe un Log de builder
@@ -417,7 +426,7 @@ instance Loggable THAT1
     -- return ()
 
 mainalter= keep $ do
-  flowAssign
+  -- flowAssign
   proc <|> restore1 <|> save
 
   where 
@@ -463,9 +472,9 @@ mainsimple= keep $ initNode $ Cloud $ do
 
  
 
-main= keep $ do
-  -- flowAssign
-  firstCont -- setc
+mainc= keep $  initNode $ Cloud $ do
+  
+  -- firstCont
   proc1 <|> restore1 <|> save
 
   where
@@ -516,7 +525,7 @@ lprint :: Show a => a -> TransIO ()
 lprint= liftIO . print
 
 setc =  do
-    (lc,_) <-  setCont 0
+    (lc,_) <-  setCont Nothing 0
     liftIO $ putStr  "0 ">> print (localClos lc)
 
 showLog=do
@@ -535,6 +544,14 @@ showLog=do
   
   el setIndexData es equivalente a la DBRef pero sin log, solo con ends
 -}
+
+main2= keep $  save <|> restore1 <|> proc
+  
+  where
+  proc= initNode $ Cloud $ do  
+    logged $ option "go" "go" >> setc
+    logged setc
+
 main1= keep $ do
    firstCont
    proc <|>  save <|>  restore1
@@ -555,23 +572,92 @@ main1= keep $ do
   tr ("fulLog",fulLog log)
 
 
+mainfin= keep' $ do
+  
+  onFinish $ \e-> liftIO $ print ("finish",e)
+  liftIO $ print "END"
 
-mainf= keep $ syncFlush <|>  runCloud (do
-   onAll $ do 
-      flowAssign
-      runJobs
-   local $  option "f"  "fire"
-   f   <|>  f  -- <|> f "world2"
- 
+rone= unsafePerformIO $ newIORef False
+mainfinish= keep' $ do
+  abduce
 
-   empty
-   return())
-   where
-   f =do
-      prev <- local $  getState >>= \(PrevClos prev) -> return $ keyObjDBRef prev
-      r <- mparallel  $ do  threadDelay 5000000 ; return $ SMore  prev
-      localIO $ print r
+  cont <- getCont
+  onFinish $ const $ liftIO $ print "finish"
 
+  fork $ do  one <- liftIO $ readIORef rone
+             guard $ one == False
+             liftIO $ writeIORef rone True
+             (_,cont') <-liftIO $ runStateT (runCont cont) cont 
+             liftIO $ exceptBackg cont' $ Finish $ "job " <> show (unsafePerformIO myThreadId)
+             return()
+             
+  --            return()
+  liftIO $ print "end"
+  
+{-
+ tiene que ser un canal en minput que reciba del proceso
+ minput 
+ receive <- evar
+ minput 
+-}
+
+
+mainshow= keep  $ initNode $ do
+  minput "s" "start" :: Cloud ()
+
+  minput "s2" "cont" :: Cloud ()
+  local showURL
+
+  minput "next" "next" :: Cloud String
+  
+
+str :: IsString a => String -> a
+str= fromString
+
+mainjob= keep  $ initNode $ do
+  runJobs
+
+  str <-minput ("s" :: String) "start"
+  localIO $ putStrLn str
+
+
+  ev <- onAll $ liftIO $ newIORef []
+  minput "input" "test" :: Cloud ()
+
+
+   
+  --  minput "input2"  "test2" :: Cloud()
+  job(process ev) <|> report ev 
+
+  where
+   process ev= do
+    i <- local $ threads 1 $ choose [(1 :: Int)..]
+    localIO $ threadDelay 10000000
+    localIO $ atomicModifyIORef ev $ \l -> (i:l,())
+    empty
+    return()
+
+   report ev=  do
+    minput "log"  "show log" :: Cloud()
+
+    e <- localIO $ readIORef ev
+    minput "" $ reverse e :: Cloud ()
+    empty
+
+
+
+mparallel mx=  job $ local $ parallel mx
+
+
+{-
+borrado de registros por timeout
+localClosures estan ahora en registros TCache. 
+pueden ser limpiados por el mecanismo de TCache clearsynccache. no necesita loopClosures
+pero necesita borraarlo del permanent storage
+en IPFS se autoeliminarian solos
+en disco necesita limpiar?
+
+-}
 -- main20=keep $ syncFlush <|>  initNode (do
 --    onAll flowAssign
 --    local $ return "HI"
@@ -622,16 +708,16 @@ autentificacion? investigar
 --   type1= undefined
   -- falta response
 
-mainwait = do
-  r<- keepCollect 0 0 $ do
-    labelState $ BC.pack "here"
-    onFinish $ const $ liftIO $ print "FIN"
-    -- aqui el parent thread puede lanzar threads y hay que esperar
-    liftIO $ myThreadId >>= print
-    -- abduce
-    abduce <|> liftIO (threadDelay 1000000)
-    liftIO $ print "END"
-  print r
+-- mainwait = do
+--   r<- keepCollect 0 0 $ do
+--     labelState $ BC.pack "here"
+--     onFinish $ const $ liftIO $ print "FIN"
+--     -- aqui el parent thread puede lanzar threads y hay que esperar
+--     liftIO $ myThreadId >>= print
+--     -- abduce
+--     abduce <|> liftIO (threadDelay 1000000)
+--     liftIO $ print "END"
+--   print r
 
 
 -- onWaitThreads  mx= do
@@ -981,69 +1067,75 @@ hayq que hacer restoreClosure inmediatamente.
 jobs debe almacenar la lista de sesiones y closures que hay que ejecutar de inmediato
 
 -}
-data Jobs= Jobs{processing:: [(Int,Int)], adding :: [(Int,Int)]}  deriving (Read,Show)
+data Jobs= Jobs{pending :: [(Int,BC.ByteString)]}  deriving (Read,Show)
 
-instance TC.Indexable Jobs where key _= "Jobs"
+instance TC.Indexable Jobs where key _= "__Jobs"
 
 -- newtype CloudCounter= CCount Int
 -- genCCounter= modifyData' (\(CCount n) -> CCount $ n+1) (CCount 0) :: TransIO CloudCounter
 
+{-
+se crean automaticamente
+como se eleminan esos jobs?
+usando onFinish?
+
+
+Como se notifica al usuario?
+ ev <- newEVar
+ job ev x <|> jobstatus ev
+ 
+ jobstatus= do
+    st <- readEVar status
+    minput stream st -> strean json lines until end.
+
+como se acaba? jobstatus pinta el link para continuar
+
+-}
+-- | if the state of the program is commited (saved) the created thread is restored
+-- when the program is restarted by `initNode` as a job.
+--
+-- if the thread and all his children becomes inactive, the job is removed and the list of result are returned
+job mx = do
+  this@(idSession,_) <- local $ do
+    idSession <- fromIntegral <$> genPersistId
+    log <- getLog <|> error "job: no log"
+    let this = (idSession,BC.pack $ show $ hashClosure log + 10000000) -- es la siguiente closure
+
+    Jobs  pending <- liftIO $ atomically $ readDBRef rjobs `onNothing` return (Jobs[])
+    liftIO $ print ("creating job",this)
+    liftIO $ atomically $ writeDBRef rjobs $ Jobs $ this:pending
+    return this
+
+  local $ do
+      (clos,_)<- setCont Nothing idSession 
+      liftIO $ print $ localClos clos
+
+  rs <- local $ collect 0 $ runCloud mx
   
+  local $ remove this -- snd $ head rs
+  return $  rs
 
-mparallel  proc = do
- idSession <- local $  fromIntegral <$> genPersistId
-
- local $ do
-  -- detectar que ha llegado un SLast y borrar definitivamente ese job 
-  log <- getLog <|> error "mparallel: no log"
-
-
-  -- CCount idSession <-  genCCounter
-  already <-liftIO $ atomically $ do
-    let rjobs= getDBRef "Jobs"
-    Jobs processing pending <- readDBRef rjobs `onNothing` return (Jobs[] [])
-    -- add to pending if not added, remove from processing
-    let this = (idSession,hashClosure log)
-        already= this `elem` pending
-    writeDBRef rjobs $ Jobs (processing \\ [this]) $ if already then pending else this:pending
-    return already
-    
-  guard $ not already
-
-  (lc,log) <- setCont idSession
-  -- if recover borrar la entrada en Jobs (cual es su idSession?) (en setCont)
-
-  r <-parallel proc
-  case r of
-    SLast x -> remove lc >> return x
-    SDone   -> remove lc >> empty
-    SMore x -> return x
-
+  
   where
-  rjobs= getDBRef "Jobs"
 
-  -- if slast eliminar , 
-  -- pending: LX vaciarlo para que no entre por ahi? quiza. vale cuando el log no atraviesa el comando, como teleport
-  remove lc= liftIO $ atomically $ do
-        Jobs processing pending <- readDBRef rjobs `onNothing` return (Jobs [][])
-        writeDBRef rjobs $ Jobs processing $ pending \\ [(localCon lc,localClos lc)]
+  remove conclos= liftIO $ atomically $ do
+        unsafeIOToSTM $ print "REMOVE"
+        Jobs  pending <- readDBRef rjobs `onNothing` return (Jobs [])
+        writeDBRef rjobs $ Jobs  $ pending \\ [conclos]
 
-runJobs= noTrans $ do
-    let rjobs = getDBRef "Jobs"
-    liftIO $ atomically $ do
-      Jobs processing pending <- readDBRef rjobs `onNothing` return (Jobs [] [])
-      writeDBRef rjobs $ Jobs (reverse pending) []
-    runJobs' rjobs
-    where
-    runJobs' rjobs=  do
-      jobs <- liftIO $ atomically $ do
-          Jobs processing pending <- readDBRef rjobs `onNothing` return (Jobs [] [])
-          when (not $ null processing) $ writeDBRef rjobs $ Jobs (tail processing) pending -- mparallel lo dará de alta de nuevo en otra lista de jobs paralela
-          return processing
-      tr ("runJobs",jobs)
-      forM_ jobs $ \(id,clos) -> restoreClosure id clos
-      tr "AFTER RUNJOBS"
-      -- when (not $ null jobs) $ do
-      --   let (id,clos)= head jobs
-      --   restoreClosure id clos
-      -- return()
+rjobs = getDBRef "__Jobs"
+
+runJobs= local $ fork $ do
+    Jobs  pending <-liftIO $ atomically $ readDBRef rjobs `onNothing` return (Jobs  [])
+    th <- liftIO myThreadId
+    liftIO $ print ("runJobs",pending,th )
+    (id,clos) <- choose pending
+    noTrans $  restoreClosure id clos
+
+
+main= keep $ initNode $ do
+  minput "test" "test" :: Cloud ()
+  minput "test2" "hello" :: Cloud ()
+  minput "test3" "hello" :: Cloud ()
+  minput "test4" "hello" :: Cloud ()
+

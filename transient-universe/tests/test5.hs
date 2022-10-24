@@ -12,6 +12,7 @@
 module Main where
 
 import Transient.Base
+import Transient.Console
 import Transient.Move.Internals
 import Transient.Move.Web hiding (minput)
 import qualified Transient.Move.Web as Web(minput)
@@ -93,14 +94,14 @@ main4 = do initTLS; keep $ initNode $ inputNodes <|> hi
 
 str2= "0001\r\n2\r\n0\r\n\r\n"
 
-main= keep $  do
-  setParseString "333"
-  string "333e" <|> return ""
+-- main= keep $  do
+--   setParseString "333"
+--   string "333e" <|> return ""
   
-  snap <- withParseString str2 $ do
-     dechunk |- int
+--   snap <- withParseString str2 $ do
+--      dechunk |- int
 
-  liftIO $ print snap
+--   liftIO $ print snap
   
 
 
@@ -126,12 +127,15 @@ data INTER= INTER deriving (Read,Show)
 instance Loggable INTER
 
 
-mainseq= keep $ initNode $ do
+
+
+
+main= keep $ initNode $ do
     id <- minput "id" "enter your id"
     (number::Int) <- minput "lock" "enter a lock number"
     tr ("LOCK NUMBER RECEIVED=", number)
     -- ventaja: el almacenamiento del lock number es automático
-    number' <- minput ("g " ++ id)  $ "guess " ++ id ++ " number"
+    number' <- minput ("g" ++ id)  $ "guess " ++ id ++ " number"
     tr ("GUESS NUMBER RECEIVED=", number')
 
     minput "" (if number== number' then "YES" else "NO") :: Cloud()

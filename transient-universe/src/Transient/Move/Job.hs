@@ -12,6 +12,7 @@ import Control.Applicative
 import Data.List
 
 
+
 data Jobs= Jobs{pending :: [(Int,BC.ByteString)]}  deriving (Read,Show)
 instance TC.Indexable Jobs where key _= "__Jobs"
 
@@ -19,31 +20,32 @@ instance TC.Indexable Jobs where key _= "__Jobs"
 -- when the program is restarted by `initNode` as a job.
 --
 -- if the thread and all his children becomes inactive, the job is removed and the list of result are returned
+-- https://gitter.im/Transient-Transient-Universe-HPlay/Lobby?at=6317a1c49d3c186299eb6db3
 job mx = do
   this@(idSession,_) <- local $ do
     idSession <- fromIntegral <$> genPersistId
     log <- getLog <|> error "job: no log"
-    let this = (idSession,BC.pack $ show $ hashClosure log + 10000000) -- es la siguiente closure
+    let this = (idSession,BC.pack $ show $ hashClosure log + hashExec) -- es la siguiente closure
 
-    Jobs  pending <- liftIO $ atomically $ readDBRef rjobs `onNothing` return (Jobs[])
-    liftIO $ print ("creating job",this)
-    liftIO $ atomically $ writeDBRef rjobs $ Jobs $ this:pending
+    liftIO $ atomically $ do
+       Jobs  pending <- readDBRef rjobs `onNothing` return (Jobs[])
+    -- liftIO $ print ("creating job",this)
+       writeDBRef rjobs $ Jobs $ this:pending
     return this
 
-  local $ do
-      (clos,_)<- setCont Nothing idSession 
-      liftIO $ print $ localClos clos
+  local $ setCont Nothing idSession  >> return()
+      -- liftIO $ print $ localClos clos
 
   rs <- local $ collect 0 $ runCloud mx
   
   local $ remove this -- snd $ head rs
-  return $  rs
+  return rs
 
   
   where
 
   remove conclos= liftIO $ atomically $ do
-        unsafeIOToSTM $ print "REMOVE"
+        -- unsafeIOToSTM $ print "REMOVE"
         Jobs  pending <- readDBRef rjobs `onNothing` return (Jobs [])
         writeDBRef rjobs $ Jobs  $ pending \\ [conclos]
 

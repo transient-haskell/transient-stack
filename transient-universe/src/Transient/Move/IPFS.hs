@@ -105,7 +105,7 @@ lockuptabledef= "dappflowlockup"
 --
 -- > program -p start/localhost/8080/ipnsid/{IPNS}
 --
--- The progran also look for the data by inspecting the local IPNS identifier "dappflowlockup"
+-- By defaault, the progran look for the data by inspecting the local IPNS identifier "dappflowlockup"
 
 chooseIPFS =  
   getIPFSid 
@@ -117,7 +117,7 @@ chooseIPFS =
     
   where
   fromOption= do
-    option1 ("ipns" :: String) "give the IPNS key name of the program data"
+    option1 ("ipns" :: String) "give the IPNS name of the key for the program data"
     input (const True) "enter ipns name: "
 
   getIPFSid= do

@@ -97,21 +97,19 @@ getNodeParams  =
           liftIO $ createNode host port
          <|> getCookie
          <|> commit
-#ifndef ghcjs_HOST_OS
-         <|> optionEndpoints
-#endif         
+      
     where
       
     commit= do
-                    option "save" "commit the current execution state"
-                    liftIO $ syncCache
-                    empty
+      option "save" "commit the current execution state"
+      liftIO $ syncCache
+      empty
     getCookie= do
-        if isBrowserInstance then return() else do
-          option "cookie" "set the cookie"
-          c <- input (const True) "cookie: "
-          liftIO $ writeIORef rcookie  c
-        empty
+      if isBrowserInstance then return() else do
+         option "cookie" "set the cookie"
+         c <- input (const True) "cookie: "
+         liftIO $ writeIORef rcookie  c
+      empty
 #endif
     
 initNodeDef :: Loggable a => String -> Int -> Cloud a -> TransIO a
@@ -180,31 +178,7 @@ inputNodes= onServer $ do
              liftIO $ mapM  (\(i,n) -> do putStr (show i); putChar('\t'); print n) $ zip [0..] nodes
           empty
      
--- | show the URL that may be called to access that functionality within a program 
-showURL= do 
-      --  idConn <- (idConn <$> getState) <|> return 0
-      --  log <- getLog
-      --  (Closure closRemote,_) <- getIndexData idConn `onNothing` return (Closure 0,[0]::[Int])
-       let closRemote= 0
-       --get remoteclosure
-       log <- getLog --get path 
-       n <- getMyNode
-       liftIO $ do
-           putStr  "'http://"
-           putStr $ nodeHost n
-           putStr ":"
-           putStr $show $ nodePort n
-           putStr "/"
-           putStr $ show 0 
-           putStr "/"
-           putStr $ show 0 -- $ hashClosure log
-           putStr "/"
-           putStr $ show 0 
-           putStr "/"
-           putStr $ show  closRemote
-           putStr "/"
-           BS.putStr $ toLazyByteString $ toPath $ fulLog log
-           putStrLn "'"
+
 
        
 -- | executes the application in the server and the Web browser.
@@ -244,12 +218,18 @@ initWebApp node app=  do
                     else return serverNode
     
     runCloud $ do
-        listen mynode <|> onAll (do c <- getState; firstCont >> receive c Nothing 0) <|> return()
+        listen mynode <|> onAll (do c <- getState; firstCont ; receive c Nothing 0) <|> return()
 
         serverNode <- onAll getWebServerNode
         wormhole' serverNode $ do 
 
-            r <- app -- ;(minput "" "end" :: Cloud())
+            r <-   
+#ifndef ghcjs_HOST_OS
+                 local optionEndpoints  
+#else
+                 local empty
+#endif   
+                   <|> app -- ;(minput "" "end" :: Cloud())
             return r
 
          
