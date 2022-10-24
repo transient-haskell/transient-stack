@@ -39,12 +39,12 @@
 module Transient.Logged(
 Loggable(..), logged, received, param, getLog, exec,wait, emptyLog,
 
-#ifndef ghcjs_HOST_OS
- suspend, checkpoint, rerun, restore,
-#endif
+-- #ifndef ghcjs_HOST_OS
+--  suspend, checkpoint, rerun, restore,
+-- #endif
 
 Log(..),logs, toPath,toPathFragment, toPathLon, getEnd, joinlog,substLast,substwait, dropFromIndex,recover, (<<),(<<-), LogData(..),LogDataElem(..),  toLazyByteString, byteString, lazyByteString, Raw(..)
-) where
+,hashExec) where
 
 import Data.Typeable
 import Data.Maybe
@@ -144,17 +144,16 @@ instance Loggable a => Loggable (StreamData a) where
      sdone = symbol "SDone"  >> return SDone
      serror= symbol "SError/" >> (SError <$> deserialize)
 
-instance Loggable () --where
-  -- serialize= mempty
-  -- deserialize= return()
+instance Loggable ()  where
+  serialize _=  "u"
+  deserialize= tChar 'u' >> return ()
 
 instance Loggable Bool where 
   serialize b= if b then "t" else "f"
   deserialize = withGetParseString $ \s -> do
             let h= BS.head s
                 tail=  BS.tail s
-            if BS.head tail /= '/' then empty else
-              if h== 't' then return (True,tail)  else if h== 'f' then return (False, tail) else empty 
+            if h== 't' then return (True,tail)  else if h== 'f' then return (False, tail) else empty 
 
 -- instance {-# OVERLAPPING #-} Loggable String where
   -- serialize s= byteString $ BSS.pack s
@@ -521,7 +520,7 @@ toPathLon (LD x)= toPathlon' x
 toPathlon' [] = mempty
 toPathlon' (LE b:rest)= b <> toPathlon' rest
 
-toPathlon' [(LX (LD [LE _]))]= byteString "e/" 
+-- toPathlon' [(LX (LD [LE _]))]= byteString "e/" 
 
 toPathlon' (LX x:[])= byteString "e/" <> toPathLon  x
 toPathlon' (LX x: b)= byteString "e/" <> toPathLon  x  <> toPathlon' (tail b)
@@ -580,95 +579,95 @@ substwait ld build = fromJust $ substwait1 ld build
 #ifndef ghcjs_HOST_OS
 
 
--- | Reads the saved logs from the @logs@ subdirectory of the current
--- directory, restores the state of the computation from the logs, and runs the
--- computation.  The log files are maintained.
--- It could be used for the initial configuration of a program.
-rerun :: String -> TransIO a -> TransIO a
-rerun path proc = do
-     liftIO $ do
-         r <- doesDirectoryExist path
-         when (not r) $ createDirectory  path
-         setCurrentDirectory path
-     restore' proc False
+-- -- | Reads the saved logs from the @logs@ subdirectory of the current
+-- -- directory, restores the state of the computation from the logs, and runs the
+-- -- computation.  The log files are maintained.
+-- -- It could be used for the initial configuration of a program.
+-- rerun :: String -> TransIO a -> TransIO a
+-- rerun path proc = do
+--      liftIO $ do
+--          r <- doesDirectoryExist path
+--          when (not r) $ createDirectory  path
+--          setCurrentDirectory path
+--      restore' proc False
 
 
-logs= "logs/"
+-- logs= "logs/"
 
--- | Reads the saved logs from the @logs@ subdirectory of the current
--- directory, restores the state of the computation from the logs, and runs the
--- computation.  The log files are removed after the state has been restored.
---
-restore :: TransIO a -> TransIO a
-restore   proc= restore' proc True
+-- -- | Reads the saved logs from the @logs@ subdirectory of the current
+-- -- directory, restores the state of the computation from the logs, and runs the
+-- -- computation.  The log files are removed after the state has been restored.
+-- --
+-- restore :: TransIO a -> TransIO a
+-- restore   proc= restore' proc True
 
 -- >>> deserializePure (BS.pack "e/") :: Maybe(LD,BS.ByteString)
 -- Just (LD [LE e/],"")
 --
 
-restore' proc delete= do
-     liftIO $ createDirectory logs  `catch` (\(e :: SomeException) -> return ())
-     list <- liftIO $ getDirectoryContents logs
-                 `catch` (\(e::SomeException) -> return [])
-     if null list || length list== 2 then proc else do
-         let list'= filter ((/=) '.' . head) list
-         file <- choose  list'
+-- restore' proc delete= do
+--      liftIO $ createDirectory logs  `catch` (\(e :: SomeException) -> return ())
+--      list <- liftIO $ getDirectoryContents logs
+--                  `catch` (\(e::SomeException) -> return [])
+--      if null list || length list== 2 then proc else do
+--          let list'= filter ((/=) '.' . head) list
+--          file <- choose  list'
 
-         log <-  liftIO $ BS.readFile (logs++file)
-         -- 
-         setData Log{recover= True,fulLog= LD[LE $ lazyByteString log], hashClosure= 0}
-         setParseString log
-         when delete $ liftIO $ remove $ logs ++ file
-         proc
-     where
-     -- read'= fst . head . reads1
+--          log <-  liftIO $ BS.readFile (logs++file)
+--          -- 
+--          setData Log{recover= True,fulLog= LD[LE $ lazyByteString log], hashClosure= 0}
+--          setParseString log
+--          when delete $ liftIO $ remove $ logs ++ file
+--          proc
+--      where
+--      -- read'= fst . head . reads1
 
-     remove f=  removeFile f `catch` (\(e::SomeException) -> remove f)
-
-
-
--- | Saves the logged state of the current computation that has been
--- accumulated using 'logged', and then 'exit's using the passed parameter as
--- the exit code. Note that all the computations before a 'suspend' must be
--- 'logged' to have a consistent log state. The logs are saved in the @logs@
--- subdirectory of the current directory. Each thread's log is saved in a
--- separate file.
---
-suspend :: Typeable a =>  a -> TransIO a
-suspend  x= do
-   log <- getLog
-   if (recover log) then return x else do
-        logAll  $ fulLog log
-        exit x
+--      remove f=  removeFile f `catch` (\(e::SomeException) -> remove f)
 
 
 
--- | Saves the accumulated logs of the current computation, like 'suspend', but
--- does not exit.
-checkpoint :: TransIO ()
-checkpoint = do
-   log <- getLog
-   if (recover log) then return () else logAll  $ fulLog log
+-- -- | Saves the logged state of the current computation that has been
+-- -- accumulated using 'logged', and then 'exit's using the passed parameter as
+-- -- the exit code. Note that all the computations before a 'suspend' must be
+-- -- 'logged' to have a consistent log state. The logs are saved in the @logs@
+-- -- subdirectory of the current directory. Each thread's log is saved in a
+-- -- separate file.
+-- --
+-- suspend :: Typeable a =>  a -> TransIO a
+-- suspend  x= do
+--    log <- getLog
+--    if (recover log) then return x else do
+--         logAll  $ fulLog log
+--         exit x
 
-logAll :: LogData -> TransIO ()
-logAll log= liftIO $do
-        newlogfile <- (logs ++) <$> replicateM 7 (randomRIO ('a','z'))
-        logsExist <- doesDirectoryExist logs
-        when (not logsExist) $ createDirectory logs
-        BS.writeFile newlogfile $ toLazyByteString $ serialize log
-      -- :: TransIO ()
-#else
-rerun :: TransIO a -> TransIO a
-rerun = const empty
 
-suspend :: TransIO ()
-suspend= empty
 
-checkpoint :: TransIO ()
-checkpoint= empty
+-- -- | Saves the accumulated logs of the current computation, like 'suspend', but
+-- -- does not exit.
+-- checkpoint :: TransIO ()
+-- checkpoint = do
+--    log <- getLog
+--    if (recover log) then return () else logAll  $ fulLog log
 
-restore :: TransIO a -> TransIO a
-restore= const empty
+-- logAll :: LogData -> TransIO ()
+-- logAll log= liftIO $do
+--         newlogfile <- (logs ++) <$> replicateM 7 (randomRIO ('a','z'))
+--         logsExist <- doesDirectoryExist logs
+--         when (not logsExist) $ createDirectory logs
+--         BS.writeFile newlogfile $ toLazyByteString $ serialize log
+--       -- :: TransIO ()
+-- #else
+-- rerun :: TransIO a -> TransIO a
+-- rerun = const empty
+
+-- suspend :: TransIO ()
+-- suspend= empty
+
+-- checkpoint :: TransIO ()
+-- checkpoint= empty
+
+-- restore :: TransIO a -> TransIO a
+-- restore= const empty
 
 #endif
 
@@ -689,6 +688,10 @@ emptyLog= Log False  (LD [])  0
 -- discarded.
 --
 
+hashExec= 10000000
+hashWait= 100000
+hashDone= 1000
+
 logged :: Loggable a => TransIO a -> TransIO a
 logged mx = do
   indent
@@ -700,8 +703,11 @@ logged mx = do
   outdent
   return r
   where
-  res=do
+  res= do
         log <- getLog
+
+    -- if typeOf res == typeOf () then  (if recover log then return (unsafeCoerce ()) else unsafeCoerce mx)
+    --   else do
         -- tr ("BUILD inicio", toPath $ fulLog log)
 
         let full= fulLog log
@@ -722,10 +728,10 @@ logged mx = do
 
         let fullexec=   full <> exec
 
-        setData log{fulLog= fullexec,{- fromCont= False-} hashClosure= hashClosure log + 1000}
-        r <-(if not $ BS.null rest -- recover log 
+        setData log{fulLog= fullexec, hashClosure= hashClosure log + hashDone}
+        r <-(if not $ BS.null rest  
                then do tr "LOGGED RECOVERIT"; recoverIt 
-               else do tr "LOGGED EXECUTING"; mx)  <** modifyData' (\log ->  log{fulLog=fulLog log <<- wait,hashClosure=hashClosure log + 100000}) emptyLog
+               else do tr "LOGGED EXECUTING"; mx)  <** modifyData' (\log ->  log{fulLog=fulLog log <<- wait,hashClosure=hashClosure log + hashWait}) emptyLog
                             
                             -- when   p1 <|> p2, to avoid the re-execution of p1 at the
                             -- recovery when p1 is asynchronous or  empty
@@ -740,11 +746,11 @@ logged mx = do
 
         if BS.null rest && recoverAfter ==True  then do -- XXX eliminar fromCont
             tr ("SUBLAST", "fulLog log'",fulLog log', "add", add,"sublast",substwait(fulLog log')  add)
-            setData $ Log{recover=False,fulLog= substwait(fulLog log')  add, hashClosure=hashClosure log +10000000}
+            setData $ Log{recover=False,fulLog= substwait(fulLog log')  add, hashClosure=hashClosure log + hashExec}
 
         else  do
             tr ("ADDLOG", "fulexec",fullexec,fullexec <<- add)  
-            setData $ Log{recover=True, {-fromCont= False,-} fulLog= fullexec <<- add, hashClosure= hashClosure log +10000000}
+            setData $ Log{recover=True, {-fromCont= False,-} fulLog= fullexec <<- add, hashClosure= hashClosure log +hashExec}
 
 
         return r
