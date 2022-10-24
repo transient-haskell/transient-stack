@@ -1771,8 +1771,8 @@ undoCut ::  TransientIO ()
 undoCut = backCut ()
 
 -- | Run the action in the first parameter and register the second parameter as
--- the undo action. When 'back' initiates te backtrack, the second parameter is called
---
+-- the action to be performed in case of backtracking. When 'back' initiates the backtrack, this second parameter is called
+-- An `onBack` action can use `forward` to stop the backtracking process and resume to execute forward. 
 {-# NOINLINE onBack #-}
 onBack :: (Typeable b, Show b) => TransientIO a -> ( b -> TransientIO a) -> TransientIO a
 onBack ac bac = registerBack (typeof bac) $ Transient $ do
@@ -1829,7 +1829,7 @@ registerUndo f= registerBack ()  f
 --  see https://gitter.im/Transient-Transient-Universe-HPlay/Lobby?at=5ef46626e0e5673398d33afb
 --
 -- | For a given undo track type, stop executing more backtracking actions and
--- resume normal execution in the forward direction. Used inside an undo
+-- resume normal execution in the forward direction. Used inside an `onBack`
 -- action.
 --
 forward :: (Typeable b, Show b) => b -> TransIO ()
@@ -1847,10 +1847,9 @@ retry= forward ()
 
 
 
--- | Start the undo process for a given undo track identifier type. Performs all the undo
--- actions registered for that type in reverse order. An undo action can use
--- 'forward' to stop the undo process and resume forward execution. If there
--- are no more undo actions registered, execution stop
+-- | Start the backtrackng process for a given backtrack type. Performs all the `onBack`
+-- actions registered for that type in reverse order. If there
+-- are no more `onBack`  actions registered, the execution is stopped
 --
 back :: (Typeable b, Show b) => b -> TransIO a
 back reason =  do
@@ -1887,7 +1886,7 @@ backStateOf reason= Backtrack (Nothing `asTypeOf` (Just reason)) []
 data BackPoint a = BackPoint (IORef [a -> TransIO()])
 
 -- | a backpoint is a location in the code where callbacks can be installed and will be called when the backtracing pass trough that point.
--- Normally used for exceptions.
+-- Normally used for exceptions.  
 backPoint :: (Typeable reason,Show reason) => TransIO (BackPoint reason)
 backPoint = do
     point <- liftIO $ newIORef  []
@@ -2051,9 +2050,12 @@ checkFinalize v=
 ------ exceptions ---
 --
 -- | Install an exception handler. Handlers are executed in reverse (i.e. last in, first out) order when such exception happens in the
--- continuation. Note that multiple handlers can be installed for the same exception type.
+-- rest of the code below. Note that multiple handlers can be installed and called for the same exception type. `continue` will stop 
+-- the backtracking and resume the excecution forward.
 --
--- The semantic is, thus, very different than the one of `Control.Exception.Base.onException`
+-- The semantic is, thus, different than the one of `Control.Exception.Base.onException`
+-- onException also catches exceptions initiated by Control.Exception primitives, Sistem.IO.error etc. 
+-- It is compatible with ordinary Haskell exceptions.
 onException :: Exception e => (e -> TransIO ()) -> TransIO ()
 onException exc= return () `onException'` exc
 
@@ -2085,6 +2087,7 @@ exceptionPoint = do
 onExceptionPoint :: Exception e => BackPoint e -> (e -> TransIO()) -> TransIO ()
 onExceptionPoint= onBackPoint
 
+-- | mask exceptions while the argument is excuted
 tmask proc= Transient $ do
   st <-get
   (mx,st') <- liftIO $ uninterruptibleMask_ $ runTransState st proc
@@ -2092,6 +2095,10 @@ tmask proc= Transient $ do
   put st'
   return mx
 
+-- | Binary version of `onException`.  Used mainly for expressing how a resource is treated when an exception happens in the first argument 
+-- OR in the rest of the code below. This last should be remarked. It is the semantic of `onBack` but restricted to exceptions.
+--
+-- If you want to manage exceptions only in the first argument and have the semantics of `catch` in transient, use `catcht`
 onException' :: Exception e => TransIO a -> (e -> TransIO a) -> TransIO a
 onException' mx f= onAnyException mx $ \e -> do
             --return () !>  "EXCEPTION HANDLER EXEC" 
@@ -2195,8 +2202,8 @@ catcht' mx exc= do
      mx
        <*** do setState exState
 
--- | throw an exception in the Transient monad
--- there is a difference between `throw` and `throwt` since the latter preserves the state, while the former does not.
+-- | throw an exception in the Transient monad keeping the state variables. It initiates the backtraking for the exception of this type.
+-- there is a difference between `throw` (from Control.Exception) and `throwt` since the latter preserves the state, while the former does not.
 -- Any exception not thrown with `throwt`  does not preserve the state.
 --
 -- > main= keep  $ do
