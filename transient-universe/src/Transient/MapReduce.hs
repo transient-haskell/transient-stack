@@ -52,7 +52,7 @@ import Data.List hiding (delete, foldl')
 import Control.Exception
 import Control.Concurrent
 --import Data.Time.Clock
-import Network.HTTP
+-- import Network.HTTP
 import Data.TCache hiding (onNothing)
 import Data.TCache.Defs hiding (serialize,deserialize)
 

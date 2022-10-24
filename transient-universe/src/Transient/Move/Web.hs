@@ -10,7 +10,7 @@
 
 #ifndef ghcjs_HOST_OS
 
-module Transient.Move.Web  (minput,out,public,published,ToRest,POSTData(..),HTTPReq(..)
+module Transient.Move.Web  (minput,out,public,published,showURL,ToRest,POSTData(..),HTTPReq(..)
  ,getSessionState,setSessionState,newSessionState,rawHTTP,serializetoJSON,deserializeJSON,IsCommand,optionEndpoints,getCookie,setCookie) where
 
 import Control.Applicative
@@ -58,6 +58,7 @@ instance Loggable InputData
 
 data Context = Context Int (M.Map String BS.ByteString) deriving (Read, Show, Typeable)
 
+
 instance TC.Indexable Context where key (Context k _) = show k
 
 -- newtype URL= URL BS.ByteString  deriving (Read, Show, Typeable) -- for endpoint urls
@@ -85,6 +86,32 @@ instance Semigroup HTTPReq where
       (c <> c')
       (d <> d')
 
+{-
+usar path como identificador?
+
+idsession-ctx ahora se genera antes de conocer la cookie
+  se mete en el state
+  como se maneja la cookie?
+    mirar cookie
+    si tiene cambiar idsesion y ctx?
+    o cambiar la cookie siempre?
+    si no tiene cookie
+  No se crea un context previo
+  No se manda ID en la URL
+
+  pero cuando se quiere entrar en la sesion de otro
+    necesita un ID
+
+  la sesión del que entra es la cookie
+  la sesion actual es la del State
+  
+
+  Se necesita de todas fromas pasar ids de closure s
+
+  la primera entrada tiene que ser generica, sin session id
+  minputSessionless mete session 0
+    siguiente minput; si sesssion 0, generar nueva sesion.
+-}
 minput :: (Loggable a, ToRest a,ToJSON b) => String -> b -> Cloud a
 minput ident msg' = response
   where
@@ -98,12 +125,23 @@ minput ident msg' = response
         let closLocal = hashClosure log
         closdata@(Closure sess closRemote _) <- getIndexData (idConn conn) `onNothing` return (Closure 0 "0" [])
         mynode <- getMyNode
-        ctx@(Context idcontext _) <- 
-          getState <|> do
-            ctx <- Context <$> genSessionId <*> return (M.empty)
-            tr("CONTEXR from 0",ctx)
-            setState ctx
-            return ctx
+        ctx@(Context idcontext _) <-  do
+          mc <- getData
+          case mc of
+            Nothing -> return $ Context 0 (M.empty)
+            Just (Context 0 x) ->  do
+              ctx <- Context <$>  logged genSessionId <*> return x
+              tr("CONTEXR from 0",ctx)
+              setState ctx
+              return ctx
+            Just ct -> return ct
+
+          -- getState <|> do
+          --   ctx <- Context <$>  logged genSessionId <*> return (M.empty)
+          --   tr("CONTEXR from 0",ctx)
+          --   setState ctx
+          --   return ctx
+
         let idSession = idcontext
         let urlbase =
               str "http://" <> str (nodeHost mynode) <> str ":" <> intt (nodePort mynode)
@@ -161,7 +199,7 @@ minput ident msg' = response
       liftIO $ atomically $ writeDBRef (getDBRef $ show idcontext) ctx -- store the state, the id will be in the URL
       Endpoints endpts <- getEndpoints
       let nend= (str ident, httpreq)
-      setRState $ Endpoints  $ M.insert (str ident) httpreq endpts -- (nend: (endpts \\ [nend]) )
+      setRState $ Endpoints  $ M.insert (str ident) httpreq endpts 
       tr ("ADDED ENDPOINT",ident,httpreq)
       (idcontext' :: Int, result) <- do
         pstring <- giveParseString
@@ -204,7 +242,7 @@ minput ident msg' = response
             tr ("else",ident)
             logged $ error "insuficient parameters 3" -- read the response
             -- maybe another user from other context continues the program
-      tr ("MINPUT RESULT",idcontext',result)
+      ttr ("MINPUT RESULT",idcontext',result)
       mncontext <- recoverContext idcontext'
       when (isJust mncontext) $ setState (fromJust mncontext :: Context)
       return result `asTypeOf` return (type1 response)
@@ -259,12 +297,12 @@ published k=  local $ do
     tr ("PUBLISHED", inputdatas)
     
     mcommand <- getData :: TransIO (Maybe IsCommand)
-    -- do not continue if not is in command mode or there is no connection
     if (isNothing mcommand) 
       then do foldr (<|>) empty $ map (\(InputData id msg url) ->  sendOption msg url) inputdatas; empty
       else do
             foldr (<|>) empty $ map (\(InputData id msg url) ->  optionl id  (BS.unpack msg <> "\t\"endpt " <> id <> "\" for endpoint details")  url) inputdatas
     where
+    -- for console interaction
     optionl id msg url = do
       Endpoints endpts <- getEndpoints
       setRState $ Endpoints $ M.insert (str id) url endpts -- ((str id, url): endpts)
@@ -285,8 +323,37 @@ published k=  local $ do
 
 newtype Endpoints= Endpoints (M.Map BS.ByteString HTTPReq)
 getEndpoints= getRState <|> return (Endpoints M.empty)
-           
 
+-- | show the URL that may be called to access that functionality within a program 
+showURL= do 
+      --  idConn <- (idConn <$> getState) <|> return 0
+      --  log <- getLog
+      --  (Closure closRemote,_) <- getIndexData idConn `onNothing` return (Closure 0,[0]::[Int])
+       let closRemote= 0
+       --get remoteclosure
+       log <- getLog --get path 
+       n <- getMyNode
+       liftIO $ do
+           putStr  "'http://"
+           putStr $ nodeHost n
+           putStr ":"
+           putStr $show $ nodePort n
+           putStr "/"
+           putStr $ show 0 
+           putStr "/"
+           putStr $ show 0 -- $ hashClosure log
+           putStr "/"
+           putStr $ show 0 
+           putStr "/"
+           putStr $ show  closRemote
+           putStr "/"
+           BS.putStr $ toLazyByteString $ toPath $ fulLog log
+           putStrLn "'"    
+
+{-
+give URL for a new session or the current session?
+  new ever? current session are not given by the console
+-}
 optionEndpoints = do
   newRState $ Endpoints M.empty
   option ("endpt" :: String) "info about a endpoint"
@@ -313,9 +380,7 @@ checkComposeJSON conn = do
     Nothing -> do
       onWaitThreads $ const $ msend conn $ str "1\r\n]\r\n0\r\n\r\n"
       setRState InitSendSequence
-      cookies <- getCookiesStr
-      liftIO $ print cookies
-      msend conn cookies
+      sendCookies conn
       msend conn "\r\n1\r\n[\r\n"
       delState $ Cookies []
 
@@ -323,22 +388,36 @@ checkComposeJSON conn = do
   
 str = BS.pack
 
+----
+
 newtype Cookies= Cookies  [(BS.ByteString,BS.ByteString)]
 
 getCookies= getState <|> return (Cookies [])
 
-getCookiesStr= do
-  Cookies cs <- getCookies
-  return $  BS.concat (map (\(n,v)->  "Set-Cookie: " <> n <>"="<> v <> "\r\n" ) cs) 
-               
-setCookie name valueandparams=  do
+sendCookies conn= do
+      cookies <- getCookiesStr
+      msend conn cookies
+      
+  where
+  getCookiesStr= do
+    Cookies cs <- getCookies
+    setState $ Cookies[]
+    return $  BS.concat (map (\(n,v)->  "Set-Cookie: " <> n <>"="<> v <> "\r\n" ) cs) 
+
+-- | set a cookie in the browser.
+-- Example
+
+-- > setCookie "<cookie-name>" "<cookie-value>; Domain=<domain-value>; Secure; HttpOnly"
+-- 
+-- See https://developer.mozilla.org/es/docs/Web/HTTP/Headers/Set-Cookie for cookie options
+setCookie name valueandparams= do
   Cookies cs <- getCookies
   setState $ Cookies $ (name,valueandparams):cs
 
 getCookie name= do
   HTTPHeaders _ headers :: HTTPHeaders <- getState <|>  return (HTTPHeaders undefined [])
   liftIO $ print headers
-  let receivedCookie= lookup "Cookie:" headers
+  let receivedCookie= lookup "Cookie" headers
 
   liftIO $ print ("cookie", receivedCookie)
   case receivedCookie of
@@ -353,18 +432,30 @@ getCookie name= do
                 val <- tTakeWhile' (/=';')
                 liftIO $ print (name',val)
                 if name'== name then return $ Just val else search
-
+{-
+cookies  sesion de programaa - sesion remota
+-}
 sendOption msg req = do
   Context id _ <- getState <|> error "sendOption:no minput context, use `minput`"
-  url' <- withParseString (requrl req) $ do
-    s <- tTakeUntilToken "/0/0/"
-    tDropUntil (\s -> BS.head s == '$')
-    s' <- giveParseString
-    return $ s <> "/0/0/" <> intt id <> "/" <> s'
-
+  url' <- withParseString (requrl req) $ short id <|> long id
   sendFragment $ "{ \"msg\":\"" <>  msg <> "\", \"req\":" <> encode (req {requrl = url'}) <> "}"
+
   where
-    intt = BS.pack . show
+  long id= do
+    s <- tTakeUntilToken "/T" 
+    ses <-tTakeUntilToken "/"
+    tDropUntilToken ("/")
+    rest <- giveParseString
+    return $ s <> "/T" <> ses <> "/" <>  intt id <> "/" <> rest
+
+  short id= do
+    s <- tTakeUntilToken "/S" -- "/0/0/"
+    ses <-tTakeUntilToken "/"
+    rest <- giveParseString
+    return $ s <> "/T" <> ses <> "/" <> intt id <> "/" <> rest
+
+  
+  intt = BS.pack . show
 
 -- | include JSON data in the response
 out :: ToJSON a => a -> TransIO ()
@@ -488,7 +579,7 @@ instance {-# OVERLAPPABLE #-}  (Default a, ToJSON a, Typeable a) => ToRest (POST
           q is= if is=='\"' then "\\\"" else mempty
 
 instance ToRest () where
-  toRest _ = return mempty
+  toRest _ = return $ mempty {requrl = "/u"}
 
 instance ToRest String where
   toRest _ = return $ mempty {requrl = "/$string"}
@@ -504,21 +595,14 @@ instance (ToRest a, ToRest b) => ToRest (a, b) where
   toRest x = toRest (fst x) <> toRest (snd x)
 
 instance (ToRest a, ToRest b, ToRest c) => ToRest(a,b,c) where
-    toRest x=  toRest (fst x) <>   toRest (snd x) <>  toRest (thr x)
-      where
-      fst (a,_,_)= a
-      snd (_,b,_)= b
-      thr (_,_,c)= c
+    toRest (a,b,c)=  toRest a <>   toRest b <>  toRest c
+
 
 instance (ToRest a, ToRest b,ToRest c,ToRest d) => ToRest(a,b,c,d) where
-    toRest x= toRest (fst x) <>  toRest (snd x) <>  toRest (thr x) <> toRest (frt x)
-      where
-      fst (a,_,_,_)= a
-      snd (_,b,_,_)= b
-      thr (_,_,c,_)= c
-      frt (_,_,_,d)= d
+    toRest (a,b,c,d)= toRest a <>  toRest b <>  toRest c <> toRest  d
 
-newtype POSTData a = POSTData a deriving (ToJSON, FromJSON, Typeable)
+
+newtype POSTData a = POSTData a deriving (ToJSON, FromJSON, Typeable)  -- POSTData is recovered from POST HTTP data
 
 instance (Loggable a, ToJSON a, FromJSON a) => Loggable (POSTData a) where
   serialize (POSTData x)= serialize x
@@ -543,20 +627,12 @@ instance (ToJSON a, Default a, Typeable a, ToRest a, ToJSON b, Default b,Typeabl
 
 pfrag s = return $ mempty {reqbody = s}
 
--- instance (ToRest a, ToRest b, ToRest c) => ToRest(a,b,c) where
---     toRest (POSTData x)=   pfrag "[" <> toRest (POSTData $ fst x)  <> pfrag "," <>  toRest (POSTData $ snd x) <> pfrag "," <> toRest (POSTData $ thr x) <> pfrag "]"
---       where
---       fst (a,_,_)= a
---       snd (_,b,_)= b
---       thr (_,_,c)= c
+instance (ToRest a, Default a, Typeable a, ToJSON a, ToRest b, Default b, Typeable b, ToJSON b, ToRest c,Default c, Typeable c,ToJSON c) => ToRest (POSTData (a, b, c)) where
+  toRest (POSTData (a,b,c))=   pfrag "[" <> toRest (POSTData a)  <> pfrag "," <>  toRest (POSTData b) <> pfrag "," <> toRest (POSTData c) <> pfrag "]"
 
--- instance (ToRest a, ToRest b,ToRest c,ToRest d) => ToRest(a,b,c,d) where
---     toRest x= toRest (fst x) <>  toRest (snd x) <>  toRest (thr x) <> toRest (frt x)
---       where
---       fst (a,_,_,_)= a
---       snd (_,b,_,_)= b
---       thr (_,_,c,_)= c
---       frt (_,_,_,d)= d
+
+instance (ToRest a, Default a, Typeable a, ToJSON a, ToRest b, Default b, Typeable b, ToJSON b, ToRest c,Default c, Typeable c,ToJSON c,ToRest d,Default d, Typeable d,ToJSON d) => ToRest (POSTData (a, b, c,d)) where
+  toRest (POSTData (a,b,c,d))=   pfrag "[" <> toRest (POSTData a)  <> pfrag "," <>  toRest (POSTData b) <> pfrag "," <> toRest (POSTData c)  <> toRest (POSTData d) <>  pfrag "]"
 
 
 
