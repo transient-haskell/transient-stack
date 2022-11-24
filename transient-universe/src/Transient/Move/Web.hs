@@ -10,8 +10,8 @@
 
 #ifndef ghcjs_HOST_OS
 
-module Transient.Move.Web  (minput,out,public,published,showURL,ToRest,POSTData(..),HTTPReq(..)
- ,getSessionState,setSessionState,newSessionState,rawHTTP,serializetoJSON,deserializeJSON,IsCommand,optionEndpoints,getCookie,setCookie) where
+module Transient.Move.Web  (minput,out,public,published,showURL,ToRest(..),POSTData(..),HTTPReq(..)
+ ,getSessionState,setSessionState,newSessionState,rawHTTP,serializeToJSON,deserializeJSON,IsCommand,optionEndpoints,getCookie,setCookie) where
 
 import Control.Applicative
 import Control.Concurrent.MVar
@@ -151,9 +151,9 @@ minput ident msg' = response
                 -- </> intt sess
                 -- </> intt idcontext ::
                 -- BS.ByteString
-
+        
         params <- toRest $ type1 response
-
+        
         let httpreq = mempty {requrl = urlbase} <> params :: HTTPReq
         setState $ InputData ident msg httpreq
         connected log ctx idSession conn closLocal sess closRemote httpreq <|> commandLine conn log httpreq
@@ -501,13 +501,13 @@ genSessionId = liftIO $ do
   return $ if n < 0 then - n else n
 
 instance {-# OVERLAPPABLE #-} ToJSON a => Show a where
-  show = BS.unpack . toLazyByteString . serializetoJSON . toJSON
+  show = BS.unpack . toLazyByteString . serializeToJSON . toJSON
 
 instance FromJSON a => Read a where
   readsPrec _ _ = error "not implemented read for FromJSON class"
 
 instance {-# OVERLAPPABLE #-} (Typeable a, ToJSON a, FromJSON a) => Loggable a where
-  serialize = serializetoJSON
+  serialize = serializeToJSON
   deserialize = deserializeJSON
 
 class  Typeable a => ToRest a where
@@ -517,31 +517,72 @@ class  Typeable a => ToRest a where
     lowertype x = "$" <> BS.pack (map toLower (typeOfR x))
     typeOfR x = show $ typeOf x
 
-jsonType x=do 
-  -- si tipo empieza por(
-     -- es una tupla, cojer el tipo, cambiar ( por [, meter $ delante de los tokens, cambiar [Char] por string
-  let types = show $ typeOf x
-  withParseString (BS.pack types) $ tuple <|> list <|> single 
-  where
-  tuple=  parens $ "[" <> "$" <> type1  <> chainMany (<>) (comma <> "$" <> type1) <> "]"
-  list=  (sandbox (string "[Cha") >> single) <|> ("$list_of_" <>  (brackets $ "[" <> tTakeWhile (/= ']')) <> "]s")
-                                                                                    -- chainManyTill BS.cons anyChar (sandbox $ tChar ']')
-  single=  "$" <> (stringFix <$>  chainMany BS.cons (toLower <$> anyChar))
-  type1= stringFix <$> tTakeWhile (\c -> c /= ',' && c /= ')')  >>= varunique
-                       -- 
-                       -- chainManyTill BS.cons anyChar (sandbox $ tChar ',' <|> tChar ')')
 
-  
-  stringFix r
-    | BS.null r = r
-    | otherwise = if BS.head r == '[' then  "string" else  BS.map toLower r
 
-  
+
+
+instance ToRest () where
+  toRest _ = return $ mempty {requrl = "/u"}
+
+instance ToRest String where
+  toRest _ = return $ mempty {requrl = "/$string"}
+
+instance ToRest BS.ByteString where
+  toRest _ = return $ mempty {requrl = "/$string"}
+
+instance ToRest Int
+
+instance ToRest Integer
+
+instance ToRest a => ToRest [a] where
+  toRest xs= (return $ mempty {requrl = "["}) <> toRest ( f xs) <> (return $ mempty {requrl = "]"})
+    where
+    f :: [a] -> a
+    f= undefined
+
+instance (ToRest a, ToRest b) => ToRest (a, b) where
+  toRest x = toRest (fst x) <> toRest (snd x)
+
+instance (ToRest a, ToRest b, ToRest c) => ToRest(a,b,c) where
+    -- toRest (a,b,c)=  toRest a <>   toRest b <>  toRest c
+    toRest x=  toRest (fst x) <>   toRest (snd x) <>  toRest (trd x)
+      where
+      fst (x,_,_)= x
+      snd (_,x,_)= x
+      trd (_,_,x)= x
+
+
+instance (ToRest a, ToRest b,ToRest c,ToRest d) => ToRest(a,b,c,d) where
+    -- toRest (a,b,c,d)= toRest a <>  toRest b <>  toRest c <> toRest  d
+    toRest x=  toRest (fst x) <>   toRest (snd x)<>  toRest (trd x) <> toRest (fr x)
+      where
+      fst (x,_,_,_)= x
+      snd (_,x,_,_)= x
+      trd (_,_,x,_)= x
+      fr  (_,_,_,x)= x
+
+newtype POSTData a = POSTData a deriving (ToJSON, FromJSON, Typeable)  -- POSTData is recovered from POST HTTP data
+
+instance (Loggable a, ToJSON a, FromJSON a) => Loggable (POSTData a)  where
+  serialize (POSTData x)=  serializeToJSON x
+  deserialize =   POSTData <$> deserializeJSON 
+    
+
+-- instance ToRest (POSTData String) where
+--   toRest (POSTData s) = return mempty {reqbody = "$string"}
+
+-- instance ToRest (POSTData BS.ByteString) where
+--   toRest (POSTData s) = return mempty {reqbody = "$string"}
+
+-- instance ToRest (POSTData Int) where
+--   toRest x = return mempty {reqbody = lowertype x}
+
+-- instance ToRest (POSTData Integer) where
+--   toRest x = return mempty {reqbody = lowertype x}
+
+
 data Vars= Vars[BS.ByteString]
-varunique s= do
-  Vars vars <- getState <|> let v= Vars [] in setState v >> return v
-  if null $ filter (== s) vars then do setState $ Vars (s:vars); return s
-                                else varunique $ BS.snoc s 'x'
+
 
 instance {-# OVERLAPPABLE #-}  (Default a, ToJSON a, Typeable a) => ToRest (POSTData a) where
   toRest (POSTData x) = 
@@ -550,11 +591,36 @@ instance {-# OVERLAPPABLE #-}  (Default a, ToJSON a, Typeable a) => ToRest (POST
       pc <- process $ encode (def `asTypeOf` x)
       return $ mempty {reqtype = POST, reqbody = pc}
      <|> do
-       t <- jsonType x
+       t <- jsonType  x
        return mempty{reqtype=POST,reqbody= t}
-    where
 
-      process json = withParseString json $ do
+    where
+    varunique s= do
+      Vars vars <- getState <|> let v= Vars [] in setState v >> return v
+      if null $ filter (== s) vars then do setState $ Vars (s:vars); return s
+                                    else varunique $ BS.snoc s 'x'    
+
+    jsonType x=do 
+  -- si tipo empieza por(
+     -- es una tupla, cojer el tipo, cambiar ( por [, meter $ delante de los tokens, cambiar [Char] por string
+        let types = show $ typeOf x
+        withParseString (BS.pack types) $ tuple <|> list <|> single 
+        where
+        tuple=  parens $ "[" <> "$" <> type1  <> chainMany (<>) (comma <> "$" <> type1) <> "]"
+        list=  (sandbox (string "[Cha") >> single) <|> ("$list_of_" <>  (brackets $ tTakeWhile (/= ']')) <> "'s")
+                                                                                          -- chainManyTill BS.cons anyChar (sandbox $ tChar ']')
+        single=  "$" <> (stringFix <$>  chainMany BS.cons (toLower <$> anyChar))
+        type1= stringFix <$> tTakeWhile (\c -> c /= ',' && c /= ')')  >>= varunique
+                            -- 
+                            -- chainManyTill BS.cons anyChar (sandbox $ tChar ',' <|> tChar ')')
+
+        
+        stringFix r
+          | BS.null r = r
+          | otherwise = if BS.head r == '[' then  "string" else  BS.map toLower r
+
+
+    process json = withParseString json $ do
         sandbox $ tChar '{'
         BL.concat
           <$> withParseString
@@ -578,62 +644,25 @@ instance {-# OVERLAPPABLE #-}  (Default a, ToJSON a, Typeable a) => ToRest (POST
         where
           q is= if is=='\"' then "\\\"" else mempty
 
-instance ToRest () where
-  toRest _ = return $ mempty {requrl = "/u"}
-
-instance ToRest String where
-  toRest _ = return $ mempty {requrl = "/$string"}
-
-instance ToRest BS.ByteString where
-  toRest _ = return $ mempty {requrl = "/$string"}
-
-instance ToRest Int
-
-instance ToRest Integer
-
-instance (ToRest a, ToRest b) => ToRest (a, b) where
-  toRest x = toRest (fst x) <> toRest (snd x)
-
-instance (ToRest a, ToRest b, ToRest c) => ToRest(a,b,c) where
-    toRest (a,b,c)=  toRest a <>   toRest b <>  toRest c
-
-
-instance (ToRest a, ToRest b,ToRest c,ToRest d) => ToRest(a,b,c,d) where
-    toRest (a,b,c,d)= toRest a <>  toRest b <>  toRest c <> toRest  d
-
-
-newtype POSTData a = POSTData a deriving (ToJSON, FromJSON, Typeable)  -- POSTData is recovered from POST HTTP data
-
-instance (Loggable a, ToJSON a, FromJSON a) => Loggable (POSTData a) where
-  serialize (POSTData x)= serialize x
-  deserialize = POSTData <$> deserialize 
-    
-
--- instance ToRest (POSTData String) where
---   toRest (POSTData s) = return mempty {reqbody = "$string"}
-
--- instance ToRest (POSTData BS.ByteString) where
---   toRest (POSTData s) = return mempty {reqbody = "$string"}
-
--- instance ToRest (POSTData Int) where
---   toRest x = return mempty {reqbody = lowertype x}
-
--- instance ToRest (POSTData Integer) where
---   toRest x = return mempty {reqbody = lowertype x}
-
-
 instance (ToJSON a, Default a, Typeable a, ToRest a, ToJSON b, Default b,Typeable b,ToRest b) => ToRest (POSTData (a, b)) where
   toRest (POSTData x) = pfrag "[" <> toRest (POSTData $ fst x) <> pfrag "," <> toRest (POSTData $ snd x) <> pfrag "]"
 
 pfrag s = return $ mempty {reqbody = s}
 
 instance (ToRest a, Default a, Typeable a, ToJSON a, ToRest b, Default b, Typeable b, ToJSON b, ToRest c,Default c, Typeable c,ToJSON c) => ToRest (POSTData (a, b, c)) where
-  toRest (POSTData (a,b,c))=   pfrag "[" <> toRest (POSTData a)  <> pfrag "," <>  toRest (POSTData b) <> pfrag "," <> toRest (POSTData c) <> pfrag "]"
-
+  toRest (POSTData x)=   pfrag "[" <> toRest (POSTData $ fst x)  <> pfrag "," <>  toRest (POSTData $ snd x) <> pfrag "," <> toRest (POSTData $ trd x) <> pfrag "]"
+    where
+    fst (x,_,_)= x
+    snd (_,x,_)= x
+    trd (_,_,x)= x
 
 instance (ToRest a, Default a, Typeable a, ToJSON a, ToRest b, Default b, Typeable b, ToJSON b, ToRest c,Default c, Typeable c,ToJSON c,ToRest d,Default d, Typeable d,ToJSON d) => ToRest (POSTData (a, b, c,d)) where
-  toRest (POSTData (a,b,c,d))=   pfrag "[" <> toRest (POSTData a)  <> pfrag "," <>  toRest (POSTData b) <> pfrag "," <> toRest (POSTData c)  <> toRest (POSTData d) <>  pfrag "]"
-
+  toRest (POSTData x)=   pfrag "[" <> toRest (POSTData $ fst x)  <> pfrag "," <>  toRest (POSTData $ snd x) <> pfrag "," <> toRest (POSTData $ trd x)  <> toRest (POSTData $ fr x) <>  pfrag "]"
+      where
+      fst (x,_,_,_)= x
+      snd (_,x,_,_)= x
+      trd (_,_,x,_)= x
+      fr  (_,_,_,x)= x
 
 
 -- <|>  return (lowertype x))
@@ -641,11 +670,12 @@ instance (ToRest a, Default a, Typeable a, ToJSON a, ToRest b, Default b, Typeab
 
 -------------------------------  RAW HTTP client ---------------
 
-serializetoJSON :: ToJSON a => a -> Builder
-serializetoJSON = lazyByteString . encode
+serializeToJSON :: ToJSON a => a -> Builder
+serializeToJSON = lazyByteString . encode
 
 deserializeJSON :: FromJSON a => TransIO a
 deserializeJSON = do
+  tr ("BEFOFE DECODE")
   s <- jsElem
   tr ("decode", s)
 
@@ -654,7 +684,7 @@ deserializeJSON = do
     Left err -> empty
   where
     jsElem :: TransIO BS.ByteString -- just delimites the json string, do not parse it
-    jsElem = dropSpaces >> (jsonObject <|> array <|> atom)
+    jsElem = dropSpaces >> ( jsonObject <|> array <|> atom)
 
     atom = elemString
 
@@ -676,7 +706,7 @@ deserializeJSON = do
          tTakeWhile (\c -> c /= '}' && c /= ']' && c /= ',')
 
 instance {-# OVERLAPPING #-} Loggable Value where
-  serialize = serializetoJSON
+  serialize = serializeToJSON
   deserialize = deserializeJSON
 
 rawHTTP :: Loggable a => Node -> String -> TransIO a
