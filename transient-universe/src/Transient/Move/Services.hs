@@ -78,6 +78,7 @@ import Data.String
 import Data.Char
 import qualified Data.ByteString.Char8 as BSS
 import qualified Data.ByteString.Lazy.Char8 as BS
+import Data.Aeson(encode)
 
 #ifndef ghcjs_HOST_OS
 import System.Directory
@@ -93,13 +94,33 @@ import System.Process
 #endif 
 
 
-
 monitorService= [("service","monitor")
+                ,("type","HTTP")
                 ,("executable", "monitorService")
-                ,("package","https://github.com/transient-haskell/transient-universe")]
+                ,("nodehost","localhost")
+                ,("nodeport","3000")
+                ,("package","https://github.com/transient-haskell/transient-universe")
+                ,("HTTPstr","POST /returnInstances/S0 HTTP/1.0\r\n" <>
+                  "Host: localhost\r\n" <>
+                  "Content-Type: application/json\r\n\r\n"<>
+                  "$1")]
+
 
 
 monitorPort= 3000
+
+
+-- monitorHeader req body= [("service","monitor"), ("type","HTTP")
+--         ,("nodehost","localhost")
+--         ,("nodeport","5001")
+--         ,("HTTPstr",req <> " HTTP/1.1\r\nHost: $hostnode" <> 
+--             -- (if take 4 req/="POST" then "" else 
+--             "\r\nContent-Length: "<> 
+--             show (Prelude.length body) <>"\r\n\r\n" <> body)]
+
+-- requestInstances = monitorHeader "GET /api/v0/cat?arg=$1" ""
+
+-- callService  p= runCloud $ Services.callService monitorHeader p
 
 #ifndef ghcjs_HOST_OS
 
@@ -157,7 +178,7 @@ requestInstance service num=  loggedc $ do
                   startMonitor
                   
 
-       nodes <- callService'  monitorNode ("",service, num )
+       nodes <- callService  monitorService $ encode ("",service, num )
        local $ addNodes nodes                                                       -- !> ("ADDNODES",service)
        return nodes
        
@@ -339,11 +360,11 @@ callService service params = loggedc $ do
                  "HTTP" ->  service ++[("nodeport", "80")]
                  "HTTPS" -> service ++[("nodeport", "443")]
                  _ ->  service
-    node <-  initService  service'      --  !> ("callservice initservice", service)
+    node <- initService service'      --  !> ("callservice initservice", service)
 
     if take 4 type1=="HTTP" 
-      then callHTTPService node service' params
-      else callService'  node params        --    !> ("NODE FOR SERVICE",node)
+      then do onAll $ liftIO $ ttr "HHTP";callHTTPService node service' params
+      else do onAll $ liftIO $ ttr "serv";callService'  node params        --    !> ("NODE FOR SERVICE",node)
 #else
 callService
     :: (Loggable a, Loggable b)
@@ -390,6 +411,9 @@ callServiceFail  node params = local empty
 monitorNode= unsafePerformIO $ createNodeServ "localhost"
             (fromIntegral monitorPort)
             [monitorService]
+
+
+
 
 
 
@@ -569,10 +593,13 @@ runService' servDesc defPort servAll proc=  do
              
             setState conn
             return (mynode,serverNode)
-             
+          onAll $ liftIO $ print "LISTEN0"
+
           inputAuthorizations <|> return ()
 
-          listen mynode <|> return ()
+          -- listen mynode <|> return ()
+          listen mynode <|> onAll (do c <- getState; firstCont ; receive c Nothing 0) <|> return()
+          onAll $ liftIO $ print "LISTEN"
           return serverNode
     
           where

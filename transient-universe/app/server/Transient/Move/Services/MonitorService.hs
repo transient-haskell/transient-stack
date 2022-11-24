@@ -21,6 +21,8 @@ module Main where
 import Transient.Internals
 import Transient.Mailboxes
 import Transient.Logged
+import Transient.Console
+import Transient.Move.Web
 import Transient.Indeterminism(choose)
 import Transient.Move.Internals
 import Transient.Move.Utils
@@ -46,24 +48,18 @@ import qualified Data.ByteString.Lazy.Char8   as BS
 import qualified Data.ByteString.Char8 as BSS
 import System.Exit 
 
+(!>) a b= a
 
    
 main = do
    putStrLn "Starting Transient monitor"
-   keep $ runService monitorService 3000 
-                        [serve receiveStatus
-                        ,serve returnInstances
-                        ,serve reReturnInstances
-                        ,serve receiveFromNodeStandardOutputIt
-                        ,serve sendToNodeStandardInputIt
-                        ,serve getLogIt
-                        ]
-                        (return ()) 
+   keep $ initNode $ inputNodes <|> returnInstances
+                
 
 
 
 {- ping is not used to determine healt of services. The client program notify the
-   monitor wShen a service fails, with reInitService.
+   monitor when a service fails, with reInitService.
 pings =  do
   
   localIO $ print $ "INITIATING PINGSSSSSSSSSSSSSSSSSSSSSSS"
@@ -108,21 +104,23 @@ withBlockingService serv proc= do
 
 -- | gets a node with a service, which probably failed and return other n instances of the same service.
 -- This is used to implement failover.
-reReturnInstances :: (String, Node, Int) -> Cloud [Node] 
-reReturnInstances (ident, node, num)=  do
-      local $ delNodes [node]
-      returnInstances (ident, head $ nodeServices node, num)
+-- reReturnInstances :: (String, Node, Int) -> Cloud [Node] 
+-- reReturnInstances (ident, node, num)=  do
+--       local $ delNodes [node]
+--       returnInstances (ident, head $ nodeServices node, num)
 
 -- | install and return n instances of a service, distributed
 -- among all the nodes which have monitoService executables running and connected 
-returnInstances :: (String, Service, Int) -> Cloud [Node] 
-returnInstances (ident, service, num)= withBlockingService service $ do
-       nodes <- local $ findInNodes service >>= return . take num
+-- returnInstances :: (String, Service, Int) -> Cloud [Node] 
+returnInstances = do
+    POSTData(ident,service, num)   <- minput "returnInstances" "enter user ident,service and number of instances:"
+    r <- withBlockingService service $ do
+                nodes <- local $ findInNodes service >>= return . take num
 
-       let n= num - length nodes
-       if n <= 0 then return $ take num nodes 
-        else  return nodes <> requestInstall ident service n 
-
+                let n= num - length nodes
+                if n <= 0 then return $ take num nodes 
+                    else  return nodes <> requestInstall ident service n 
+    local $ out r -- minput "" r :: Cloud()
     where
 
     requestInstall :: String -> Service -> Int -> Cloud [ Node]
