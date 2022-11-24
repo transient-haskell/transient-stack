@@ -43,7 +43,7 @@ Loggable(..), logged, received, param, getLog, exec,wait, emptyLog,
 --  suspend, checkpoint, rerun, restore,
 -- #endif
 
-Log(..),logs, toPath,toPathFragment, toPathLon, getEnd, joinlog,substLast,substwait, dropFromIndex,recover, (<<),(<<-), LogData(..),LogDataElem(..),  toLazyByteString, byteString, lazyByteString, Raw(..)
+Log(..), toPath,toPathFragment, toPathLon, getEnd, joinlog,substLast,substwait, dropFromIndex,recover, (<<),(<<-), LogData(..),LogDataElem(..),  toLazyByteString, byteString, lazyByteString, Raw(..)
 ,hashExec) where
 
 import Data.Typeable
@@ -164,7 +164,13 @@ instance Loggable Integer
  
 
 instance  {-# OVERLAPPING #-}  (Typeable a, Loggable a) => Loggable[a]  where
-    serialize x= byteString $ if typeOf x== typeOf (undefined :: String) then  BSS.pack (unsafeCoerce x) else BSS.pack $ show x
+    serialize (s@(x:xs))
+              | typeOf x== typeOf (undefined :: Char) = byteString $ BSS.pack (unsafeCoerce s) 
+              | otherwise = byteString "[" <> serialize x <> serialize' xs
+          where
+          serialize' []= byteString "]"
+          serialize' x= serialize x <> byteString ","
+
     deserialize= r 
       where 
       ty :: TransIO [a] -> [a]
@@ -175,15 +181,17 @@ instance  {-# OVERLAPPING #-}  (Typeable a, Loggable a) => Loggable[a]  where
                                                <|> tTakeUntil (\s -> let c= BS.head s in c == '/' || c==' '))
 
 
-sspace= tChar '/' <|> (many (tChar ' ') >> tr "space" >> return ' ')
+sspace= tChar '/' <|> (many (tChar ' ') >> return ' ')
 
 instance Loggable Char
 instance Loggable Float
 instance Loggable Double
 instance Loggable a => Loggable (Maybe a)
+
 instance (Loggable a,Loggable b) => Loggable (a,b) where
   serialize (a,b)= serialize a <> byteString "/" <> serialize b 
-  deserialize =  (,) <$> deserialize <*> (sspace >>  deserialize)
+  deserialize = (,) <$> deserialize <*> (sspace >>  deserialize)
+
 
 instance (Loggable a,Loggable b, Loggable c) => Loggable (a,b,c) where
   serialize (a,b,c)=  serialize a <> byteString "/" <> serialize b <> byteString "/" <> serialize c 
@@ -569,11 +577,11 @@ substwait ld build = fromJust $ substwait1 ld build
   substwait1 (LD l) build=  case splitAt (length l -1) l of
     
     (prev,[LE x]) -> if  toLazyByteString x=="w/" then Just $ LD $ prev ++[LE build] else Nothing -- LD l <> LD [LE build]
-    (log',[LX (LD [])])  ->  Just $ LD $ log'++[LE build]
-    (log',[LX (LD log)]) -> let mr=  (LD log) `substwait1` build  --   LD $ log'++[LX $ (LD log) `substwait` build]
+    (prev,[LX (LD [])])  ->  Just $ LD $ prev++[LE build]
+    (prev,[LX (LD log)]) -> let mr=  (LD log) `substwait1` build  --   LD $ log'++[LX $ (LD log) `substwait` build]
                             in case mr of
                               Nothing -> Just $ LD $ l ++ [LE build]
-                              Just x   -> Just $ LD $ log' ++ [LX  x]
+                              Just x  -> Just $ LD $ prev ++ [LX  x]
 
 
 #ifndef ghcjs_HOST_OS
@@ -750,7 +758,7 @@ logged mx = do
 
         else  do
             tr ("ADDLOG", "fulexec",fullexec,fullexec <<- add)  
-            setData $ Log{recover=True, {-fromCont= False,-} fulLog= fullexec <<- add, hashClosure= hashClosure log +hashExec}
+            setData $ Log{recover=True, fulLog= fullexec <<- add, hashClosure= hashClosure log +hashExec}
 
 
         return r
