@@ -52,7 +52,7 @@ import Data.List hiding (delete, foldl')
 import Control.Exception
 import Control.Concurrent
 --import Data.Time.Clock
--- import Network.HTTP
+import Network.HTTP
 import Data.TCache hiding (onNothing)
 import Data.TCache.Defs hiding (serialize,deserialize)
 
@@ -70,6 +70,9 @@ import qualified Data.Text as Text
 import Data.Text.Encoding
 
 import Data.IORef
+
+(!>)= const
+-- (!>)= flip trace
 
 -- | a DDS contains a distrib. computation which return a (non-deterministic/stream/set of) 
 -- link/s to the generated chunk/s of data, in different nodes, thanks to the non-deterministic

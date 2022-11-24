@@ -327,12 +327,12 @@ instance Applicative TransIO where
             Nothing -> do
 
               p <- gets execMode
-
               if p== Serial then empty else do
                        x <- mx
                        liftIO $ (writeIORef r2 $ Just x)
 
                        mr <- liftIO (readIORef r1)
+                       tr("XPARALELL",isJust mr)
                        case mr of
                          Nothing -> empty
                          Just f  -> return $ f x
@@ -490,7 +490,7 @@ instance Alternative TransIO where
     empty = Transient $ return  Nothing
     (<|>) = mplus
 
-data Alter= Alter  -- when alternative has been executed
+-- data Alter= Alter  -- when alternative has been executed
 
 -- >>> keep' $ setState Alter >>  ((getState :: TransIO Alter) >>= delState  >> return True) <|> return False
 -- [True]
@@ -1311,15 +1311,20 @@ async io = do
 -- If the comp. return more than one result, the first result will be returned
 sync :: TransIO a -> TransIO a
 -- sync x = do
---   was <- gets execMode -- getSData <|> return Serial
---   r <- x <** modify (\s ->s{execMode= Remote}) -- setData Remote
+--   was <- gets execMode 
+--   -- solo garantiza que el alternativo no se va a ejecutar
+--   r <- x <** modify (\s ->s{execMode= Remote})
 --   modify $ \s -> s{execMode= was}
 --   return r
-sync1 proc= do
+sync pr= do
     mv <- liftIO newEmptyMVar
-    (abduce >> proc >>= liftIO . (putMVar mv) >> empty) <|> liftIO (takeMVar mv)
+    -- if pr is empty the computation does not continue. It blocks
+    (abduce >> pr >>= liftIO . (putMVar mv) >> empty) <|> liftIO (takeMVar mv)
+-- si proc,que es asincrono, es empty, no sigue. solo sigue cuando devuelve algo
+    
+    
 
-sync proc= proc <** modify(\s-> s{execMode=Remote})
+
 
 -- | Another name for `sync`
 await :: TransIO a -> TransIO a

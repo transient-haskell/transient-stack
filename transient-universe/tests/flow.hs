@@ -4,7 +4,7 @@
 
 --  mkdir -p ./static && ghcjs --make   -i../transient/src -i../transient-universe/src  -i../axiom/src -i../ghcjs-perch/src $1 -o static/out && runghc   -i../transient/src -i../transient-universe/src -i../axiom/src   $1 ${2} ${3}
 
-{-# LANGUAGE ScopedTypeVariables,RecordWildCards,DeriveAnyClass #-}
+{-# LANGUAGE ScopedTypeVariables,RecordWildCards,DeriveAnyClass, DeriveGeneric #-}
 
 module Main where
 
@@ -48,20 +48,22 @@ import Control.Concurrent
 import Data.Aeson
 import Unsafe.Coerce
 import Data.String
+import GHC.Generics
+import Data.Default
 
-mainrerun = keep $ rerun "config" $ do
-  logged $ liftIO $ do
-     putStrLn "configuring the program"
-     putStrLn "The program will not ask again in further executions within this folder"
+-- mainrerun = keep $ rerun "config" $ do
+--   logged $ liftIO $ do
+--      putStrLn "configuring the program"
+--      putStrLn "The program will not ask again in further executions within this folder"
   
-  host <- logged $ input (const True)  "host? "
-  liftIO $ print "AFTER HOST"
-  port <- logged $ input (const True)  "port? "
-  checkpoint
+--   host <- logged $ input (const True)  "host? "
+--   liftIO $ print "AFTER HOST"
+--   port <- logged $ input (const True)  "port? "
+--   checkpoint
   
-  liftIO $ putStrLn $ "Running server at " ++ host ++ ":" ++ show port
-  node <- liftIO $ createNode host port
-  initWebApp node $ return()
+--   liftIO $ putStrLn $ "Running server at " ++ host ++ ":" ++ show port
+--   node <- liftIO $ createNode host port
+--   initWebApp node $ return()
 
 
 {-
@@ -345,7 +347,7 @@ ahora es necesario generalizarla EVar
 
 como evitar
 -}
-(<||>) x y= (abduce >> x) <|> y
+-- (<||>) x y= (abduce >> x) <|> y
 
 
 data HI=HI deriving (Read,Show,Typeable)
@@ -447,7 +449,7 @@ mainalter= keep $ do
 
       then return Nothing
       else case mx of
-            Nothing -> setData Alter >> runTrans  y
+            Nothing ->   runTrans  y
 
             _ -> return mx
 
@@ -1132,10 +1134,94 @@ runJobs= local $ fork $ do
     (id,clos) <- choose pending
     noTrans $  restoreClosure id clos
 
+data Dat= Dat{field1:: Int,field2 :: Int} deriving (Typeable, Generic,Default)
 
-main= keep $ initNode $ do
-  minput "test" "test" :: Cloud ()
-  minput "test2" "hello" :: Cloud ()
-  minput "test3" "hello" :: Cloud ()
-  minput "test4" "hello" :: Cloud ()
+instance ToJSON Dat
 
+instance FromJSON Dat
+
+instance Default Node where def= Node "" 0 Nothing []
+
+type Service1 = [Kv]
+data Kv= Kv{key1 :: String, val ::String} deriving (Generic,Default,ToJSON,FromJSON)
+
+-- deserializeJSON :: FromJSON a => TransIO a
+-- deserializeJSON = do
+--   str <- giveParseString
+--   tr ("BEFOFE DECODE", str)
+--   s <- jsElem
+--   tr ("decode", s)
+
+--   case eitherDecode s of
+--     Right x -> return x
+--     Left err -> empty
+--   where
+jsElem :: TransIO BS.ByteString -- just delimites the json string, do not parse it
+jsElem =  dropSpaces >> ( jsonObject <|> array <|> atom )
+
+atom = elemString
+
+array =   try emptyList <|> (brackets $ return (str "[") <> jsElem <>  ( chainMany mappend (comma <>jsElem)) ) <> return (str "]")
+
+emptyList= string (str "[") <> (dropSpaces >> string (str "]"))
+
+jsonObject = try emptyObject <|> (braces $ return (str "{") <> field  <>  (chainMany mappend (comma <> field)) ) <> return (str "}")
+
+emptyObject= string (str "{") <> (dropSpaces >> string (str "}"))
+
+field =
+      dropSpaces >> string (str "\"") <> tTakeWhile (/= '\"') <> string (str "\"")
+        <> (dropSpaces >> string (str ":") <> (dropSpaces >> jsElem))
+
+elemString = do
+      dropSpaces
+      (string (str "\"") <> tTakeWhile ( /= '\"' ) <> string (str "\"") )  <|>
+         tTakeWhile (\c -> c /= '}' && c /= ']' && c /= ',')
+
+main= keep $ do
+    liftIO $ print $ serialize $ POSTData (2::Int,1 :: Int)
+    (n::Int,x) <- withParseString ( str "0/[2,1]") $  ( (,) <$> (readInt) <*> (tChar '/' >>  jsElem) )  <|> r 
+
+    liftIO $ print x
+    where 
+    r= do
+              psr <- giveParseString
+              error  (show("error parsing",psr,"to",typeOf $ typeOf1 r))
+    typeOf1 :: TransIO a -> a
+    typeOf1 = error "typeOf1 should not be executed"
+  
+readInt= do
+    x <- withGetParseString $ \s -> case reads $ BS.unpack s of
+                    [] ->   empty
+                    (r,t):_-> return(r, BS.pack t)
+    str <- giveParseString
+    liftIO $ print str
+    return x
+  -- POSTData (x,y,z) <- minput "test"  "test"  
+  -- localIO $ print ((x,y,z)  :: (Int ,Int,Int))
+  -- minput "test2" "hello" :: Cloud ()
+  -- minput "test3" "hello" :: Cloud ()
+  -- minput "test4" "hello" :: Cloud ()
+
+
+mainlocalrem= keep $ initNode $ inputNodes <|> do
+  local $ option "g" "go"
+  node <- local $ do
+       ns <- getNodes
+       liftIO $ print ns
+       return  $ ns !! 1
+  node2 <- local $ getNodes >>= return . flip (!!) 2
+  modify $ \s -> s{execMode=Parallel}
+  r <- runAt node  (localIO $ print "remoto" >> return "\"remoto \"")  -- <->   runAt node2 (localIO $ print "remoto2" >> return "remoto2")
+  localIO $ print "LOCAL"
+  localIO $ print ("RESULT",r)
+
+(<->) a b= (do
+  
+  onAll (liftIO $ print "BEFORE") 
+  a <* onAll (liftIO $ print "AFTER") )
+  <> b
+
+runAt2 a b= do
+    onAll $ liftIO $ print "RUNAT2"
+    runAt a b 

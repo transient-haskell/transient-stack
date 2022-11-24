@@ -338,7 +338,8 @@ keep mx = do
               option "options" "show all options"
               mbs <- liftIO $ readIORef rcb
               let filteryn x = x == "y" || x == "n" || x == "Y" || x == "N"
-              prefix <- input' (Just "") (not . filteryn) "prefix? " 
+              prefix <- input' (Just "") (not . filteryn) "prefix? "
+              ttr ("prefix",prefix)
               liftIO $ mapM_ (\c -> when (prefix `isPrefixOf` c) $ do putStr c; putStr "|") $ map (\(fst, _, _) -> fst) mbs
 
               d <- input' (Just "n") filteryn "\nDetails? N/y "

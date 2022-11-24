@@ -49,10 +49,8 @@ main= do
 
 test=  initNodeServ service  "localhost" 8080 $ do
           node0 <- local getMyNode
-          
           local $ guard (nodePort node0== 8080)       -- only executes locally in node 8080
-
-          [node1, node2] <- requestInstance service 2 
+          [node1, node2] <-  requestInstance service 2 
 
 
           local ( option "f" "fire")   <|> return ""       -- to repeat the tests,  remove the "exit" at the end 

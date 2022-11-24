@@ -72,7 +72,7 @@ local, onAll, lazy, fixRemote, loggedc, lliftIO, localIO,
 wormhole, teleport, copyData, fixClosure,
 
 -- * Running at a Remote Node
-beamTo, forkTo, callTo, runAt, atRemote, setSynchronous, syncStream,
+ beamTo, forkTo,runAt, atRemote, setSynchronous, syncStream,
 
 -- * Running at Multiple Nodes
 clustered, mclustered, callNodes, callNodes', foldNet, exploreNet, exploreNetUntil,

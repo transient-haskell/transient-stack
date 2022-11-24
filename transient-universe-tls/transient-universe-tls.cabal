@@ -11,7 +11,7 @@ synopsis: transient with secure communications
 category: Network
 author: Alberto G. Corona
 extra-source-files:
-    ChangeLog.md, README.md
+     README.md
 
 source-repository head
     type: git
