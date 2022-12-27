@@ -4,8 +4,7 @@ module Transient.Parse(
 -- * Setting the stream
 setParseStream, setParseString, withParseString, withParseStream,
 -- * parsing
-string, tDropUntilToken, tTakeUntilToken, integer, hex, int, double, tChar,anyChar,
-manyTill, chainManyTill,between, symbol,parens, braces,angles,brackets,
+string, tDropUntilToken, tTakeUntilToken, integer, hex, int, double, tChar,anyChar, manyTill, chainManyTill,between, symbol,parens, braces,angles,brackets,
 semi, comma, dot,colon, sepBy, sepBy1, chainSepBy, chainSepBy1,chainMany,
 commaSep, semiSep, commaSep1, dropSpaces,dropTillEndOfLine,
 parseString, tTakeWhile,tTakeUntil, tTakeWhile', tTake, tDrop, tDropUntil, tPutStr,
@@ -257,12 +256,12 @@ dropSpaces= withGetParseString $ \str ->  return( (),BS.dropWhile isSpace str)
 dropTillEndOfLine= withGetParseString $ \str -> return ((),BS.dropWhile ( /= '\n') str) -- !> "dropTillEndOfLine"
 
 
-
+-- | drop spaces and return a String delimited by the next space
 parseString= do
-    tr "parseString"
     dropSpaces
     r <- tTakeWhile (not . isSpace)
-    return r
+    tr ("PARSESTRING",r)
+    if BS.null r then empty else return r
 
 
 -- | take characters while they meet the condition. if no char matches, it returns empty
@@ -400,13 +399,14 @@ withGetParseString parser=  Transient $ do
 
     -- str <-  liftIO $ (s <> ) `liftM`  loop
     str <- liftIO $ return s <> loop
-    --if BS.null str then return Nothing else do
-        --return () !> ("withGetParseString", BS.take 3 str)
+
+
     mr <- runTrans $ parser str
     case mr of
                   Nothing -> return Nothing    --  !> "NOTHING"
                   Just (v,str') -> do
-                        --return () !> (v,str') 
+            -- when (not $ BS.null str') $  
+                        liftIO $ writeIORef done False
                         modify $ \s-> s{parseContext= ParseContext readMore str' done}
                         return $ Just v
 
@@ -457,7 +457,9 @@ tPutStr s'= withGetParseString $ \s -> return ((),s'<> s)
 isDone :: (MonadIO m,TransMonad m) => m Bool
 isDone=   do
     ParseContext _ _ done<- gets parseContext
+    tr "ISDONE"
     liftIO $ readIORef done
+ 
 
 dropUntilDone= (withGetParseString $ \s -> do
     tr "dropUntilDone"
@@ -533,7 +535,7 @@ producer |- qonsumer =  sandbox $ do
   initq v pcontext= do
     --abduce
     
-    setParseStream (liftIO $ takeMVar' v)--  `catch`  \(_:: SomeException) -> return SDone ) 
+    setParseStream (liftIO $ takeMVar v)--  `catch`  \(_:: SomeException) -> return SDone ) 
     tr "CONSUMER"
     r <- qonsumer
     dropUntilDone
@@ -543,13 +545,18 @@ producer |- qonsumer =  sandbox $ do
     modify $ \ s -> s{parseContext= p{done=done pc}}
     return r
 
-  takeMVar' v= do
-    r <- takeMVar v
-    -- tr ("TAKEMVAR",r)
-    return r
-  putMVar' v x= do
-    -- tr ("PUTMVAR",x)
-    putMVar v x
+{-
+ retorno de la string no parseada al proc 
+ ParseContext give take
+ give = return string
+ take str= set str+ string
+
+
+
+ give = readIORef string <> takeMVar
+ take str= writeIORef str
+ give = 
+-}
 
   initp v pcontext= do
     abduce
@@ -559,10 +566,10 @@ producer |- qonsumer =  sandbox $ do
           pc <- liftIO $ readIORef pcontext
           if isNothing pc then tr "FINNNNNNNNNNNNNNNNNNNNNNNN" >> empty  else do
             d <- liftIO $ readIORef done
-            if d then do  tr "sendDone";liftIO  $ putMVar' v SDone; repeatIt else do
+            if d then do  tr "sendDone";liftIO  $ putMVar v SDone; repeatIt else do
                 r <- producer
                 tr ("PRODUCED",r)
-                liftIO  $ putMVar' v r  -- `catch` \(_ :: BlockedIndefinitelyOnMVar) -> return  False
+                liftIO  $ putMVar v r  -- `catch` \(_ :: BlockedIndefinitelyOnMVar) -> return  False
 
                 p <- gets parseContext
                 liftIO $ writeIORef pcontext $ Just p
