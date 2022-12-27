@@ -10,7 +10,7 @@
 
 #ifndef ghcjs_HOST_OS
 
-module Transient.Move.Web  (minput,out,public,published,showURL,ToRest(..),POSTData(..),HTTPReq(..)
+module Transient.Move.Web  (minput,moutput,public,published,showURL,ToRest(..),POSTData(..),HTTPReq(..)
  ,getSessionState,setSessionState,newSessionState,rawHTTP,serializeToJSON,deserializeJSON,IsCommand,optionEndpoints,getCookie,setCookie) where
 
 import Control.Applicative
@@ -42,9 +42,8 @@ import Transient.Move.Internals
 import Transient.Parse
 import Unsafe.Coerce
 import Data.List
---------------------------WEB--------------------------------------
 
-
+import Control.Exception hiding(try,onException)
 
 data InitSendSequence = InitSendSequence
 
@@ -86,32 +85,7 @@ instance Semigroup HTTPReq where
       (c <> c')
       (d <> d')
 
-{-
-usar path como identificador?
 
-idsession-ctx ahora se genera antes de conocer la cookie
-  se mete en el state
-  como se maneja la cookie?
-    mirar cookie
-    si tiene cambiar idsesion y ctx?
-    o cambiar la cookie siempre?
-    si no tiene cookie
-  No se crea un context previo
-  No se manda ID en la URL
-
-  pero cuando se quiere entrar en la sesion de otro
-    necesita un ID
-
-  la sesión del que entra es la cookie
-  la sesion actual es la del State
-  
-
-  Se necesita de todas fromas pasar ids de closure s
-
-  la primera entrada tiene que ser generica, sin session id
-  minputSessionless mete session 0
-    siguiente minput; si sesssion 0, generar nueva sesion.
--}
 minput :: (Loggable a, ToRest a,ToJSON b) => String -> b -> Cloud a
 minput ident msg' = response
   where
@@ -136,11 +110,7 @@ minput ident msg' = response
               return ctx
             Just ct -> return ct
 
-          -- getState <|> do
-          --   ctx <- Context <$>  logged genSessionId <*> return (M.empty)
-          --   tr("CONTEXR from 0",ctx)
-          --   setState ctx
-          --   return ctx
+
 
         let idSession = idcontext
         let urlbase =
@@ -196,6 +166,23 @@ minput ident msg' = response
           return r'
 
     connected log ctx@(Context idcontext _) idSession conn closLocal sess closRemote httpreq = do
+      cdata <- liftIO $ readIORef $ connData conn
+      ttr "ONEXCEPTION"
+      onException $ \( e :: SomeException) -> do -- case cdata of 
+                        cdata <- liftIO $ readIORef $ connData conn
+
+                  --  Just Self -> return()
+                  --  Just _ -> do 
+                        ttr cdata
+                        let tosend = str "{\"error\"=" <> str (show $ show e) <> str "}"
+                        sendFragment tosend
+                        -- msend conn $ str "1\r\n]\r\n0\r\n\r\n"
+                        --     l= fromIntegral $ BS.length tosend
+                        -- msend conn $ toHex l <> str "\r\n" <> tosend <> "\r\n0\r\n\r\n"
+                        empty
+
+      -- onException $ \(e :: SomeException) -> do liftIO $ print "THROWT"; throwt e; empty
+
       liftIO $ atomically $ writeDBRef (getDBRef $ show idcontext) ctx -- store the state, the id will be in the URL
       Endpoints endpts <- getEndpoints
       let nend= (str ident, httpreq)
@@ -207,8 +194,8 @@ minput ident msg' = response
           then do
             tr "EN NOTRECOVER"
 
-            ty <- liftIO $ readIORef $ connData conn
-            case ty of
+            -- ty <- liftIO $ readIORef $ connData conn
+            case cdata of
               Just Self -> do
                 receive conn (Just $ BC.pack ident) idSession
                 delState IsCommand
@@ -219,6 +206,7 @@ minput ident msg' = response
               _ -> do
                 checkComposeJSON conn
 
+
                 -- insertar typeof response
                 let tosend = str "{ \"msg\":" <>  msg <> str ", \"req\":" <> encode httpreq <> str "}"
                 let l = fromIntegral $ BS.length tosend
@@ -227,7 +215,7 @@ minput ident msg' = response
                 -- msend conn $ str "HTTP/1.0 200 OK\r\nContent-Length: " <> str(show l) <> str "\r\n\r\n" <> tosend
                 -- mclose conn
                 msend conn $ toHex l <> str "\r\n" <> tosend <> "\r\n" -- <>  "\r\n0\r\n\r\n"
-                tr "after msend"
+                ttr "after msend"
                 -- store the msg and the url and the alias
                 -- se puede simular solo con los datos actuales
 
@@ -242,7 +230,7 @@ minput ident msg' = response
             tr ("else",ident)
             logged $ error "insuficient parameters 3" -- read the response
             -- maybe another user from other context continues the program
-      ttr ("MINPUT RESULT",idcontext',result)
+      tr ("MINPUT RESULT",idcontext',result)
       mncontext <- recoverContext idcontext'
       when (isJust mncontext) $ setState (fromJust mncontext :: Context)
       return result `asTypeOf` return (type1 response)
@@ -260,10 +248,6 @@ minput ident msg' = response
                     -- delDBRef con
                     return $ Just c
 
-        toHex 0 = mempty
-        toHex l =
-          let (q, r) = quotRem l 16
-           in toHex q <> (BS.singleton $ if r <= 9 then toEnum (fromEnum '0' + r) else toEnum (fromEnum 'A' + r -10))
 
     (</>) x y = x <> str "/" <> y
     str = BS.pack
@@ -272,6 +256,8 @@ minput ident msg' = response
     type1 cx = r
       where
         r = error $ show $ typeOf r
+
+
 
 
 -- endpoints = unsafePerformIO $ newIORef M.empty
@@ -376,16 +362,23 @@ optionEndpoints = do
 checkComposeJSON conn = do
   ms <- getRData -- avoid more than one onWaitthread, add "{" at the beguinning of the response
   -- and send the final chunk when no thread is active.
+  liftIO $ print ("after getRData",isJust ms)
   case ms of
     Nothing -> do
       onWaitThreads $ const $ msend conn $ str "1\r\n]\r\n0\r\n\r\n"
       setRState InitSendSequence
+      liftIO $ print "SET INITSEND"
+
+      -- onException $ \(e :: SomeException) -> do liftIO $ print "THROWT"; throwt e
+
       sendCookies conn
+      ttr "MSEND ["
       msend conn "\r\n1\r\n[\r\n"
       delState $ Cookies []
 
     Just InitSendSequence -> msend conn $ str "2\r\n\n,\r\n"
-  
+  -- to protect the state  upto now  if an exception arrives in order to incorporate exception data to the JSON message sent
+
 str = BS.pack
 
 ----
@@ -396,7 +389,7 @@ getCookies= getState <|> return (Cookies [])
 
 sendCookies conn= do
       cookies <- getCookiesStr
-      msend conn cookies
+      when (not $ BS.null cookies) $ msend conn cookies
       
   where
   getCookiesStr= do
@@ -457,16 +450,27 @@ sendOption msg req = do
   
   intt = BS.pack . show
 
--- | include JSON data in the response
-out :: ToJSON a => a -> TransIO ()
-out= sendFragment . encode 
+-- | include JSON data in the response.
+output :: ToJSON a => a -> TransIO ()
+output= sendFragment . encode 
 
+-- | It is  used as the last response in a flow
+moutput :: ToJSON a => a -> Cloud ()
+moutput= local . output
 
 --  | Send a JSON fragment
 sendFragment tosend = do
   let l = fromIntegral $ BS.length tosend
+  liftIO $ print ("SENDFRAGMENT000",tosend)
   conn <- getState
+  -- let tosend = tostr "{ \"msg\":" <>  toSend <> str "}"
+  let l = fromIntegral $ BS.length tosend
+
+                -- for HTTP 1.0 no chunked encoding:
+                -- msend conn $ str "HTTP/1.0 200 OK\r\nContent-Length: " <> str(show l) <> str "\r\n\r\n" <> tosend
+                -- mclose conn
   checkComposeJSON conn
+  msend conn $ toHex l <> "\r\n" <> tosend <> "\r\n" 
 
 getSessionState :: (Typeable a, Loggable a) => TransIO a
 getSessionState = res
@@ -604,20 +608,22 @@ instance {-# OVERLAPPABLE #-}  (Default a, ToJSON a, Typeable a) => ToRest (POST
   -- si tipo empieza por(
      -- es una tupla, cojer el tipo, cambiar ( por [, meter $ delante de los tokens, cambiar [Char] por string
         let types = show $ typeOf x
-        withParseString (BS.pack types) $ tuple <|> list <|> single 
+        withParseString (BS.pack types) elemType
+         
         where
+        elemType =  tuple <|> list <|> single
         tuple=  parens $ "[" <> "$" <> type1  <> chainMany (<>) (comma <> "$" <> type1) <> "]"
-        list=  (sandbox (string "[Cha") >> single) <|> ("$list_of_" <>  (brackets $ tTakeWhile (/= ']')) <> "'s")
-                                                                                          -- chainManyTill BS.cons anyChar (sandbox $ tChar ']')
-        single=  "$" <> (stringFix <$>  chainMany BS.cons (toLower <$> anyChar))
-        type1= stringFix <$> tTakeWhile (\c -> c /= ',' && c /= ')')  >>= varunique
-                            -- 
-                            -- chainManyTill BS.cons anyChar (sandbox $ tChar ',' <|> tChar ')')
+        list=  (sandbox (string "[Cha") >> single) <|> deflist <|> (tChar '[' >> ("[" <> elemType <> "]")) -- (brackets $ tTakeWhile (/= ']')) <> "'s")
 
-        
+        single= stringFix <$>  chainMany BS.cons (toLower <$> anyChar)
+
+        type1= stringFix <$> tTakeWhile (\c -> c /= ',' && c /= ')')  >>= varunique
+        deflist= let r= encode (def `asTypeOf` x) in if r /= "[]" then  escape r else empty
+        -- escape the double quotes of the expression
+        escape r= withParseString r $ chainMany mappend $ (tChar '\"' >> return "\\\"") <|> (anyChar >>= return . BS.singleton)
         stringFix r
           | BS.null r = r
-          | otherwise = if BS.head r == '[' then  "string" else  BS.map toLower r
+          | otherwise = if BS.head r == '[' then  "\\\"$string\\\"" else "$" <> BS.map toLower r
 
 
     process json = withParseString json $ do
@@ -675,6 +681,7 @@ serializeToJSON = lazyByteString . encode
 
 deserializeJSON :: FromJSON a => TransIO a
 deserializeJSON = do
+  modify $ \s -> s{execMode=Serial}
   tr ("BEFOFE DECODE")
   s <- jsElem
   tr ("decode", s)
@@ -682,10 +689,10 @@ deserializeJSON = do
   case eitherDecode s of
     Right x -> return x
     Left err -> empty
-  where
-    jsElem :: TransIO BS.ByteString -- just delimites the json string, do not parse it
-    jsElem = dropSpaces >> ( jsonObject <|> array <|> atom)
-
+  
+jsElem :: TransIO BS.ByteString -- just delimites the json string, do not parse it
+jsElem = dropSpaces >> ( jsonObject <|> array <|> atom)
+    where
     atom = elemString
 
     array =   try emptyList <|> (brackets $ return "[" <> jsElem <>  ( chainMany mappend (comma <>jsElem)) ) <> return "]"
@@ -703,7 +710,7 @@ deserializeJSON = do
     elemString = do
       dropSpaces
       (string "\"" <> tTakeWhile ( /= '\"' ) <> string "\"" )  <|>
-         tTakeWhile (\c -> c /= '}' && c /= ']' && c /= ',')
+         tTakeWhile (\c -> c /= '}' && c /= ']' && c /= ',' && c /= '/' && c /= ' ')
 
 instance {-# OVERLAPPING #-} Loggable Value where
   serialize = serializeToJSON
