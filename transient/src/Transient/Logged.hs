@@ -107,6 +107,7 @@ class (Show a, Read a,Typeable a) => Loggable a where
     deserializePure :: BS.ByteString -> Maybe(a, BS.ByteString)
     deserializePure s = r
       where
+      -- hideously inefficient
       r= case readsErr $ BS.unpack s   of -- `traceShow` ("deserialize",typeOf $ typeOf1 r,s) of
            []       -> Nothing  -- !> "Nothing"
            (r,t): _ -> return (r, BS.pack t)
@@ -164,12 +165,13 @@ instance Loggable Integer
  
 
 instance  {-# OVERLAPPING #-}  (Typeable a, Loggable a) => Loggable[a]  where
+    serialize []= byteString "[]"
     serialize (s@(x:xs))
               | typeOf x== typeOf (undefined :: Char) = byteString $ BSS.pack (unsafeCoerce s) 
               | otherwise = byteString "[" <> serialize x <> serialize' xs
           where
           serialize' []= byteString "]"
-          serialize' x= serialize x <> byteString ","
+          serialize' (x:xs)= byteString "," <> serialize x <>  serialize' xs
 
     deserialize= r 
       where 
@@ -788,7 +790,7 @@ logged mx = do
       typeOfr _= undefined
 
       r= do
-        x <- deserialize <|> do psr <- giveParseString; error (show("error parsing",psr,"to",typeOf $ typeOfr r))
+        x <- deserialize <|> do psr <- giveParseString; throwt $ ErrorCall ("error parsing "<> BS.unpack psr <> " to " <> show (typeOf $ typeOfr r))
         psr <- giveParseString
         when(not $ BS.null psr) $ tChar '/' >> return()
         return x
