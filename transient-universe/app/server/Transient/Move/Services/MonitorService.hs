@@ -120,13 +120,14 @@ returnInstances = do
                 let n= num - length nodes
                 if n <= 0 then return $ take num nodes 
                     else  return nodes <> requestInstall ident service n 
-    local $ out r -- minput "" r :: Cloud()
+    moutput r -- minput "" r :: Cloud()
     where
 
     requestInstall :: String -> Service -> Int -> Cloud [ Node]
     requestInstall ident service num=  do
         ns <-  local getEqualNodes  
-        return () !> ("monitors: ",map nodeHost ns)    
+       
+        tr ("monitors: ",map nodeHost ns)    
         auth <- callNodes' ns (<>) mempty  $  localIO $ authorizeService ident service >>=  \x -> return [x]
         return () !> ("authotorized: ",auth)
         let nodes = map fst $ filter  snd  $ zip ns auth 
@@ -155,7 +156,7 @@ returnInstances = do
                 let node= Node (nodeHost thisNode)  port Nothing  ([service])  --  ++ [relayinfo thisNode]) -- node to be published
                 addNodes [node] 
                 return node
-          `catcht` \(e :: SomeException) ->  liftIO (putStr "INSTALL error: " >> print e) >> empty
+        --   `catcht` \(e :: SomeException) ->  liftIO (putStr "INSTALL error: " >> print e) >> empty
           
         relayinfo mon= if nodeHost mon /= "localhost" then [("relay",show(nodeHost mon,nodePort mon))] else []
 
@@ -166,7 +167,7 @@ install ::  Service  -> Int -> TransIO ()
 install  service port= do
     -- return () !> "IIIIIIIIIIIIIIINSTALL"
 
-    install'  `catcht` \(e :: SomeException) -> liftIO (putStr "INSTALL error: " >> print e) >> empty 
+    install'  -- `catcht` \(e :: SomeException) -> liftIO (putStr "INSTALL error: " >> print e) >> empty 
     where
     install'= do
         my <- getMyNode
@@ -186,7 +187,7 @@ tryInstall service = do
         | "git:" `isPrefixOf` package= installGit package  
         | "https://github.com" `isPrefixOf` package =  installGit package  
         | "http://github.com"  `isPrefixOf` package =  installGit package  
-
+        | otherwise= error "can not install the package/image for the program requested"
 
 tryDocker service host port program= do
     image <- emptyIfNothing $ lookup "image" service
@@ -195,7 +196,7 @@ tryDocker service host port program= do
 
 
 tryExec program host port= do
-    path <-  Transient $ liftIO $ findExecutable program  -- would abandon (empty) if the executable is not found
+    path <-  Transient $ liftIO $ findExecutable program  -- if it is not int the executable paths would abandon (empty) if the executable is not found
     spawnProgram program host port  --  !>"spawn"
     where
     spawnProgram  program host port= do
@@ -203,10 +204,10 @@ tryExec program host port= do
         let prog = pathExe  program host port
         liftIO $ putStr  "executing: " >> putStrLn prog
 
-        (networkExecuteStreamIt prog >> empty) <|> return () !> "INSTALLING"
+        networkExecuteStreamIt prog 
         liftIO $ threadDelay 2000000
 
-        return()                             !> ("INSTALLED", program,port)
+        tr ("INSTALLED", program,port)
           
           
 pathExe  program host port=

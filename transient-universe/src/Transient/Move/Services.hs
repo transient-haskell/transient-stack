@@ -363,8 +363,8 @@ callService service params = loggedc $ do
     node <- initService service'      --  !> ("callservice initservice", service)
 
     if take 4 type1=="HTTP" 
-      then do onAll $ liftIO $ ttr "HHTP";callHTTPService node service' params
-      else do onAll $ liftIO $ ttr "serv";callService'  node params        --    !> ("NODE FOR SERVICE",node)
+      then do callHTTPService node service' params
+      else do callService'  node params        --    !> ("NODE FOR SERVICE",node)
 #else
 callService
     :: (Loggable a, Loggable b)
