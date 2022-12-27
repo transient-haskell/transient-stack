@@ -76,8 +76,10 @@ rindent= unsafePerformIO $ newIORef 0
 -- tr x= return () !>   unsafePerformIO (printColor x)
 -- tr x= trace (show(unsafePerformIO myThreadId, unsafePerformIO $ printColor x))  $ return()
 
+-- {-# NOINLINE tr #-}
 tr x=  trace (printColor x) $ return ()
 
+-- {-# NOINLINE printColor #-}
 printColor :: Show a => a -> String
 printColor x= unsafePerformIO $ do
     th <- myThreadId
@@ -96,7 +98,7 @@ printColor x= unsafePerformIO $ do
   --     in toHex q ++ (show $ (if r < 9  then toEnum( fromEnum '0' + r) else  toEnum(fromEnum  'A'+ r -10):: Int))
 
 ttr ::(Show a, MonadIO m) => a -> m()
-ttr x= liftIO $ putStrLn $ printColor x
+ttr x= liftIO $ do putStr "=======>" ; putStrLn $ printColor   x
 
 type StateIO = StateT EventF IO
 
@@ -171,16 +173,7 @@ instance MonadState EventF TransIO where
 noTrans :: StateIO x -> TransIO  x
 noTrans x = Transient $ x >>= return . Just
 
--- | filters away the Nothing responses of the State monad.
--- in principle the state monad should return a single response, but, for performance reasons,
--- it can run inside elements of transient monad (using `runTrans`) which may produce 
--- many results
-liftTrans :: StateIO (Maybe b) -> TransIO b
-liftTrans  mx= do
-    r <- noTrans mx
-    case r of
-            Nothing -> empty
-            Just x  -> return x
+
 
 -- emptyEventF :: ThreadId -> IORef (LifeCycle, BS.ByteString) -> MVar [EventF] -> EventF
 emptyEventF th label par childs =
@@ -1236,8 +1229,8 @@ sandbox mx = do
 -- | executes a computation and restores the concrete state data. Default state is assigned if there isn't any before execution
 sandboxData :: Typeable a => a -> TransIO b -> TransIO b
 sandboxData def w= do
-   d <- getData `onNothing` return  def
-   w  <***  setData  d
+   d <- getState <|> return  def
+   w  <***  setState  d
 
 
 
@@ -1453,7 +1446,7 @@ loop parentc rec = forkMaybe False parentc $ \cont -> do
           if dofork
             then forkIt rparent proc
             else ( proc parent   >>= \(_,cont) -> exceptBackg cont $ Finish $ show (unsafePerformIO myThreadId,"loop thread ended"))
-                              `catch` \e ->do exceptBack parent e
+                              `catch` \e -> exceptBack parent e
 
 
   forkIt rparentState  proc= do
@@ -1781,8 +1774,9 @@ undoCut = backCut ()
 {-# NOINLINE onBack #-}
 onBack :: (Typeable b, Show b) => TransientIO a -> ( b -> TransientIO a) -> TransientIO a
 onBack ac bac = registerBack (typeof bac) $ Transient $ do
-    --  tr "onBack"
+     -- ttr "onBack"
      Backtrack mreason stack  <- getData `onNothing` (return $ backStateOf (typeof bac))
+    --  ttr ("onBackstack",mreason, length stack)
      runTrans $ case mreason of
                   Nothing     -> ac                     -- !>  "ONBACK NOTHING"
                   Just reason -> bac reason             -- !> ("ONBACK JUST",reason)
@@ -1826,8 +1820,6 @@ registerBack witness f  = Transient $ do
    --addr x = liftIO $ return . hashStableName =<< (makeStableName $! x)
 
 
-registerUndo :: TransientIO a -> TransientIO a
-registerUndo f= registerBack ()  f
 
 -- XXX Should we enforce retry of the same track which is being undone? If the
 -- user specifies a different track would it make sense?
@@ -1859,7 +1851,7 @@ retry= forward ()
 back :: (Typeable b, Show b) => b -> TransIO a
 back reason =  do
   -- tr "back"
-  bs <- getData  `onNothing`  return (backStateOf  reason)
+  bs@(Backtrack mreason stack) <- getData  `onNothing`  return (backStateOf  reason)
   goBackt  bs                                                    --  !>"GOBACK"
 
   where
@@ -1872,8 +1864,9 @@ back reason =  do
   goBackt (Backtrack _ [] )= empty
   goBackt (Backtrack b (stack@(first : bs)) )= do
         setData $ Backtrack (Just reason) bs --stack
-        x <-  runClosure first                                --     !> ("RUNCLOSURE",length stack)
+        x <-  runClosure first -- <|> ttr "EMPTY"                               --     !> ("RUNCLOSURE",length stack)
         Backtrack back bs' <- getData `onNothing`  return (backStateOf  reason)
+        -- ttr ("goBackt",back, length bs')
 
         case back of
                  Nothing    -> do
@@ -1933,6 +1926,7 @@ onFinish exc= do
   cont <- getCont
   onFinishCont cont (return())  exc
 
+
 -- | A binary onFinish which will return a result when all the threads of the first operand terminates so it can return a result. 
 -- the first parameter is the action and the second the action to do when all is done.
 -- 
@@ -1969,7 +1963,8 @@ onFinishCont cont proc mx= do
                 if f then backtrack else
                     mx reason
     -- anyThreads abduce  -- necessary for controlling threads 0
-
+    -- to protect the stack of finish. The default exeception mechanism don't know about state
+    onException $ \(e::SomeException) -> throwt e
     return r
     where
     isDead st= liftIO $ do
@@ -2106,7 +2101,7 @@ tmask proc= Transient $ do
 -- If you want to manage exceptions only in the first argument and have the semantics of `catch` in transient, use `catcht`
 onException' :: Exception e => TransIO a -> (e -> TransIO a) -> TransIO a
 onException' mx f= onAnyException mx $ \e -> do
-            --return () !>  "EXCEPTION HANDLER EXEC" 
+            -- tr  "EXCEPTION HANDLER EXEC" 
             case fromException e of
                Nothing -> do
                   -- Backtrack r stack <- getData  `onNothing`  return (backStateOf  e)      
