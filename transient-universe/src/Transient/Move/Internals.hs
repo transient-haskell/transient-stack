@@ -115,7 +115,7 @@ import Control.Concurrent
 import System.Mem.StableName
 import Unsafe.Coerce
 import System.Environment
-
+import Data.Default
 
 --import System.Random
 pk = BS.pack
@@ -546,9 +546,15 @@ wormhole' node (Cloud comp) = local $
     log <- getLog
 
     if not $ recover log
-      then
-        runTrans $
-          ( do
+      then runTrans $ (do
+       my <- getMyNode
+       if node== my then do
+              let conn = fromMaybe (error "wormhole: no connection") moldconn
+              rself <- liftIO $ newIORef  $ Just Self
+              liftIO $ writeIORef (remoteNode conn) $ Just node
+              setData conn{connData=   rself} 
+              comp
+        else do
               tr "befor mconnect"
               conn <- mconnect node
               tr "wormhole after connect"
@@ -561,7 +567,7 @@ wormhole' node (Cloud comp) = local $
           )
             <*** do
               when (isJust moldconn) . setData $ fromJust moldconn
-      else --  when (isJust mclosure) . setState $ fromJust mclosure
+      else 
 
       do
         -- tr "YES REC"
@@ -569,12 +575,8 @@ wormhole' node (Cloud comp) = local $
         setData $ conn {calling = False}
         runTrans $ comp
 
---  <***  do when (isJust mclosure) . setData $ fromJust mclosure
 
--- #ifndef ghcjs_HOST_OS
--- type JSString= String
--- pack= id
--- #endif
+
 
 data CloudException = CloudException Node SessionId IdClosure String deriving (Typeable, Show, Read)
 
@@ -707,49 +709,13 @@ teleport = do
 
 newtype PrevClos = PrevClos {unPrevClos :: DBRef LocalClosure}
 
-{-
-receive conn clos idSession = do
-  tr ("RECEIVE",clos, idSession)
-  (lc, log) <- setCont clos idSession
-  local $ do
-    s <- giveParseString
-    -- tr ("PARSESTRING",s,"LOG",toPath $ fulLog log)
-    if recover log && not (BS.null s)
-      then return ()
-      else do
-        when (synchronous conn) $ liftIO $ takeMVar $ localMvar lc
-        tr ("EVAR waiting in", localCon lc, localClos lc)
-        mr@(Right (a, b, c, _)) <- readEVar $ fromJust $ localEvar lc
 
-        tr ("RECEIVED", (a, b, c))
-
-        case mr of
-          Right (SDone, _, _, _) -> empty
-          Right (SError _, _, _, _) -> error "receive: SERROR"
-          Right (SLast log, s2, closr, conn') -> do
-            cdata <- liftIO $ readIORef $ connData conn' -- connection may have been changed
-            liftIO $ writeIORef (connData conn) cdata
-            case fromMaybe (error "Transient.Move:666: no connection") cdata of
-              HTTP2Node _ _ _ httpheaders -> setState httpheaders
-            tr ("RECEIVEDDDDDDDDDDDDDDDDDDDDDDD SLAST", log)
-            setLog (idConn conn) log s2 closr
-          Right (SMore log, s2, closr, conn') -> do
-            cdata <- liftIO $ readIORef $ connData conn'
-            liftIO $ writeIORef (connData conn) cdata
-            case fromMaybe (error "Transient.Move:671: no connection") cdata of
-              HTTP2Node _ _ _ httpheaders -> setState httpheaders
-            tr ("RECEIVEDDDDDDDDDDDDDDDDDDDDDDD", log, closr)
-            setLog (idConn conn) log s2 closr
-          Left except -> do
-            throwt except
-            empty
--}
 
 receive conn clos idSession = do
   tr ("RECEIVE",clos, idSession)
   (lc, log) <- setCont clos idSession
   s <- giveParseString
-  -- tr ("PARSESTRING",s,"LOG",toPath $ fulLog log)
+  -- tr ("receive PARSESTRING",s,"LOG",toPath $ fulLog log)
   if recover log && not (BS.null s)
     then (abduce >> receive1 lc) <|> return() -- watch this event var and continue restoring
     else  receive1 lc
@@ -764,16 +730,18 @@ receive conn clos idSession = do
 
       case mr of
         Right (SDone, _, _, _)    -> empty
-        Right (SError _, _, _, _) -> error "receive: SERROR"
+        Right (SError e, _, _, _) -> error $ show("receive:",e)
         Right (SLast log, s2, closr, conn') -> do
           cdata <- liftIO $ readIORef $ connData conn' -- connection may have been changed
           liftIO $ writeIORef (connData conn) cdata
-          tr ("RECEIVEDDDDDDDDDDDDDDDDDDDDDDD SLAST", log)
+          -- setData conn'
+          tr ("RECEIVED -------> SLAST", log)
           setLog (idConn conn) log s2 closr
         Right (SMore log, s2, closr, conn') -> do
           cdata <- liftIO $ readIORef $ connData conn'
           liftIO $ writeIORef (connData conn) cdata
-          tr ("RECEIVEDDDDDDDDDDDDDDDDDDDDDDD", log, closr)
+          -- setData conn'
+          tr ("RECEIVED -------> SMORE", log, closr)
           setLog (idConn conn) log s2 closr
         Left except -> do
           throwt except
@@ -1025,7 +993,7 @@ msend :: Connection -> BL.ByteString -> TransIO ()
 #ifndef ghcjs_HOST_OS
 
 msend con bs = do
-  tr ("MSEND", unsafePerformIO $ readIORef $ remoteNode con, idConn con, "--------->------>", bs)
+  ttr ("MSEND", unsafePerformIO $ readIORef $ remoteNode con, idConn con, "--------->------>", bs)
   c <- liftIO $ readIORef $ connData con
   con' <- case c of
     Nothing -> do
@@ -1341,6 +1309,7 @@ mread (Connection _ _ _  (Just (Node2Web sconn )) _ _ _ _ _ _ _)= do
 --  parallel many, used for parsing
 parMany p = do
   d <- isDone
+  -- tr("parmany",d)
   if d then empty else p <|> parMany p
 
 parallelReadHandler :: Loggable a => Connection -> TransIO (StreamData a)
@@ -1351,6 +1320,7 @@ parallelReadHandler conn = do
     nomore = (do s <- getParseBuffer; if BS.null s then empty else error $ show $ ("malformed data received: expected Int, received: ", BS.take 10 s))
 
     extractPacket = do
+      -- tr "extractPacket"
       len <- integer <|> nomore
       str <- tTake (fromIntegral len)
       tr ("MREAD  <-------<-------", str)
@@ -2104,6 +2074,16 @@ listen (node@(Node _ port _ _)) = onAll $ do
   liftIO $ writeIORef (myNode conn) node'
   setData conn
 
+  -- onException $ \(e :: SomeException) -> do  -- msend conn $ BS.pack $ show e ; empty
+  --   -- cdata <- liftIO $ readIORef $ connData conn 
+  --   ttr "ONEXcepTION1"
+  --   msend conn $ chunked "404: not found" <> endChunk
+  --   -- case cdata of 
+  --   --   Just(HTTP2Node _ _ _ _) -> msend conn $ "\r\n" <> chunked "404: not found" <> endChunk
+  --   --   Just (HTTPS2Node _)     -> msend conn $ "\r\n" <> chunked "404: not found" <> endChunk
+  --   --   _ -> msend conn $ BS.pack $ show e
+  --   empty
+
   liftIO $ modifyMVar_ (fromJust $ connection node') $ const $ return [conn]
 
   addNodes [node']
@@ -2113,6 +2093,17 @@ listen (node@(Node _ port _ _)) = onAll $ do
 
   mlog <- listenNew (show port) conn <|> listenResponses :: TransIO (StreamData NodeMSG)
   execLog mlog
+  
+chunked tosend= do
+    let l= fromIntegral $ BS.length tosend
+    toHex l <> "\r\n" <> tosend <> "\r\n"
+
+endChunk= "0\r\n\r\n"
+
+toHex 0 = mempty
+toHex l =
+  let (q, r) = quotRem l 16
+    in toHex q <> (BS.singleton $ if r <= 9 then toEnum (fromEnum '0' + r) else toEnum (fromEnum 'A' + r -10))
 
 --  onFinish $ const $ do
 --               liftIO $ print "FINISH IN CLOSURE 0"
@@ -2187,9 +2178,11 @@ listenNew port conn' = do
                   ParseContext
               )
           }
+
+
   cdata <- liftIO $ newIORef $ Just (Node2Node port sock addr)
   let conn' = conn {connData = cdata}
-  --  TOD t _ <- liftIO $ getClockTime
+  
   liftIO $ modifyMVar_ (isBlocked conn) $ const $ return Nothing -- Just <$> return t
   setState conn'
   liftIO $ atomicModifyIORef connectionList $ \m -> (conn' : m, ()) -- TODO
@@ -2199,11 +2192,6 @@ listenNew port conn' = do
   firstLine@(method, uri, vers) <- getFirstLine
   headers <- getHeaders
 
-  -- setState $ HTTPHeaders firstLine headers
-  -- let httpHeaders= HTTPHeaders firstLine headers
-  -- tr ("HEADERS", headers)
-  -- string "\r\n\r\n"
-  -- tr (method, uri,vers)
   case (method, uri) of
     ("CLOS", hisCookie) -> do
       conn <- getSData
@@ -2230,7 +2218,7 @@ listenNew port conn' = do
       -- it is a HTTP request
       -- processMessage the current request in his own thread and then (<|>) any other request that arrive in the same connection
       -- first@(method,uri, vers) <-cutBody firstLine headers <|> parMany cutHTTPRequest
-      httpHeaders@(HTTPHeaders (first@(method,uri, vers)) headers) <-cutBody firstLine headers <|> parMany cutHTTPRequest
+      httpHeaders@(HTTPHeaders (first@(method,uri, vers)) headers) <- cutBody firstLine headers <|> parMany cutHTTPRequest
 
 
       let uri' = BC.tail $ uriPath uri -- !> uriPath uri
@@ -2381,7 +2369,7 @@ listenNew port conn' = do
 
               liftIO $ SBSL.sendAll sock $ "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nTransfer-Encoding: chunked\r\n"
               -- httpreq :: HTTPHeaders <- getState <|> error "no state"
-              ttr headers
+              tr headers
               return $ SLast $ ClosureData remoteClosure s1 thisClosure s2 $ lazyByteString s
   where
     
@@ -2410,15 +2398,18 @@ listenNew port conn' = do
 
     u = unsafePerformIO
     cutHTTPRequest = do
+      -- tr "cutHTTPRequest"
       first@(method, _, _) <- getFirstLine
-      ttr first
+      -- tr ("first",first)
       -- tr ("after getfirstLine", method, uri, vers)
       headers <- getHeaders
       -- setState $ HTTPHeaders first headers
       cutBody first headers
 
     cutBody (first@(method, _, _)) headers = do
+      -- tr "cutBody"
       let ret=  HTTPHeaders first headers
+      -- tr("headers",headers)
       if method == "POST"
         then case fmap (read . BC.unpack) $ lookup "Content-Length" headers of
           Nothing -> return ret -- most likely chunked encoding, processed in the same thread
@@ -2714,11 +2705,17 @@ processMessage s1 closl s2 closr mlog deleteClosure = do
       -- when deleteClosure $ liftIO $ atomically $ flushDBRef dbref
       case mcont of
         Nothing -> do
-          node <- liftIO $ readIORef (remoteNode conn) `onNothing` error "mconnect: no remote node?"
-          let e = "request received for non existent closure: " ++ show dbref
-          let err = CloudException node s1 closl $ show e
+          cdata <- liftIO $ readIORef $ connData conn 
+          case cdata of 
+            Just(HTTP2Node _ _ _ _) -> runTrans $ msend conn $ "\r\n" <> chunked   "404: not found"  <> endChunk
+            Just (HTTPS2Node _)     -> runTrans $ msend conn $ "\r\n" <> chunked   "404: not found"  <> endChunk
+            _ -> do
+              node <- liftIO $ readIORef (remoteNode conn) `onNothing` error "mconnect: no remote node?"
+              let e = "request received for non existent closure: " ++ show dbref
+              let err = CloudException node s1 closl $ show e
 
-          throw err
+              throw err
+          return Nothing
         Just LocalClosure {localCont = Nothing} -> do
           tr "RESTORECLOSuRE"
           restoreClosure s1 closl
@@ -2830,6 +2827,15 @@ type Pool = [Connection]
 type SKey = String
 type SValue = String
 type Service = [(SKey, SValue)]
+
+instance Default Service where
+  def=  [("service","$serviceName")
+        ,("executable", "$execName")
+        ,("package","$gitRepo")]
+
+instance Default [Service] where
+  def= [def]
+
 
 lookup2 key doubleList =
   let r = mapMaybe (lookup key) doubleList
