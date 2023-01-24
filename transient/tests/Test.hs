@@ -53,7 +53,7 @@ import Unsafe.Coerce
 --   if num > 10_000) break;
 -- ```
 
-main= keep' $ do
+maincollect= keep' $ do
     r <- sync $ collect' 1 1000000 $ (return "hello" >> empty) <|> return "world"
     liftIO $ print r
 
@@ -518,7 +518,7 @@ keep'' mx  = do
                         return r -- <|> (back $ Finish $ show $ unsafePerformIO myThreadId)
             liftIO $ putMVar rexit r
     threadDelay 10000
-    forkIO execCommandLine
+    -- forkIO execCommandLine
     takeMVar rexit  `catch` \(e :: BlockedIndefinitelyOnMVar) -> return []
 
 
@@ -782,4 +782,23 @@ test1= do
    
 
   
-   
+main= runTransient  $  a <|> b
+    --  onUndo (return ()) $ liftIO (print "CATCH2")
+    --  Transient $ do
+        
+    --     runTrans  a
+    --     runTrans b
+
+  where 
+  a=  do
+    onException $ \(e :: SomeException) ->do
+        liftIO $ print "CATCHED"   
+
+    empty
+  b= do
+    -- Backtrack mreason stack  <- getData `onNothing` (return $ Backtrack (Just()) [])
+    -- ttr ("undo",mreason, length stack)
+    throw $ ErrorCall "hello"
+     
+  typeof :: (b -> TransIO a) -> b
+  typeof = undefined
