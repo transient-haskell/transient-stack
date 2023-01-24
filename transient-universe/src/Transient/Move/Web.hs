@@ -167,12 +167,12 @@ minput ident msg' = response
 
     connected log ctx@(Context idcontext _) idSession conn closLocal sess closRemote httpreq = do
       cdata <- liftIO $ readIORef $ connData conn
-      ttr "ONEXCEPTION"
-      onException $ \( e :: SomeException) -> do -- case cdata of 
-                        cdata <- liftIO $ readIORef $ connData conn
 
-                  --  Just Self -> return()
-                  --  Just _ -> do 
+      onException $ \( e :: SomeException) -> do -- 
+                  cdata <- liftIO $ readIORef $ connData conn
+                  case cdata of
+                   Just Self -> return()
+                   Just _ -> do 
                         ttr cdata
                         let tosend = str "{\"error\"=" <> str (show $ show e) <> str "}"
                         sendFragment tosend
