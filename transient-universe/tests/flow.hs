@@ -38,6 +38,7 @@ import Data.TCache.IndexQuery
 
 import System.IO.Unsafe
 import Data.Typeable
+import Control.Exception hiding (onException)
 
 import qualified Data.Map as M
 import System.Directory
@@ -1142,66 +1143,46 @@ instance FromJSON Dat
 
 instance Default Node where def= Node "" 0 Nothing []
 
-type Service1 = [Kv]
 data Kv= Kv{key1 :: String, val ::String} deriving (Generic,Default,ToJSON,FromJSON)
 
--- deserializeJSON :: FromJSON a => TransIO a
--- deserializeJSON = do
---   str <- giveParseString
---   tr ("BEFOFE DECODE", str)
---   s <- jsElem
---   tr ("decode", s)
 
---   case eitherDecode s of
---     Right x -> return x
---     Left err -> empty
---   where
-jsElem :: TransIO BS.ByteString -- just delimites the json string, do not parse it
-jsElem =  dropSpaces >> ( jsonObject <|> array <|> atom )
+mainimput= keep $ initNode $ do
+  minput "s" "start"  :: Cloud()
+  -- local $  (fork $ liftIO $ threadDelay 1000000) 
+  -- localIO $ ttr "bEFOrE ERROR"
+  -- onAll $  throwt $ ErrorCall "error"
+  moutput "end" :: Cloud ()
 
-atom = elemString
+  return()
 
-array =   try emptyList <|> (brackets $ return (str "[") <> jsElem <>  ( chainMany mappend (comma <>jsElem)) ) <> return (str "]")
+main= keep $  do
+  -- threads 0 abduce
+  onFinish $ const $ liftIO $ print ("FINISH", unsafePerformIO myThreadId)
 
-emptyList= string (str "[") <> (dropSpaces >> string (str "]"))
+  option "t" "test"
+  liftIO $ print "PROGRESS"
 
-jsonObject = try emptyObject <|> (braces $ return (str "{") <> field  <>  (chainMany mappend (comma <> field)) ) <> return (str "}")
-
-emptyObject= string (str "{") <> (dropSpaces >> string (str "}"))
-
-field =
-      dropSpaces >> string (str "\"") <> tTakeWhile (/= '\"') <> string (str "\"")
-        <> (dropSpaces >> string (str ":") <> (dropSpaces >> jsElem))
-
-elemString = do
-      dropSpaces
-      (string (str "\"") <> tTakeWhile ( /= '\"' ) <> string (str "\"") )  <|>
-         tTakeWhile (\c -> c /= '}' && c /= ']' && c /= ',')
-
-main= keep $ do
-    liftIO $ print $ serialize $ POSTData (2::Int,1 :: Int)
-    (n::Int,x) <- withParseString ( str "0/[2,1]") $  ( (,) <$> (readInt) <*> (tChar '/' >>  jsElem) )  <|> r 
-
-    liftIO $ print x
-    where 
-    r= do
-              psr <- giveParseString
-              error  (show("error parsing",psr,"to",typeOf $ typeOf1 r))
-    typeOf1 :: TransIO a -> a
-    typeOf1 = error "typeOf1 should not be executed"
+  -- error "error"
+  -- fork $ do
+  -- --   -- bs@(Backtrack mreason stack) <- getData  `onNothing`  return (Backtrack (Just $ Finish "")  [])
+  -- --   -- ttr ("SIZE", length stack)
+  --    liftIO $ threadDelay 1000000
+  -- topState >>= showThreads
+  return()
   
-readInt= do
-    x <- withGetParseString $ \s -> case reads $ BS.unpack s of
-                    [] ->   empty
-                    (r,t):_-> return(r, BS.pack t)
-    str <- giveParseString
-    liftIO $ print str
-    return x
-  -- POSTData (x,y,z) <- minput "test"  "test"  
-  -- localIO $ print ((x,y,z)  :: (Int ,Int,Int))
-  -- minput "test2" "hello" :: Cloud ()
-  -- minput "test3" "hello" :: Cloud ()
-  -- minput "test4" "hello" :: Cloud ()
+  
+mainerr= keep  $ initNode $ local $ do
+  abduce
+  topState >>= showThreads
+  onFinish $ const $ ttr "==============================FINISH"
+
+  -- onException $ \(e:: SomeException) -> throwt e
+  throw $ ErrorCall "---------------------err"
+  return()
+  
+
+  
+
 
 
 mainlocalrem= keep $ initNode $ inputNodes <|> do
