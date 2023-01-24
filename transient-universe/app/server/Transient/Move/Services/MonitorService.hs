@@ -196,8 +196,9 @@ tryDocker service host port program= do
 
 
 tryExec program host port= do
-    path <-  Transient $ liftIO $ findExecutable program  -- if it is not int the executable paths would abandon (empty) if the executable is not found
-    spawnProgram program host port  --  !>"spawn"
+    Transient $ liftIO $ findExecutable program  -- if it is not int the executable paths would abandon (empty) if the executable is not found
+
+    sync $ spawnProgram program host port  --  !>"spawn"
     where
     spawnProgram  program host port= do
 
