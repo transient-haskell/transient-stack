@@ -218,20 +218,22 @@ initWebApp node app=  do
                     else return serverNode
     
     runCloud $ do
-        listen mynode <|> onAll (do c <- getState; firstCont ; receive c Nothing 0) <|> return()
+        listen mynode <|> listenContsFromNodes <|> return()
+      --   onAll $ topState >>= showThreads
 
         serverNode <- onAll getWebServerNode
+        
+        onAll abduce  -- to allow onFinish and onWaitthreads to fire
         wormhole' serverNode $ do 
 
-            r <-   
 #ifndef ghcjs_HOST_OS
-                 local optionEndpoints  
+                 local  optionEndpoints  
 #else
                  local empty
 #endif   
                    <|> app -- ;(minput "" "end" :: Cloud())
-            return r
-
+      where
+      listenContsFromNodes= onAll $ do c <- getState; firstCont ; receive c Nothing 0
          
 -- | run N nodes (N ports to listen) in the same program. For testing purposes.
 -- It add them to the list of known nodes, so it is possible to perform `clustered` operations with them.
