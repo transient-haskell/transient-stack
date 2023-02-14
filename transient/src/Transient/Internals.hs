@@ -1636,7 +1636,9 @@ react
   -> TransIO eventdata
 react setHandler iob= Transient $ do
         -- st <- cloneInChild "react"
-        
+        -- delete  all  current finish handlers since they should not trigger
+        setData $ Backtrack (Nothing `asTypeOf` Just (Finish "")) []
+
         modify $ \s -> s{execMode=let rs= execMode s in if rs /= Remote then Parallel else rs}
         cont <- get
         -- ttr ("THREADS REACT",threadId cont, threadId st)
