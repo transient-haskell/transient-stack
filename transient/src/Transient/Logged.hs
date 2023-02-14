@@ -105,6 +105,15 @@ class (Show a, Read a,Typeable a) => Loggable a where
     serialize = byteString . BSS.pack . show
 
     deserializePure :: BS.ByteString -> Maybe(a, BS.ByteString)
+    deserializePure s' = r
+      where
+      (s,rest)= BS.span (/='/') s'
+      r= case readsErr $ BS.unpack s   of -- `traceShow` ("deserialize",typeOf $ typeOf1 r,s) of
+              []       -> Nothing  -- !> "Nothing"
+              (r,_): _ -> return (r, rest)
+      {-# INLINE readsErr #-}
+      readsErr s=unsafePerformIO $ return(reads s) `catch`\(e :: SomeException) ->  return []
+    {-
     deserializePure s = r
       where
       -- hideously inefficient
@@ -113,7 +122,7 @@ class (Show a, Read a,Typeable a) => Loggable a where
            (r,t): _ -> return (r, BS.pack t)
       {-# INLINE readsErr #-}
       readsErr s=unsafePerformIO $ return(reads s) `catch`\(e :: SomeException) ->  return []
-      
+     -} 
 
     deserialize ::  TransIO a
     deserialize = x
@@ -123,8 +132,8 @@ class (Show a, Read a,Typeable a) => Loggable a where
                     Just x -> return x
 
 
-instance Show Builder where
-   show b= show $ toLazyByteString b
+-- instance Show Builder where
+--   show b= show $ toLazyByteString b
 
 instance Read Builder where
    readsPrec n str= -- [(lazyByteString $ read str,"")]
@@ -179,8 +188,7 @@ instance  {-# OVERLAPPING #-}  (Typeable a, Loggable a) => Loggable[a]  where
       ty = undefined
       r= if typeOf (ty r) /= typeOf (undefined :: String) 
               then tChar '[' >> commaSep deserialize <* tChar ']'
-              else  unsafeCoerce <$> BS.unpack <$> ((tChar '"' >> tTakeWhile' (/= '"'))
-                                               <|> tTakeUntil (\s -> let c= BS.head s in c == '/' || c==' '))
+              else  unsafeCoerce <$> BS.unpack <$> deserialize
 
 
 sspace= tChar '/' <|> (many (tChar ' ') >> return ' ')
@@ -224,6 +232,7 @@ instance (Loggable a,Loggable b, Loggable c,Loggable d,Loggable e,Loggable f,Log
   deserialize =  (,,,,,,,,) <$> deserialize <*> (sspace >>  deserialize) <*> (sspace >>  deserialize) <*> (sspace >>  deserialize) <*> (sspace >>  deserialize) <*> (sspace >>  deserialize) <*> (sspace >>  deserialize) <*> (sspace >>  deserialize) <*> (sspace >>  deserialize) 
 
 
+
 instance (Loggable a, Loggable b) => Loggable (Either a b)
 -- #ifdef ghcjs_HOST_OS
 
@@ -244,8 +253,14 @@ instance (Loggable k, Ord k, Loggable a) => Loggable (M.Map k a)  where
 #ifndef ghcjs_HOST_OS
 instance Loggable BS.ByteString where
         serialize str =  lazyByteString str
-        deserialize=  (tChar '"' >> tTakeWhile' (/= '"'))
-                      <|> tTakeUntil (\s -> let c= BS.head s in c == '/' || c==' ') 
+        deserialize=  (do
+            -- for strings between quotes
+            tChar '"' 
+            r<- tTakeUntil (\s ->  BS.head s /= '\\' && BS.head(BS.tail s) =='"') <> tTake 1  
+            anyChar
+            return r )
+          
+          <|> tTakeUntil (\s -> let c= BS.head s in c == '/' || c==' ') 
 #endif
 
 #ifndef ghcjs_HOST_OS
