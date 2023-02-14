@@ -1301,25 +1301,29 @@ async io = do
 
 -- | Avoid the execution of alternative computations when the computation is asynchronous
 --
--- > sync (async  whatever) <|>  liftIO (print "hello") -- never print "hello"
+-- > sync (async  whatever) <|>  liftIO (print "hello") -- never print "hello" uf watever return something
 --
 -- the thread before and after `sync`is the same.
--- Also, if the computation does not return any value, the computation will block.
 -- If the comp. return more than one result, the first result will be returned
+
 sync :: TransIO a -> TransIO a
+sync pr= do
+    mv <- liftIO newEmptyMVar
+    -- if pr is empty the computation does not continue. It blocks
+    (abduce >> pr >>= liftIO . (putMVar mv) >> empty) <|> do
+        mr <- liftIO $ tryTakeMVar mv
+        case mr of
+           Nothing -> empty
+           Just r -> return r
+-- si proc,que es asincrono, es empty, no sigue. solo sigue cuando devuelve algo
+
+-- alternative sync 
 -- sync x = do
 --   was <- gets execMode 
 --   -- solo garantiza que el alternativo no se va a ejecutar
 --   r <- x <** modify (\s ->s{execMode= Remote})
 --   modify $ \s -> s{execMode= was}
 --   return r
-sync pr= do
-    mv <- liftIO newEmptyMVar
-    -- if pr is empty the computation does not continue. It blocks
-    (abduce >> pr >>= liftIO . (putMVar mv) >> empty) <|> liftIO (takeMVar mv)
--- si proc,que es asincrono, es empty, no sigue. solo sigue cuando devuelve algo
-    
-    
 
 
 
@@ -2255,3 +2259,4 @@ localExceptionHandlers w= do
    r <- sandboxData (backStateOf  (undefined :: SomeException))  $ w
    onException $ \(SomeException _) -> return()
    return r
+
