@@ -55,7 +55,7 @@ optionf ::
   TransIO b
 optionf flag ret message = do
   let sret = if typeOf ret == typeOf "" then unsafeCoerce ret else show ret
-  let msg = "Enter  " ++ sret ++ "\t\tto: " ++ message ++ "\n"
+  let msg = "Enter  " ++ "\x1b[1;31m" ++ sret ++ "\x1b[0m" ++ "\t\tto: " ++ message ++ "\n"
   inputf flag sret msg Nothing (== sret)
   liftIO $ putStr "\noption: " >> putStrLn sret
   -- abduce
@@ -339,7 +339,7 @@ keep mx = do
               mbs <- liftIO $ readIORef rcb
               let filteryn x = x == "y" || x == "n" || x == "Y" || x == "N"
               prefix <- input' (Just "") (not . filteryn) "prefix? "
-              ttr ("prefix",prefix)
+              tr ("prefix",prefix)
               liftIO $ mapM_ (\c -> when (prefix `isPrefixOf` c) $ do putStr c; putStr "|") $ map (\(fst, _, _) -> fst) mbs
 
               d <- input' (Just "n") filteryn "\nDetails? N/y "
