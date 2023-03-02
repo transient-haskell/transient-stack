@@ -22,7 +22,8 @@ import           Transient.Logged
 import           Transient.EVars
 import           Transient.Move.Internals
 import           Transient.Move.Utils
-import           Transient.Move.Web 
+import           Transient.Move.Web  
+import           Transient.Move.IPFS
 import           Control.Applicative
 import           System.Info
 import           Control.Concurrent
@@ -455,27 +456,30 @@ mainalter= keep $ do
             _ -> return mx
 
 
-mainsimple= keep $ initNode $ Cloud $ do
+mainsimple= keep $  initNode $ Cloud $ do
   -- firstCont
+  -- logged $ logged $ do
   proc2 <|> restore1 <|> save
   
-  -- liftIO syncCache
   
   where
   proc2= do
     logged $ option "p" "process"
-    logged setc
+    r <-logged $ logged $ do
+        setc
+        logged $ return HELLO -- liftIO $ print "PARSE ERROR"; error "PARSE ERROR" :: TransIO HELLO 
+    liftIO $ print r
 
-    y <- logged $ return HELLO
-    logged $ lprint y
-    logged setc
-    r <-logged $ return THAT
-    logged $ lprint r
+    r <- logged $ logged $ do
+       setc
+       logged $ return (HI ,THAT)
+    liftIO $ print r
+
     showLog
 
  
 
-mainc= keep $  initNode $ Cloud $ do
+maincomplex= keep $  initNode $ Cloud $ do
   
   -- firstCont
   proc1 <|> restore1 <|> save
@@ -522,6 +526,7 @@ restore1= do
         option "res" "restore1" 
         s    <- input (const True) "sesion  >"
         clos <- input (const True) "closure >"
+
         noTrans $ restoreClosure s clos 
       
 lprint :: Show a => a -> TransIO ()
@@ -1155,7 +1160,7 @@ mainimput= keep $ initNode $ do
 
   return()
 
-main= keep $  do
+mainfinish2= keep $  do
   -- threads 0 abduce
   onFinish $ const $ liftIO $ print ("FINISH", unsafePerformIO myThreadId)
 
@@ -1206,3 +1211,118 @@ mainlocalrem= keep $ initNode $ inputNodes <|> do
 runAt2 a b= do
     onAll $ liftIO $ print "RUNAT2"
     runAt a b 
+
+main = keep $ initNode $ do
+    Raw r <- local $ callService ipnsList () 
+    localIO $ print r
+    empty
+    local setIPFS
+    POSTData (name :: String, wallet :: Integer) <- minput "enterw"  "enter wallet" 
+    setSessionState wallet
+    guessgame name wallet <|> auction  
+    return()
+
+    where
+    guessgame name wallet= do
+
+       minput "guessgame" "play guessgame"  <|> published "lock"
+       lock  :: Int <- minput "enterlock" $ name <> ": lock a number to guess it"
+       guessn:: Int <- public "lock" $ minput "enterguess" $ "guess the number entered by: " <>  name  
+       wallet' :: Integer <- local getSessionState
+       minput "entered"  [("entered number", show guessn)
+                         ,("wallet lock", show wallet)
+                         ,("wallet guess",show wallet')
+                         ,("success",show $ lock == guessn)] :: Cloud()
+
+    auction= do
+       minput "auction" "play auction" :: Cloud()
+       error "auction: not implemented"
+
+
+maintest = keep $ initNode $ test <|> onAll restore1
+  where
+  test= do
+    -- POSTData (name :: String, wallet :: Integer) 
+    -- local $ option "s" "start"
+
+    i :: Int<- minput "enterw"  "enter wallet" -- (11 :: Int)
+    guessgame
+    return()
+
+    where
+    guessgame= do
+
+       minput "guessgame" "play guessgame" :: Cloud()
+       guessn:: Int <-minput "enternumber" "enter a number"  -- (2 :: Int)
+       onAll $ liftIO $ print $ (">>>>>>>>>>>>>>>>>>>>>", guessn :: Int)
+      --  minput1 "entered"  ("entered number", guessn) :: Cloud()
+
+    -- auction= do
+    --    minput1 "auction" "play auction" :: Cloud()
+    --    error "auction: not implemented"
+
+
+minput1 :: (Loggable a, ToRest a,Loggable val) => String  ->  val -> Cloud a
+minput1 ident val = response
+  where
+    response = do
+      -- idSession <- local $ fromIntegral <$> genPersistId
+      modify $ \s -> s {execMode = if execMode s == Remote then Remote else Parallel}
+      local $ do
+        log <- getLog
+        conn <- getState -- if connection not available, execute alternative computation
+        let closLocal = hashClosure log
+        mynode <- getMyNode
+
+
+
+        let idSession = 0
+
+        
+        params <- toRest $ type1 response
+        
+        connected log  idSession conn closLocal    
+
+    
+
+    connected log  idSession conn closLocal    = do
+      cdata <- liftIO $ readIORef $ connData conn
+
+  
+
+      -- onException $ \(e :: SomeException) -> do liftIO $ print "THROWT"; throwt e; empty
+
+      (idcontext' :: Int, result) <- do
+        pstring <- giveParseString
+        if (not $ recover log) || BS.null pstring
+          then do
+            receivee conn (Just $ BC.pack ident)  val
+            logged $ error "not enough parameters 2" -- read the response, error if response not logged
+          else do
+            receivee conn (Just $ BC.pack ident)  val
+            logged $ error "insuficient parameters 3" -- read the response
+
+      tr ("MINPUT RESULT",idcontext',result)
+      return result `asTypeOf` return (type1 response)
+ 
+  
+    type1 :: Typeable a => Cloud a -> a
+    type1 cx = r
+      where
+        r = error $ show $ typeOf r
+
+receivee conn clos  val= do
+  (lc, log) <- setCont clos 0
+  s <- giveParseString
+  -- tr ("receive PARSESTRING",s,"LOG",toPath $ fulLog log)
+  if recover log && not (BS.null s)
+    then (abduce >> receive1 lc val) <|> return() -- watch this event var and continue restoring
+    else  receive1 lc val
+  
+  where
+  -- receive1 :: (Loggable val) => LocalClosure -> val -> TransIO ()
+  receive1 lc val= do
+
+
+      setParseString $ toLazyByteString  (lazyByteString (BS.pack "0/") <> (serialize val)) :: TransIO ()
+      -- setLog 0 (lazyByteString (BS.pack "0/") <> (serialize val)) 0 0 :: TransIO()

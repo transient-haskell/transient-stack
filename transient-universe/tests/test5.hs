@@ -181,12 +181,12 @@ mainsimple= keep $ initNode $ do
   s <- minput "s1" "una string"
   local $ do
     log <- getLog
-    ttr ("LOG after MINPUT", toPathLon $ fulLog log)
+    tr ("LOG after MINPUT", toPathLon $ fulLog log)
   setState s
   s2 <- minput "s2" "otra string"
   local $ do
     log <- getLog
-    ttr ("LOG after MINPUT", toPathLon $ fulLog log)
+    tr ("LOG after MINPUT", toPathLon $ fulLog log)
   caller <- local getSessionState
   rec <- local getState
   localIO $ print (s :: String, s2 :: String)
