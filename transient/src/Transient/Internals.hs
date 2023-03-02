@@ -1497,7 +1497,7 @@ loop parentc rec = forkMaybe False parentc $ \cont -> do
                   freelogic  rparentState parentState label
                   tr ("finalizing normal",threadId lastCont, unsafePerformIO $ readIORef $ labelth lastCont)
                   th <- myThreadId
-                  ttr "antes de exceptbaack"
+                  tr "antes de exceptbaack"
 
       
                   exceptBackg lastCont  $ Finish $ show (th,"async thread ended")
@@ -1533,9 +1533,8 @@ freelogic rparentState parentState label =do
       -}
       ((case status of Alive -> Dead ; Parent -> DeadParent; _ -> status, lab),l)
     -- los procesos que acaban de morir sin hijos (deadparent) tambien deben liberarse
-    ttr ("CAN",can)
     if ({- can /= Parent && can /= DeadParent && -} can /= Listener)
-      then do  ttr("FREEE",th); free th actualParent  ; return True
+      then do  tr("FREEE",th); free th actualParent  ; return True
       else return False
                   -- !> ("th",th,"actualParent",threadId actualParent,can,lab)
 
@@ -1652,7 +1651,7 @@ react setHandler iob= Transient $ do
               -- let rparent=  parent st
               -- Just parent <- liftIO $ readIORef rparent
               th <- liftIO myThreadId
-              ttr ("THREADID", th)
+              tr ("THREADID", th)
               -- liftIO $ writeIORef (pthreadId st) th
               -- freelogic rparent st (labelth st)
               exceptBackg cont' $ Finish $ show (unsafePerformIO myThreadId,"react thread ended")
@@ -1976,7 +1975,7 @@ onFinishCont cont proc mx= do
 
     r <- proc `onBack`  \(Finish reason) -> do
                 tr ("thread end",reason,threadId cont)
-                topState >>= showThreads
+                -- topState >>= showThreads
                 nochild <- hasNoChildThreads cont
                 dead <- isDead cont
                 this <- get
@@ -2014,14 +2013,14 @@ onWaitThreads   mx= do
     done <- liftIO $ newIORef False  --finalization already executed?
 
     r <- return() `onBack`  \(Finish reason) -> do
-                topState >>= showThreads
-                ttr ("thread cont",threadId cont)
+                -- topState >>= showThreads
+                tr ("thread cont",threadId cont)
                 noactive <- liftIO $ noactiveth cont
                 dead <- isDead cont
                 this <- get
                 let isthis = threadId this == threadId cont
                     is = noactive && (dead || isthis)
-                ttr is
+                tr is
                 guard is
                 -- previous onFinish not triggered?
                 f <- liftIO $ atomicModifyIORef done $ \x ->(if x then x else not x,x)
