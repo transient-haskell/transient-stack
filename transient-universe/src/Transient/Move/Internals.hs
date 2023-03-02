@@ -712,7 +712,7 @@ newtype PrevClos = PrevClos {unPrevClos :: DBRef LocalClosure}
 
 
 receive conn clos idSession = do
-  tr ("RECEIVE",clos, idSession)
+  tr ("TO RECEIVE",clos, idSession)
   (lc, log) <- setCont clos idSession
   s <- giveParseString
   -- tr ("receive PARSESTRING",s,"LOG",toPath $ fulLog log)
@@ -993,7 +993,7 @@ msend :: Connection -> BL.ByteString -> TransIO ()
 #ifndef ghcjs_HOST_OS
 
 msend con bs = do
-  ttr ("MSEND", unsafePerformIO $ readIORef $ remoteNode con, idConn con, "--------->------>", bs)
+  tr ("MSEND", unsafePerformIO $ readIORef $ remoteNode con, idConn con, "--------->------>", bs)
   c <- liftIO $ readIORef $ connData con
   con' <- case c of
     Nothing -> do
@@ -1548,7 +1548,7 @@ mconnect1 (node@(Node host port _ services)) = do
           connectWebSockets1 h p ("/relay/" ++ h ++ "/" ++ show p ++ "/") needTLS
 
     connectSockTLS host (port :: Int) needTLS = do
-      -- return ()                                         !> "connectSockTLS"
+      tr "connectSockTLS"
 
       let size = 8192
       c@Connection {myNode = my, connData = rcdata} <- getSData <|> defConnection
@@ -1580,7 +1580,7 @@ mconnect1 (node@(Node host port _ services)) = do
       --modify $ \s ->s{parseContext=ParseContext (do NS.close sock ; return SDone) input} --throw $ ConnectionError "connection closed" node) input}
       modify $ \s -> s {execMode = Serial, parseContext = pcontext}
       --modify $ \s ->s{execMode=Serial,parseContext=ParseContext (SMore . BL.fromStrict <$> recv sock 1000) mempty}
-      tr "BEFORE HANDSHAKE"
+      tr "BEFORE HANDSHAKE1"
       when (isTLSIncluded && needTLS) $ maybeClientTLSHandshake host sock mempty
       tr "AFTER HNDSHAKE"
 
@@ -1626,7 +1626,8 @@ mconnect1 (node@(Node host port _ services)) = do
           when (isTLSIncluded && needTLS) $ do
             Just (Node2Node {socket = sock}) <- liftIO $ readIORef $ connData conn
             maybeClientTLSHandshake h sock mempty
-
+      
+      tr "after connectsocktls"
       conn <- getSData <|> error "mconnect: no connection data"
 
       --mynode <- getMyNode
@@ -2384,7 +2385,9 @@ listenNew port conn' = do
         tChar 'T'
         s1 <-  deserialize   :: TransIO Int
         -- id <-  deserialize   :: TransIO Int
-        -- setParseString $ BS.pack (show id) <> "/" <> body -- add a extra parameter sessionid for minput
+        s <- giveParseString
+        setParseString $ BS.tail s -- add a extra parameter sessionid for minput
+        tr "SHORTWITH PARAM"
         return (s1,"0",0)
 
     allParClosParams= do
@@ -3425,18 +3428,19 @@ getClosureLog idConn "0" = do
   return (localLog clos, mempty, cont)
 getClosureLog idConn clos = do
   tr ("getClosureLog", idConn, clos)
-  clos <- liftIO $ atomically $ (readDBRef $ getDBRef $ kLocalClos idConn clos) `onNothing` error ("closure not found in DB:" <> show (idConn,clos))
-
-  prev <- liftIO $ atomically $ readDBRef (prevClos clos) `onNothing` error "prevClos not found"
-  case localCont clos of
+  closReg <- liftIO $ atomically $ (readDBRef $ getDBRef $ kLocalClos idConn clos) `onNothing` error ("closure not found in DB:" <> show (idConn,clos))
+  prev <- liftIO $ atomically $ readDBRef (prevClos closReg) `onNothing` error "prevClos not found"
+  case localCont closReg of
     Nothing -> do
       (baselog, prevLog, cont) <- getClosureLog (localCon prev) (localClos prev)
-      let locallogclos = localLog clos
+      let locallogclos = localLog closReg
       tr ("PREVLOG", prevLog)
       tr ("LOCALLOG", locallogclos)
       tr ("SUM", prevLog `joinlog` locallogclos)
       return (baselog, prevLog `joinlog` locallogclos, cont)
-    Just cont -> return (localLog clos, mempty, cont)
+    Just cont -> do
+      tr ("JUST",idConn,clos)
+      return (localLog closReg, mempty, cont)
 
 -- | cold restore  of the closure from the log drom data stored in permanent storage, and run form that point on
 restoreClosure _ "0" = return ()
