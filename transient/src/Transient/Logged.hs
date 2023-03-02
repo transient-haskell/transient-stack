@@ -132,8 +132,8 @@ class (Show a, Read a,Typeable a) => Loggable a where
                     Just x -> return x
 
 
--- instance Show Builder where
---   show b= show $ toLazyByteString b
+instance Show Builder where
+  show b= show $ toLazyByteString b
 
 instance Read Builder where
    readsPrec n str= -- [(lazyByteString $ read str,"")]
@@ -794,7 +794,7 @@ logged mx = do
 
           ("w/",r) -> do
             setParseString r
-            modify $ \s -> s{execMode= Parallel}  --setData Parallel
+            modify $ \s -> s{execMode=if execMode s /= Remote then Parallel else Remote}  --setData Parallel
             empty                                --   !> "Wait"
 
           _ -> value 
@@ -805,7 +805,7 @@ logged mx = do
       typeOfr _= undefined
 
       r= do
-        x <- deserialize <|> do psr <- giveParseString; throwt $ ErrorCall ("error parsing "<> BS.unpack psr <> " to " <> show (typeOf $ typeOfr r))
+        x <- deserialize <|> do psr <- giveParseString; throwt $ ErrorCall ("error parsing \""<> BS.unpack psr <> "\" to " <> show (typeOf $ typeOfr r))
         psr <- giveParseString
         when(not $ BS.null psr) $ tChar '/' >> return()
         return x
