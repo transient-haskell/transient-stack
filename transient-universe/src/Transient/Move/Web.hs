@@ -179,7 +179,7 @@ minput ident msg' = response
                    Just Self -> return()
                    Just _ -> do 
                         tr cdata
-                        let tosend = str "{\"error\"=" <> str (show $ show e) <> str "}"
+                        let tosend = str "{\"error\"," <> str (show $ show e) <> str "}"
                         sendFragment tosend
                         -- msend conn $ str "1\r\n]\r\n0\r\n\r\n"
                         --     l= fromIntegral $ BS.length tosend
@@ -303,11 +303,6 @@ public key inp= inp  <|> add key
 
 
 
-
-
-
-
-
 -- | send to the cllient all the endpoints published by `public` with the given key
 published k=  local $ do
     InputDatas _ inputdatas <-  liftIO $ getResource (InputDatas k undefined)  `onNothing` return (InputDatas k []) -- getRState
@@ -318,6 +313,7 @@ published k=  local $ do
       then do foldr (<|>) empty $ map (\(InputData id msg url) ->  sendOption msg url) inputdatas; empty
       else do
             foldr (<|>) empty $ map (\(InputData id msg url) ->  optionl id  (BS.unpack msg <> "\t\"endpt " <> id <> "\" for endpoint details")  url) inputdatas
+    empty
     where
     -- for console interaction
     optionl id msg url = do
@@ -754,7 +750,7 @@ rawHTTP node restmsg = sandbox $ do
   c <-
     do
       c <- mconnect' node
-      ttr ("after mconnect'")
+      tr ("after mconnect'")
       cc <- liftIO $ readIORef $ connData c
       tr ("CONDATA",isJust cc)
 
