@@ -62,13 +62,13 @@ trace _ x=  x
 -- tshow ::  a -> x -> x
 -- tshow _ y= y
 
--- {-# INLINE (!>) #-}
--- (!>) :: a -> b -> a
--- (!>) = const
+{-# INLINE (!>) #-}
+(!>) :: a -> b -> a
+(!>) = const
 indent, outdent :: MonadIO m => m ()
 
-indent= return()
-outdent= return()
+indent =  liftIO $ modifyIORef rindent $ \n -> n+2
+outdent=  liftIO $ modifyIORef rindent $ \n -> n-2
 
 
 {-# NOINLINE rindent #-}
@@ -323,7 +323,8 @@ instance Applicative TransIO where
             Nothing -> do
 
               p <- gets execMode
-              if p== Serial then empty else do
+              if p== Serial then empty else do 
+                       -- the first term may be being executed in parallel and will give his result later
                        x <- mx
                        liftIO $ (writeIORef r2 $ Just x)
 
@@ -1222,15 +1223,43 @@ delRState x= delState (undefined `asTypeOf` ref x)
 try :: TransIO a -> TransIO a
 try mx = do
   st <- get
-  mx <|> (modify (\s' ->s' { mfData = mfData st,parseContext=parseContext st}) >> empty)
+  mx <|> (modify (\s' ->s' { mfData = mfData st,parseContext=parseContext st}) >> empty )
 
--- | Executes the computation and restores all the state variables accessed by Data State, RData, RState and parse primitives.
+-- | Executes the computation and restores all the state variables accessed by Data State, RData, 
+-- RState and parse primitives.
+--
+-- sandboxing can be tricked by backtracking
+--
+--  >  r <- sandbox mx `onBack` (forward reason >> return())
+--
+-- will not sandbox mx if there is a backtrack in mx
+
+-- this version at least is protected against exception backtracking.
 sandbox :: TransIO a -> TransIO a
 sandbox mx = do
+  st <- get
+
+  onException $ \(SomeException e) -> do
+      let mf = mfData st
+          def= backStateOf $ SomeException $ ErrorCall "err"
+
+      bs <- getState <|> return def
+      let  mf'= M.insert (typeOf def) (unsafeCoerce bs) mf
+
+      modify $ \s ->s { mfData = mf', parseContext= parseContext st}
+
+  mx <*** modify (\s ->s { mfData = mfData st, parseContext= parseContext st})
+
+-- Lighther version of `sandbox` with no exception guard
+sandbox' :: TransIO a -> TransIO a
+sandbox' mx = do
   st <- get
   mx <*** modify (\s ->s { mfData = mfData st, parseContext= parseContext st})
 
 -- | executes a computation and restores the concrete state data. Default state is assigned if there isn't any before execution
+--
+-- As said in `sandbox`, sandboxing can be tricked by backtracking
+
 sandboxData :: Typeable a => a -> TransIO b -> TransIO b
 sandboxData def w= do
    d <- getState <|> return  def
@@ -1310,7 +1339,7 @@ sync :: TransIO a -> TransIO a
 sync pr= do
     mv <- liftIO newEmptyMVar
     -- if pr is empty the computation does not continue. It blocks
-    (abduce >> pr >>= liftIO . (putMVar mv) >> empty) <|> liftIO (takeMVar mv)
+    (pr >>= liftIO . (putMVar mv) >> empty) <|> liftIO (takeMVar mv)
         -- mr <- liftIO $ tryTakeMVar mv   do not work
         -- case mr of
         --    Nothing -> empty
@@ -1497,7 +1526,7 @@ loop parentc rec = forkMaybe False parentc $ \cont -> do
                   freelogic  rparentState parentState label
                   tr ("finalizing normal",threadId lastCont, unsafePerformIO $ readIORef $ labelth lastCont)
                   th <- myThreadId
-                  tr "antes de exceptbaack"
+                  -- tr "antes de exceptbaack"
 
       
                   exceptBackg lastCont  $ Finish $ show (th,"async thread ended")
@@ -1640,7 +1669,7 @@ react setHandler iob= Transient $ do
 
         modify $ \s -> s{execMode=let rs= execMode s in if rs /= Remote then Parallel else rs}
         cont <- get
-        -- ttr ("THREADS REACT",threadId cont, threadId st)
+        -- tr ("THREADS REACT",threadId cont, threadId st)
         liftIO $ atomicModifyIORef (labelth cont) $ \(_,label) -> ((Listener,label),())
 
 
@@ -1798,12 +1827,12 @@ undoCut = backCut ()
 {-# NOINLINE onBack #-}
 onBack :: (Typeable b, Show b) => TransientIO a -> ( b -> TransientIO a) -> TransientIO a
 onBack ac bac = registerBack (typeof bac) $ Transient $ do
-     -- ttr "onBack"
-     Backtrack mreason stack  <- getData `onNothing` (return $ backStateOf (typeof bac))
-    --  ttr ("onBackstack",mreason, length stack)
+    --  tr "onBack"
+     Backtrack mreason stack <- getData `onNothing` (return $ backStateOf (typeof bac))
+    --  tr ("onBackstack",mreason, length stack)
      runTrans $ case mreason of
-                  Nothing     -> ac                     -- !>  "ONBACK NOTHING"
-                  Just reason -> bac reason             -- !> ("ONBACK JUST",reason)
+                  Nothing     -> tr "ONBACK NOTHING" >> ac                    
+                  Just reason -> tr ("ONBACK JUST",reason) >> bac reason              
      where
      typeof :: (b -> TransIO a) -> b
      typeof = undefined
@@ -1888,15 +1917,15 @@ back reason =  do
   goBackt (Backtrack _ [] )= empty
   goBackt (Backtrack b (stack@(first : bs)) )= do
         setData $ Backtrack (Just reason) bs --stack
-        x <-  runClosure first -- <|> ttr "EMPTY" <|> empty                              --     !> ("RUNCLOSURE",length stack)
+        x <-  runClosure first -- <|> tr "EMPTY" <|> empty                              --     !> ("RUNCLOSURE",length stack)
         Backtrack back bs' <- getData `onNothing`  return (backStateOf  reason)
-        -- ttr ("goBackt",back, length bs')
+        -- tr ("goBackt",back, length bs')
 
         case back of
                  Nothing    -> do
                         setData $ Backtrack (Just reason) stack
                         st <- get
-                        runContinuation first x `catcht` (\e -> liftIO(exceptBack st e) >> empty)               -- !> "FORWARD EXEC"
+                        runContinuation first x -- `catcht` (\e -> liftIO(exceptBack st e) >> empty)    causes a loop in trowt excep `onException'` 
                  justreason -> do
                         --setData $ Backtrack justreason bs
                         goBackt $ Backtrack justreason bs      --  !> ("BACK AGAIN",back)
@@ -2129,7 +2158,7 @@ tmask proc= Transient $ do
 -- If you want to manage exceptions only in the first argument and have the semantics of `catch` in transient, use `catcht`
 onException' :: Exception e => TransIO a -> (e -> TransIO a) -> TransIO a
 onException' mx f= onAnyException mx $ \e -> do
-            -- tr  "EXCEPTION HANDLER EXEC" 
+            tr  "EXCEPTION HANDLER EXEC" 
             case fromException e of
                Nothing -> do
                   -- Backtrack r stack <- getData  `onNothing`  return (backStateOf  e)      
