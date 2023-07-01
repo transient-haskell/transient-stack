@@ -31,7 +31,7 @@ generate a web interface for each service:
 
 
 
-module Transient.Move.Services(
+module Transient.Move.Services (
 runService,callService, callService',callServiceFail,serve,ping
 , monitorNode, monitorService, setRemoteJob,killRemoteJob
 
@@ -46,7 +46,8 @@ runService,callService, callService',callServiceFail,serve,ping
 ,ReceiveFromNodeStandardOutput (..)
 ,controlToken
 #endif
-)  where 
+)  
+where 
 
 import Transient.Internals
 import Transient.Logged
@@ -78,7 +79,7 @@ import Data.String
 import Data.Char
 import qualified Data.ByteString.Char8 as BSS
 import qualified Data.ByteString.Lazy.Char8 as BS
-import Data.Aeson(encode)
+import Data.Aeson
 
 #ifndef ghcjs_HOST_OS
 import System.Directory
@@ -94,15 +95,16 @@ import System.Process
 #endif 
 
 
-monitorService= [("service","monitor")
+monitorService = Service $ M.fromList $
+                [("service","monitor")
                 ,("type","HTTP")
                 ,("executable", "monitorService")
                 ,("nodehost","localhost")
                 ,("nodeport","3000")
-                ,("package","https://github.com/transient-haskell/transient-universe")
+                ,("package","https://github.com/transient-haskell/transient-stack")
                 ,("HTTPstr","POST /returnInstances/S0 HTTP/1.0\r\n" <>
                   "Host: localhost\r\n" <>
-                  "Content-Type: application/json\r\n\r\n"<>
+                  "Content-Type: application/json\r\n\r\n" <>
                   "$1")]
 
 
@@ -145,8 +147,8 @@ initService  service= loggedc $ cached  <|> installed  <|>  installIt
     where
     installed= local $ do
          --if has host-port key it has been installed manually
-         host <- emptyIfNothing $ lookup "nodehost" service
-         port <- emptyIfNothing $ lookup "nodeport" service
+         host <- emptyIfNothing $ lookupService "nodehost" service
+         port <- emptyIfNothing $ lookupService "nodeport" service
          
          node <- liftIO $ createNodeServ host (read' port) [service]
          addNodes [node]
@@ -154,12 +156,15 @@ initService  service= loggedc $ cached  <|> installed  <|>  installIt
          
     cached= local $ do
         ns <- findInNodes service
+        tr ("findinnodes",ns)
         if null ns then  empty
          else do
           ind <- liftIO $ randomRIO(0,length ns-1)
+          tr ind
           return $  ns !! ind
           
     installIt= do                               -- TODO(DONE) block by service name, to avoid  double initializations
+        onAll $ tr ("requestInstance",service)
         ns <- requestInstance  service 1 
         tr  ("CALLING  NODE: INSTALLED",ns)
         if null ns then empty else return $ head ns
@@ -177,8 +182,10 @@ requestInstance service num=  loggedc $ do
                   continue
                   startMonitor
                   
+       tr ("ENCODE",encode ("",service, num ))
 
-       nodes <- callService  monitorService $ encode ("",service, num )
+       AsJSON nodes <- callService  monitorService $ encode ("",service, num )
+       onAll $ ttr ("RESP",nodes)
        local $ addNodes nodes                                                       -- !> ("ADDNODES",service)
        return nodes
        
@@ -237,7 +244,6 @@ endMonitor= do
 
 findInNodes :: Service -> TransIO [Node]
 findInNodes service =  do
-      -- return () !> "FINDINNODES"
       nodes <-  getNodes
 
       return $ filter (hasService service) nodes
@@ -245,7 +251,7 @@ findInNodes service =  do
       where
       head1 []= (mempty,mempty)
       head1 x= head x
-      hasService  service node= not $ null $ filter (\s -> head s==head service) $ nodeServices node
+      hasService  service node= not $ null $ filter (\s -> lookupService "service" s== lookupService "service" service) $ nodeServices node
 
 -- >>> :t  head $ nodeServices(undefined :: Node) 
 -- head $ nodeServices(undefined :: Node) :: (Package, Program)
@@ -354,23 +360,25 @@ callService
     :: (Subst1 a String, Loggable a,Loggable b)
     => Service -> a  -> Cloud b
 callService service params = loggedc $ do 
-    let type1 = fromMaybe "" $ lookup "type" service
+    onAll $ tr ("callservice",service)
+    let type1 = fromMaybe "" $ lookupService "type" service
 
         service'= case map toUpper type1 of
-                 "HTTP" ->  service ++[("nodeport", "80")]
-                 "HTTPS" -> service ++[("nodeport", "443")]
-                 _ ->  service
-    node <- initService service'      --  !> ("callservice initservice", service)
-
+                 "HTTP"  -> service <> Service (M.fromList[("nodeport", "80")])
+                 "HTTPS" -> service <> Service (M.fromList[("nodeport", "443")])
+                 _       -> service
+    node <- initService service'
     if take 4 type1=="HTTP" 
-      then do callHTTPService node service' params
-      else do callService'  node params        --    !> ("NODE FOR SERVICE",node)
+      then callHTTPService node service' params >>= return . head
+      else callService'  node params        --    !> ("NODE FOR SERVICE",node)
 #else
 callService
     :: (Loggable a, Loggable b)
     =>  Service -> a  -> Cloud b
-callService service params = local $ empty
+callService service params = local empty
 #endif
+
+
 
 setRemoteJob :: BSS.ByteString -> Node -> TransIO () 
 setRemoteJob thid node= do
@@ -638,9 +646,10 @@ sendToNodeStandardInput node cmd= callService' (monitorOfNode node) (node,cmd) :
    
 -- | monitor for a node is the monitor process that is running in his host
 monitorOfNode node= 
-  case lookup "relay" $ map head (nodeServices node) of
-      Nothing -> node{nodePort= 3000, nodeServices=[monitorService]}
-      Just info ->  let (h,p)= read info 
+  -- case lookup "relay" $ map head (nodeServices node) of
+  case mapMaybe (lookupService "relay") (nodeServices node) of
+      [] -> node{nodePort= 3000, nodeServices=[monitorService]}
+      (info:_) ->  let (h,p)= read info 
                     in Node h p Nothing [monitorService]
   
 data ReceiveFromNodeStandardOutput= ReceiveFromNodeStandardOutput Node BSS.ByteString deriving (Read,Show,Typeable)
@@ -671,16 +680,34 @@ serve  serv= do
 
 -- callHTTPService :: (Subst1 a String, fromJSON b) =>  Node -> String -> a -> Cloud ( BS.ByteString)
 callHTTPService node service vars=  onAll $ do
+  tr ("callHTTPService",vars)
   newVar "hostnode"  $ nodeHost node
   newVar "hostport"  $ nodePort node
 
-  callString <-  emptyIfNothing $ lookup "HTTPstr" service
+  callString <-  emptyIfNothing $ lookupService "HTTPstr" service
 
   let calls = subst callString vars
-  restmsg <- replaceVars calls
-  --return () !> ("restmsg",restmsg)
+  -- tr ("calls",calls,vars,vars)
+  restmsg' <- replaceVars calls
+  let restmsg = insertLength restmsg'
+  -- tr ("calls",calls,"vars",vars,"restmsg'",restmsg')
   --prox <- getProxyNode node $ map toLower $ fromJust $ lookup "type" service
   rawHTTP node  restmsg
+  where
+  insertLength :: String -> String
+  insertLength msg= 
+    let (_,s) =findSubstring "Content-Length" "" msg
+    in if not $  null s then  msg else 
+      let (prev,next) = findSubstring "\r\n\r\n" "" msg
+      
+      in if null next then msg else 
+            prev ++ "\r\nContent-Length: " ++ show(length next) ++ "\r\n\r\n" ++ next
+
+  findSubstring :: String -> String -> String -> (String,String)
+  findSubstring sub prev str
+          | null str = (prev,str)
+          | isPrefixOf sub str = (prev,drop (length sub) str)
+          | otherwise = findSubstring sub (prev ++ [head str]) (tail str)
   {-
   where
 
@@ -973,5 +1000,6 @@ replace a b s@(x:xs) =
 
 show1 :: (Show a, Typeable a) => a -> String     
 show1 x | typeOf x == typeOf (""::String)= unsafeCoerce x 
+        | typeOf x == typeOf (undefined::BS.ByteString)= BS.unpack $ unsafeCoerce x
           | otherwise= show x 
 #endif

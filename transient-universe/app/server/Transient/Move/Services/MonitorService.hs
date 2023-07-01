@@ -48,14 +48,11 @@ import qualified Data.ByteString.Lazy.Char8   as BS
 import qualified Data.ByteString.Char8 as BSS
 import System.Exit 
 
-(!>) a b= a
 
    
 main = do
    putStrLn "Starting Transient monitor"
    keep $ initNode $ inputNodes <|> returnInstances
-                
-
 
 
 {- ping is not used to determine healt of services. The client program notify the
@@ -88,10 +85,11 @@ blockings= unsafePerformIO $ newIORef M.empty
 
 withBlockingService :: Service -> Cloud a -> Cloud a
 withBlockingService serv proc= do
+   let servname= lookupService "name" serv
    beingDone <- localIO $ atomicModifyIORef  blockings $ \map -> 
-                                let mv = M.lookup serv map
+                                let mv = M.lookup servname map
                                 in case mv of
-                                   Nothing -> (M.insert serv () map,False)
+                                   Nothing -> (M.insert servname () map,False)
                                    Just () -> (map,True)
    if beingDone 
     then do
@@ -99,7 +97,8 @@ withBlockingService serv proc= do
       withBlockingService serv proc
     else do
       r <- proc
-      localIO $ atomicModifyIORef blockings $ \map -> (M.delete serv map,())
+      let servname = lookupService "name" serv
+      localIO $ atomicModifyIORef blockings $ \map -> (M.delete servname map,())
       return r
 
 -- | gets a node with a service, which probably failed and return other n instances of the same service.
@@ -111,11 +110,11 @@ withBlockingService serv proc= do
 
 -- | install and return n instances of a service, distributed
 -- among all the nodes which have monitoService executables running and connected 
--- returnInstances :: (String, Service, Int) -> Cloud [Node] 
+returnInstances ::  Cloud ()
 returnInstances = do
-    POSTData(ident,service, num)   <- minput "returnInstances" "enter user ident,service and number of instances:"
+    POSTData(ident :: String,service :: Service, num :: Int) <-  minput "returnInstances" "enter user ident,service and number of instances:"
     r <- withBlockingService service $ do
-                nodes <- local $ findInNodes service >>= return . take num
+                nodes :: [Node] <- local $ findInNodes service >>= return . take num
 
                 let n= num - length nodes
                 if n <= 0 then return $ take num nodes 
@@ -172,7 +171,7 @@ install  service port= do
     install'= do
         my <- getMyNode
         let host= nodeHost my
-        program <- return (lookup "executable" service) `onNothing` empty
+        program <- return (lookupService "executable" service) `onNothing` empty
         -- return ()  !> ("program",program)
         tryExec program host port  <|> tryDocker service host port program
                                    <|> do tryInstall service  ; tryExec program host port
@@ -180,7 +179,7 @@ install  service port= do
 
 tryInstall :: Service -> TransIO ()
 tryInstall service = do 
-    package <- emptyIfNothing (lookup "package" service) 
+    package <- emptyIfNothing (lookupService "package" service) 
     install package
     where  
     install package
@@ -190,7 +189,7 @@ tryInstall service = do
         | otherwise= error "can not install the package/image for the program requested"
 
 tryDocker service host port program= do
-    image <- emptyIfNothing $ lookup "image" service
+    image <- emptyIfNothing $ lookupService "image" service
     path <- Transient $ liftIO $ findExecutable "docker"    -- return empty if not found
     liftIO $ callProcess path ["run", image,"-p"," start/"++ host++"/"++ show port++ " " ++ program]
 
@@ -206,6 +205,7 @@ tryExec program host port= do
         liftIO $ putStr  "executing: " >> putStrLn prog
 
         networkExecuteStreamIt prog 
+        -- fork $ liftIO $ callCommand  prog
         liftIO $ threadDelay 2000000
 
         tr ("INSTALLED", program,port)
