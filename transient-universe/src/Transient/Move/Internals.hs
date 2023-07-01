@@ -150,6 +150,11 @@ instance ToJSON (MVar a) where
 instance FromJSON (MVar a) where
   parseJSON _= return(unsafePerformIO  newEmptyMVar)
 
+
+instance ToJSON Service
+
+instance FromJSON Service
+
 instance ToJSON Node
 
 instance FromJSON Node
@@ -159,6 +164,9 @@ instance Loggable Node
 instance Ord Node where
   compare node1 node2 = compare (nodeHost node1, nodePort node1) (nodeHost node2, nodePort node2)
 
+
+
+  
 -- The cloud monad is a thin layer over Transient in order to make sure that the type system
 -- forces the logging of intermediate results
 newtype Cloud a = Cloud {runCloud :: TransIO a}
@@ -456,11 +464,11 @@ callTo node remoteProc = wormhole' node $ atRemote remoteProc
 -- >     bat t                      -- in the original node
 atRemote :: Loggable a => Cloud a -> Cloud a
 atRemote proc = loggedc' $ do
-  --modify $ \s -> s{execMode=Parallel}
-  teleport --  !> "teleport 1111"
+  teleport
   modify $ \s -> s {execMode = if execMode s == Parallel then Parallel else Serial} 
   r <- loggedc $ proc <** modify (\s -> s {execMode = Remote}) 
-  teleport -- !> "teleport 2222"
+  teleport
+
   return r
 
 
@@ -527,7 +535,7 @@ wormhole node comp = do
         nodes <- local getNodes
         let thenode = filter (== node) nodes
         if not (null thenode) && isJust (connection $ Prelude.head thenode) then return $ Prelude.head nodes else empty
-      local $ addNodes [node {nodeServices = nodeServices node ++ [[("relay", show (nodeHost (relaynode :: Node), nodePort relaynode))]]}]
+      local $ addNodes [node {nodeServices = nodeServices node ++ [Service $ M.fromList[("relay", show (nodeHost (relaynode :: Node), nodePort relaynode))]]}]
 
 -- when the first teleport has been sent within a wormhole, the
 -- log sent should be the segment not send in the previous teleport
@@ -612,51 +620,7 @@ syncStream proc = do
     err = error "syncStream: no connection data"
 
 
-{-
-teleport :: Cloud ()
-teleport = do
-  modify $ \s -> s {execMode = if execMode s == Remote then Remote else Parallel}
-  loggedc $ do
-      idSession <- onAll $ fromIntegral <$> genPersistId
 
-      tr "TELEPORTTT2"
-      conn@Connection {idConn = idConn, connData = contype, synchronous = synchronous} <-
-        getData
-          `onNothing` error "teleport: No connection defined: use wormhole"
-
-      --  labelState  "teleport"
-
-      log <- getLog
-
-      if not $ recover log
-        then do
-          -- when a node call itself, there is no need for socket communications
-          ty <- onAll $ liftIO $ readIORef contype
-          case ty of
-            Just Self -> onAll $ do
-              modify $ \s -> s {execMode = Parallel} -- setData  Parallel
-              abduce -- !> "SELF" -- call himself
-              tr "SELF"
-              liftIO $ do
-                remote <- readIORef $ remoteNode conn
-                writeIORef (myNode conn) $ fromMaybe (error "teleport: no connection?") remote
-            _ -> do
-              local $ do
-                tr ("teleport remote call", idConn)
-                (Closure sess closRemote n) <- getIndexData idConn `onNothing` return (Closure 0 "0" [])
-                tr ("getIndexData", idConn, sess, closRemote, n)
-                let fragment = dropFromIndex n $ fulLog log
-                let tosend = if null n then toPath $ LD fragment else toPathFragment fragment -- if a fragment, avoid the LX LX
-                tr ("MSEND END", getEnd $ fulLog log, fulLog log, "n=", n)
-                tr ("idconn", idConn, "REMOTE CLOSURE", closRemote, "FULLLOG", fulLog log, n, "CUT FULLOG", fragment, tosend)
-
-                let closLocal = BC.pack $show $ hashClosure log
-
-                msend conn $ toLazyByteString $ serialize $ SMore $ ClosureData closRemote sess closLocal idSession tosend
-              receive  conn Nothing idSession
-          return  ()
-        else  return  ()
--}
 
 
 
@@ -694,8 +658,8 @@ teleport = do
               tr ("getIndexData", idConn, sess, closRemote, n)
               let fragment = dropFromIndex n $ fulLog log
               let tosend = if null n then toPath $ LD fragment else toPathFragment fragment -- if a fragment, avoid the LX LX
-              tr ("MSEND END", getEnd $ fulLog log, fulLog log, "n=", n)
-              tr ("idconn", idConn, "REMOTE CLOSURE", closRemote, "FULLLOG", fulLog log, n, "CUT FULLOG", fragment, tosend)
+              -- tr ("MSEND END", getEnd $ fulLog log, fulLog log, "n=", n)
+              -- tr ("idconn", idConn, "REMOTE CLOSURE", closRemote, "FULLLOG", fulLog log, n, "CUT FULLOG", fragment, tosend)
 
               let closLocal = BC.pack $show $ hashClosure log
 
@@ -796,7 +760,7 @@ setCont mclos idSession = do
 
   -- setData $ log{fromCont=True}
 
-  tr ("SETCONT", toPathLon $ fulLog log, "recover", recover log)
+  -- tr ("SETCONT", toPathLon $ fulLog log, "recover", recover log)
   ev <- newEVar
 
   tr "newevar"
@@ -812,7 +776,7 @@ setCont mclos idSession = do
 
       let ns = if isJust mprevClosData then localEnd (fromJust mprevClosData) else []
       let end = getEnd $ fulLog log
-      tr ("END",closLocal,log,end)
+      -- tr ("END",closLocal,log,end)
       let lc =
             LocalClosure
               { localCon = idSession,
@@ -826,7 +790,7 @@ setCont mclos idSession = do
                 -- setState $ PrevClos dblocalclos
               }
 
-      tr $ let drop = dropFromIndex ns $ fulLog log in ("DROP", fulLog log, ns, drop, toPathLon $ LD drop)
+      -- tr $ let drop = dropFromIndex ns $ fulLog log in ("DROP", fulLog log, ns, drop, toPathLon $ LD drop)
       return lc
 
   -- liftIO $ modifyMVar_ localClosures $ \map ->  return $ M.insert closLocal pair map
@@ -890,6 +854,7 @@ callNodes' nodes op init proc = loggedc' $ Prelude.foldr op init $ Prelude.map (
 
 -----
 #ifndef ghcjs_HOST_OS
+-- reconnect if connection timed out
 sendRawRecover con r =
   do
     c <- liftIO $ readIORef $ connData con
@@ -923,7 +888,9 @@ sendRaw con r = do
             SBS.sendMany sock (BL.toChunks r)
           Just (TLSNode2Node ctx) ->
             sendTLSData ctx r
-          _ -> error "No connection stablished"
+          _ -> do
+              n <-readIORef $ remoteNode con
+              error $ "No connection stablished with " ++ show n
         TOD time _ <- getClockTime
         return $ Just time
 
@@ -1308,6 +1275,7 @@ mread (Connection _ _ _  (Just (Node2Web sconn )) _ _ _ _ _ _ _)= do
 
 --  parallel many, used for parsing
 parMany p = do
+  tr "parMany"
   d <- isDone
   -- tr("parmany",d)
   if d then empty else p <|> parMany p
@@ -1453,7 +1421,7 @@ mconnect' node' = exclusiveCon $ do
 
   return conn
 
-
+lookupService x (Service s)= M.lookup x s
 
 #ifndef ghcjs_HOST_OS
 -- effective connect trough different methods
@@ -1468,7 +1436,8 @@ mconnect1 (node@(Node host port _ services)) = do
               continue
               empty
      -}
-  let types = mapMaybe (lookup "type") services -- need to look in all services
+  
+  let types = mapMaybe (lookupService "type") services -- need to look in all services
   needTLS <-
     if "HTTP" `elem` types
       then return False
@@ -1487,7 +1456,7 @@ mconnect1 (node@(Node host port _ services)) = do
   --                  _ -> return isTLSIncluded
 
   tr ("NEED TLS", needTLS)
-  (conn, parseContext) <-   -- fromJust <$> (connectNode2Node host port needTLS)
+  (conn, parseContext) <-  --  fromJust <$> (connectNode2Node host port needTLS)
     checkSelf node
       <|> timeout 1000000 (connectNode2Node host port needTLS)
       <|> timeout 1000000 (connectWebSockets host port needTLS)
@@ -1540,10 +1509,11 @@ mconnect1 (node@(Node host port _ services)) = do
           Nothing -> throw $ ConnectionError "Bad cookie" node
           Just r -> return r
 
-    checkRelay needTLS = do
-      case lookup "relay" $ map head (nodeServices node) of
-        Nothing -> empty -- !> "NO RELAY"
-        Just relayinfo -> do
+    checkRelay needTLS = 
+      case mapMaybe (lookupService "relay") (nodeServices node) of
+      -- case lookup "relay" $ map head (nodeServices node) of
+        [] -> empty -- !> "NO RELAY"
+        (relayinfo:_) -> do
           let (h, p) = read relayinfo
           connectWebSockets1 h p ("/relay/" ++ h ++ "/" ++ show p ++ "/") needTLS
 
@@ -2077,7 +2047,7 @@ listen (node@(Node _ port _ _)) = onAll $ do
 
   -- onException $ \(e :: SomeException) -> do  -- msend conn $ BS.pack $ show e ; empty
   --   -- cdata <- liftIO $ readIORef $ connData conn 
-  --   ttr "ONEXcepTION1"
+  --   tr "ONEXcepTION1"
   --   msend conn $ chunked "404: not found" <> endChunk
   --   -- case cdata of 
   --   --   Just(HTTP2Node _ _ _ _) -> msend conn $ "\r\n" <> chunked "404: not found" <> endChunk
@@ -2213,6 +2183,7 @@ listenNew port conn' = do
           mclose conn
           error "connection attempt with bad cookie"
         else do
+          tr "sending OK"
           sendRaw conn "OK" --    !> "CLOS detected"
           mread conn
     _ -> do
@@ -2224,6 +2195,7 @@ listenNew port conn' = do
 
       let uri' = BC.tail $ uriPath uri -- !> uriPath uri
       tr ("uri'", uri')
+
 
       case BC.span (/= '/') uri' of
         ("api", _) -> do
@@ -2338,7 +2310,9 @@ listenNew port conn' = do
               --                  M.lookup uri' rpaths
               --               else uri'
               let uriparsed = BS.pack $ unEscapeString $ BC.unpack uri'
-              body <- if method == "POST" then  (<>) <$> "/" <*> giveParseString else return mempty
+
+              body <- if method == "POST" then   "/" <> giveParseString else return mempty
+              tr("BODY",body)
               setParseString $ uriparsed  <> body
               remoteClosure <- BL.toStrict <$> tTakeWhile' (/= '/') 
 
@@ -2359,7 +2333,7 @@ listenNew port conn' = do
                   Just (HTTPS2Node ctx) -> (Just $ HTTPS2Node ctx, ())
                   _ -> error $ "line 2258: " <> show (cdata)
               pool <- liftIO $ newMVar [conn]
-              let node = Node "httpnode" 0 (Just pool) [[("httpnode", "")]]
+              let node = Node "httpnode" 0 (Just pool) [Service $ M.fromList[("httpnode", "")]]
               addNodes [node]
               liftIO $ writeIORef (remoteNode conn) $ Just node
               --setState conn{connData=cdata}
@@ -2370,7 +2344,8 @@ listenNew port conn' = do
 
               liftIO $ SBSL.sendAll sock $ "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nTransfer-Encoding: chunked\r\n"
               -- httpreq :: HTTPHeaders <- getState <|> error "no state"
-              tr headers
+              tr ("HEADERS",headers)
+              tr ("string to parse", s)
               return $ SLast $ ClosureData remoteClosure s1 thisClosure s2 $ lazyByteString s
   where
     
@@ -2418,6 +2393,8 @@ listenNew port conn' = do
           Nothing -> return ret -- most likely chunked encoding, processed in the same thread
           Just len -> do
             str <- tTake (fromIntegral len)
+            tr ("LEN",len,"body",str)
+
             abduce                              -- new thread
             setParseString str                  -- set the parse string
             return ret
@@ -2730,7 +2707,7 @@ processMessage s1 closl s2 closr mlog deleteClosure = do
           when (synchronous conn) $ liftIO $ tryPutMVar mv () >> return () -- for syncronous streaming
           case mlog of
             Right log -> do
-              tr ("WRITEEVAR", s2, closl)
+              tr ("WRITEEVAR", s2, closl,log)
               
               -- conn <- getData `onNothing` error "no connection" :: StateIO Connection
               runTrans $
@@ -2806,6 +2783,7 @@ setLog idConn log sessionId closr = do
   modifyData' (\log -> log {recover = True}) (error "setLog no log")
 
   tr "SETLOG recover= True"
+
   return ()
 
 #ifdef ghcjs_HOST_OS
@@ -2829,10 +2807,14 @@ listen node = onAll $ do
 type Pool = [Connection]
 type SKey = String
 type SValue = String
-type Service = [(SKey, SValue)]
+newtype Service =Service (M.Map SKey SValue) deriving (Show,Read,Generic,Eq,Semigroup,Monoid)
+
+-- instance  Loggable Service where
+--   serialize (Service s)= serialize s 
+--   deserialize = Service <$> deserialize
 
 instance Default Service where
-  def=  [("service","$serviceName")
+  def=  Service $ M.fromList[("service","$serviceName")
         ,("executable", "$execName")
         ,("package","$gitRepo")]
 
@@ -2841,8 +2823,8 @@ instance Default [Service] where
 
 
 lookup2 key doubleList =
-  let r = mapMaybe (lookup key) doubleList
-   in if null r then Nothing else Just $ head r
+  let r = mapMaybe (lookupService key) doubleList
+  in if null r then Nothing else Just $ head r
 
 filter2 key doubleList = mapMaybe (lookup key) doubleList
 
@@ -3027,7 +3009,7 @@ parsePostUrlEncoded = do
     param = tTakeWhile' (/= '=') -- !> "param"
     value = unEscapeString <$> BS.unpack <$> tTakeWhile' (/= '&')
 
-getHeaders = manyTill paramPair (string "\r\n\r\n") -- !>  (method, uri, vers)
+getHeaders = manyTill paramPair (string "\r\n\r\n")  -- !>  (method, uri, vers)
   where
     paramPair = (,) <$> (mk <$> getParam) <*> getParamValue
 
@@ -3067,7 +3049,7 @@ createWebNode :: IO Node
 createWebNode = do
   pool <- emptyPool
   port <- randomIO
-  return $ Node "webnode" port (Just pool) [[("webnode", "")]]
+  return $ Node "webnode" port (Just pool) [Service $ M.fromList[("webnode", "")]]
 
 instance Eq Node where
   Node h p _ _ == Node h' p' _ _ = h == h' && p == p'
@@ -3139,7 +3121,7 @@ addNodes nodes = liftIO $ do
       case mn of
         [] -> do tr "NUEVO NODO"; writeTVar nodeList $ (prevnodes) ++ [node]
         [n] -> do
-          let nservices = nubBy (\s s' -> head s == head s') $ nodeServices node ++ nodeServices n
+          let nservices = nubBy (\s s' ->  s ==  s') $ nodeServices node ++ nodeServices n
           writeTVar nodeList $ ((prevnodes) \\ [node]) ++ [n {nodeServices = nservices}]
           unsafeIOToSTM $ do
             cs' <- if isJust (connection node) then readMVar $ fromJust $ connection node else return []
@@ -3424,7 +3406,7 @@ getClosureLog idConn "0" = do
   tr ("getClosureLog", idConn, 0)
 
   clos <- liftIO $ atomically $ (readDBRef $ getDBRef $ kLocalClos 0 "0") `onNothing` error "closure 0 not found in DB"
-  let cont = fromMaybe (error "please run flowAssign before") $localCont clos
+  let cont = fromMaybe (error "please run flowAssign before") $ localCont clos
   return (localLog clos, mempty, cont)
 getClosureLog idConn clos = do
   tr ("getClosureLog", idConn, clos)
