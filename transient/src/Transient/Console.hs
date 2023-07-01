@@ -184,6 +184,7 @@ processLine line = liftIO $ do
       process 5 mbs $ dropspaces rest
 
     process n [] line = do
+      threadDelay 100000
       mbs <- readIORef rcb
       process (n -1) mbs line
 
@@ -457,7 +458,7 @@ execCommandLine = do
 
 -- u = undefined
 
--- | write a message and parse a complete line from the console. The parse is constructed with 'Transient.Parse' primitives
+-- | write a message and parse a complete line from the console. The parser is constructed with 'Transient.Parse' primitives
 inputParse :: (Typeable b) => TransIO b -> String -> TransIO b
 inputParse parse message = r
   where

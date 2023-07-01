@@ -57,7 +57,7 @@ import Data.TCache hiding (onNothing)
 import Data.TCache.Defs hiding (serialize,deserialize)
 
 import Data.ByteString.Lazy.Char8 (pack,unpack, toStrict)
-import Data.ByteString.Builder
+import Data.ByteString.Builder hiding (writeFile)
 import qualified Data.Map.Strict as M
 import Control.Arrow (second)
 import qualified Data.Vector.Unboxed as DVU
@@ -71,8 +71,6 @@ import Data.Text.Encoding
 
 import Data.IORef
 
-(!>)= const
--- (!>)= flip trace
 
 -- | a DDS contains a distrib. computation which return a (non-deterministic/stream/set of) 
 -- link/s to the generated chunk/s of data, in different nodes, thanks to the non-deterministic
@@ -107,11 +105,11 @@ instance Indexable (Partition a) where
 keyp s True= "PartP@"++s :: String
 keyp s False="PartT@"++s
 
-instance Loggable a => IResource (Partition a) where
+instance {-# OVERLAPPING #-} Loggable a => IResource (Partition a) where
     keyResource= key
     readResourceByKey k=  r
       where
-      typePart :: IO (Maybe a) -> a
+      typePart :: IO (Maybe (Partition a)) -> Partition a
       typePart = undefined
       r =  if k !! 4 /= 'P' then return Nothing   else
             defaultReadByKey  (defPath (typePart r) ++ k) >>= return . fmap ( read . unpack)

@@ -52,7 +52,7 @@ import Unsafe.Coerce
 import Data.String
 import GHC.Generics
 import Data.Default
-
+import Data.Char
 -- mainrerun = keep $ rerun "config" $ do
 --   logged $ liftIO $ do
 --      putStrLn "configuring the program"
@@ -281,7 +281,7 @@ estados:
 -}
 showNetworkRequest conn= do
   cdata <- liftIO $ readIORef $ connData conn
-  liftIO $ print $case cdata of
+  liftIO $ print $ case cdata of
     Nothing   -> "Nothing"
     Just Self -> "Self"
     Just (HTTPS2Node ctx) -> "HTTPS2Node"
@@ -1154,7 +1154,7 @@ data Kv= Kv{key1 :: String, val ::String} deriving (Generic,Default,ToJSON,FromJ
 mainimput= keep $ initNode $ do
   minput "s" "start"  :: Cloud()
   -- local $  (fork $ liftIO $ threadDelay 1000000) 
-  -- localIO $ ttr "bEFOrE ERROR"
+  -- localIO $ tr "bEFOrE ERROR"
   -- onAll $  throwt $ ErrorCall "error"
   moutput "end" :: Cloud ()
 
@@ -1170,7 +1170,7 @@ mainfinish2= keep $  do
   -- error "error"
   -- fork $ do
   -- --   -- bs@(Backtrack mreason stack) <- getData  `onNothing`  return (Backtrack (Just $ Finish "")  [])
-  -- --   -- ttr ("SIZE", length stack)
+  -- --   -- tr ("SIZE", length stack)
   --    liftIO $ threadDelay 1000000
   -- topState >>= showThreads
   return()
@@ -1179,7 +1179,7 @@ mainfinish2= keep $  do
 mainerr= keep  $ initNode $ local $ do
   abduce
   topState >>= showThreads
-  onFinish $ const $ ttr "==============================FINISH"
+  onFinish $ const $ tr "==============================FINISH"
 
   -- onException $ \(e:: SomeException) -> throwt e
   throw $ ErrorCall "---------------------err"
@@ -1212,12 +1212,60 @@ runAt2 a b= do
     onAll $ liftIO $ print "RUNAT2"
     runAt a b 
 
-main = keep $ initNode $ do
-    Raw r <- local $ callService ipnsList () 
-    localIO $ print r
-    empty
-    local setIPFS
-    POSTData (name :: String, wallet :: Integer) <- minput "enterw"  "enter wallet" 
+mainsand= keep $ do
+  sandbox1 $ throwt $ ErrorCall "err"
+  return ()
+
+
+sandbox1 :: TransIO a -> TransIO a
+sandbox1 mx = do
+  st <- get
+  onException $ \(SomeException e) -> do
+    let mf = mfData st
+        def= backStateOf $ SomeException $ ErrorCall "err"
+
+    bs <- getState <|> return def
+        
+    let  mf'= M.insert (typeOf def) (unsafeCoerce bs) mf
+    modify (\s ->s { mfData = mf', parseContext= parseContext st})
+  mx  <*** modify (\s ->s { mfData = mfData st, parseContext= parseContext st})
+    
+
+
+mainsandb= keep $ do
+   setState False  
+   sandbox $ liftIO $ print "hello"
+   ac  `catcht` \(e :: SomeException) -> return()
+   i <- getState
+   liftIO $ print (i :: Bool)
+   where
+   ac=  sandbox $ do
+    liftIO $ print "inter"
+    sandbox $ do
+      setState True
+      throwt $ ErrorCall "err"
+
+main= keep $ initNode $ inputNodes <|> do
+  local $ option "go" "go"
+  nodes <- local getNodes 
+  nod <- local getMyNode
+  r <- local $ collect 2 $ runCloud $ runAt (nodes !! 0 ) (proc nod)  <|> runAt (nodes !! 1) (proc nod) -- <|> runAt (nodes !! 2) (proc nod)
+
+  localIO $ print r
+  where
+  proc nod= do
+      node <- local getMyNode
+      localIO $ print $ "hello from " <> show nod
+      return $ "world "  ++ show node
+
+
+
+
+mainauction = keep $ initNode $ do
+
+    setIPFS
+
+    POSTData (wallet :: Integer,name :: String) <- minput "enterw"  "enter wallet" 
     setSessionState wallet
     guessgame name wallet <|> auction  
     return()
@@ -1225,7 +1273,7 @@ main = keep $ initNode $ do
     where
     guessgame name wallet= do
 
-       minput "guessgame" "play guessgame"  <|> published "lock"
+       minput "guessgame" "play guessgame"  <|> published "lock" :: Cloud ()
        lock  :: Int <- minput "enterlock" $ name <> ": lock a number to guess it"
        guessn:: Int <- public "lock" $ minput "enterguess" $ "guess the number entered by: " <>  name  
        wallet' :: Integer <- local getSessionState
@@ -1262,7 +1310,7 @@ maintest = keep $ initNode $ test <|> onAll restore1
     --    error "auction: not implemented"
 
 
-minput1 :: (Loggable a, ToRest a,Loggable val) => String  ->  val -> Cloud a
+minput1 :: (Loggable a, ToHTTPReq a,Loggable val) => String  ->  val -> Cloud a
 minput1 ident val = response
   where
     response = do
@@ -1279,7 +1327,7 @@ minput1 ident val = response
         let idSession = 0
 
         
-        params <- toRest $ type1 response
+        params <- toHTTPReq $ type1 response
         
         connected log  idSession conn closLocal    
 
@@ -1326,3 +1374,5 @@ receivee conn clos  val= do
 
       setParseString $ toLazyByteString  (lazyByteString (BS.pack "0/") <> (serialize val)) :: TransIO ()
       -- setLog 0 (lazyByteString (BS.pack "0/") <> (serialize val)) 0 0 :: TransIO()
+
+

@@ -102,8 +102,10 @@ getNodeParams  =
       
     commit= do
       option "save" "commit the current execution state"
+      abduce
       liftIO $ syncCache
       empty
+      
     getCookie= do
       if isBrowserInstance then return() else do
          option "cookie" "set the cookie"

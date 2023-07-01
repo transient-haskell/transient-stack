@@ -1,5 +1,5 @@
 
-{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE ScopedTypeVariables,OverloadedStrings #-}
 import Transient.Internals
 import Transient.Move.Internals
 import Transient.Move.Utils
@@ -399,7 +399,4 @@ main12= keep $ initNode $ inputNodes <|> do
 --              handle <- getSData <|> error "no handle"
 --              liftIO $ hClose handle
 
-     
-     
-     
      

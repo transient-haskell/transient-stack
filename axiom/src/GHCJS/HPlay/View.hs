@@ -113,7 +113,7 @@ module GHCJS.HPlay.View(
 
 
 import           Transient.Internals     hiding (input, option, parent)
-import           Transient.Logged
+import           Transient.Logged hiding ((<<))
 import           Transient.Move.Utils
 import qualified Prelude(id,span,div)
 #ifndef ghcjs_HOST_OS
@@ -694,7 +694,7 @@ setRadio ch v = Widget $ Transient $ do
   addSData
       ( finput id "radio" (toJSString str)  ch Nothing `attrs` [("name",name)] :: Perch)
   
-  if  checked == "true" !> ("val",v) then Just . Radio . read1 . unpack <$> liftIO (getProp (fromJust me) "value") else return Nothing
+  if  checked == "true"  then Just . Radio . read1 . unpack <$> liftIO (getProp (fromJust me) "value") else return Nothing
   where 
   read1 x=r 
     where
@@ -820,9 +820,9 @@ getMultilineText nvalue =  res where
     tolook <- getData `onNothing` error "no event id" -- genNewId   !>  "GETMULTI"
     r <- getParam1 True tolook  `asTypeOf` typef res
     case r of
-       Validated x        -> do addSData (ftextarea tolook  $ toJSString x :: Perch); return $ Just x     !> "VALIDATED"
-       NotValidated s err -> do addSData (ftextarea tolook   (toJSString s) :: Perch); return  Nothing    !> "NOTVALIDATED"
-       NoParam            -> do modify $ \s -> s{execMode=Parallel};addSData (ftextarea tolook  nvalue :: Perch); return  Nothing  !> "NOTHING"
+       Validated x        -> do addSData (ftextarea tolook  $ toJSString x :: Perch); return $ Just x     -- !> "VALIDATED"
+       NotValidated s err -> do addSData (ftextarea tolook   (toJSString s) :: Perch); return  Nothing    -- !> "NOTVALIDATED"
+       NoParam            -> do modify $ \s -> s{execMode=Parallel};addSData (ftextarea tolook  nvalue :: Perch); return  Nothing  -- !> "NOTHING"
     where
     typef :: Widget String -> StateIO (ParamResult Perch String)
     typef = undefined
@@ -2026,6 +2026,6 @@ foreign import javascript unsafe
 pushState _ _ _= empty
 replaceState _ _ _= empty
 editW = onBrowser $ local empty                             -- !> "editW"
-js_getPage=  empty
-js_path=  empty
+js_getPage=  empty :: IO JSVal
+js_path=  empty :: IO JSVal
 #endif

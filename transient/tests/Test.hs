@@ -2,7 +2,7 @@
 --  info: use sed -i 's/\r//g' file if report "/usr/bin/env: ‘execthirdlinedocker.sh\r’: No such file or directory"
 -- LIB="/projects/transient-stack" && runghc  -DDEBUG   -i${LIB}/transient/src -i${LIB}/transient-universe/src -i${LIB}/axiom/src   $1 ${2} ${3}
 
-{-# LANGUAGE   CPP, OverloadedStrings,ScopedTypeVariables, DeriveDataTypeable, FlexibleInstances, UndecidableInstances #-}
+{-# LANGUAGE  ExistentialQuantification, CPP, OverloadedStrings,ScopedTypeVariables, DeriveDataTypeable, FlexibleInstances, UndecidableInstances #-}
 
 
 import Transient.Internals 
@@ -36,7 +36,8 @@ import Control.Monad
 import Data.IORef
 import Data.Maybe
 import Data.String
-
+import Data.Default
+import Data.Char
 import System.IO.Unsafe
 import Unsafe.Coerce
 
@@ -69,6 +70,68 @@ class (Show a) => Yield a where
      r1 <- X
      modifyData' (++ show r1) r1
 -}
+
+
+toRest1 ::  (Default a, Typeable a) =>a -> TransIO BS.ByteString
+toRest1 ( x) =  jsonType  x
+
+
+data Vars= Vars[BS.ByteString]
+
+varunique s= do
+  Vars vars <- getState <|> let v= Vars [] in setState v >> return v
+  if null $ filter (== s) vars then do setState $ Vars (s:vars); return s
+                                else varunique $ BS.snoc s 'x'    
+
+jsonType x=do 
+    let types = show $ typeOf x
+    withParseString (BS.pack types) elemType
+      
+    
+elemType =   tuple  <|> list <|> single
+-- si tipo empieza por(
+-- es una tupla, coger el tipo, cambiar ( por [, meter $ delante de los tokens, cambiar [Char] por string
+
+tuple=   parens $ "[" <> single <> chainMany (<>) ( comma <> single) <> "]"
+list=  (sandbox' (string "[Cha") >> single) {- <|> deflist -} <|> (tChar '[' >> ("[" <> elemType <> "]")) -- (brackets $ tTakeWhile (/= ']')) <> "'s")
+
+single=   chainManyTill BS.cons (toLower <$> anyChar) (tChar ',' <|> tChar ')')  >>= stringFix
+
+type1=  tTakeWhile (\c -> c /= ',' && c /= ')') >>= stringFix
+-- escape the double quotes of the expression
+escape r= withParseString r $ chainMany mappend $ (tChar '\"' >> return "\\\"") <|> (anyChar >>= return . BS.singleton)
+stringFix r
+    | BS.null r = return r
+    | otherwise = if BS.head r == '[' then    "\\\"$" <> varunique "string" <>"\\\""  else  "$" <> varunique (BS.map toLower r)
+
+
+process json = withParseString json $ do
+    sandbox $ tChar '{'
+    BS.concat
+      <$> withParseString
+        json
+        ( many $ do
+            prev <- tTakeUntilToken "\""
+            var  <- tTakeUntilToken "\""
+
+            tDropUntilToken ":"
+            dropSpaces
+            isq <- anyChar
+            
+            -- chainManyTill BS.cons anyChar (sandbox $ tChar ',' <|> tChar '}')
+            tTakeWhile (\c -> c /= ',' && c /= '}')
+
+            sep <- anyChar -- tChar ',' <|> tChar '}'
+            var' <- varunique var
+            let r = prev <> "\\\"" <> var <> "\\\": " <> q isq <> "$" <> var' <> q isq <> BS.singleton sep
+            return r
+        )
+    where
+      q is= if is=='\"' then "\\\"" else mempty
+
+     
+     
+     
 
 
 atEndThread adquire release = react  (bracket adquire release) (return ())
@@ -264,7 +327,7 @@ mainmove=   keep $ do
         liftIO $ do
             removeChild st 
             writeIORef (parent st) $ Just st'
-            modifyMVar_ (children  st') $ \chs -> return $st:chs
+            modifyMVar_ (children  st') $ \chs -> return $ st:chs
         put st{mfData=mfData cex1}
         tr(threadId st', "<-",threadId st)
         
@@ -496,12 +559,12 @@ keep'' mx  = do
             onException $ \(e :: SomeException ) -> do
             --  top <- topState
                 liftIO $ do
-                th <- myThreadId
-                putStr $ show th
-                putStr ": "
-                print e
-                -- putStrLn "Threads:"
-                -- showThreads top
+                    th <- myThreadId
+                    putStr $ show th
+                    putStr ": "
+                    print e
+                    -- putStrLn "Threads:"
+                    -- showThreads top
                 empty
             
             onException $ \(e :: IOException) -> 
@@ -779,10 +842,28 @@ test1= do
    t2 <- liftIO $ getClockTime
    liftIO $ print (sum :: Int)
    
-   
+instance Exception String
+
+data Ex  = forall a . CEx a => Ex a  deriving (Typeable)
+
+instance Show Ex where
+    showsPrec p (Ex e) = showsPrec p e
+
+class (Typeable e, Show e) => CEx e 
+
+instance CEx String
+
+main= keep $ do
+--            test internals.hs:1899 runContinuation first x -- `catcht` (\e -> liftIO(exceptBack st e) >> empty)    causes a loop in trowt excep `onException'` 
+
+  (do liftIO (print "hello") ; back (SomeException ("he>>>>>>>>>>>>>>>>>>" :: String))) `onBack` \(SomeException s) -> do 
+                                    --  option ("cont" :: String) "cont"
+                                     forward (SomeException ( "" :: String)) ;liftIO $ print s
 
   
-main= runTransient  $  a <|> b
+
+  
+mainrun= runTransient  $  a <|> b
     --  onUndo (return ()) $ liftIO (print "CATCH2")
     --  Transient $ do
         

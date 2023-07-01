@@ -106,7 +106,7 @@ str2= "0001\r\n2\r\n0\r\n\r\n"
 
 
 
-minput ::  (Loggable a, ToRest a) => String -> String -> Cloud a
+minput ::  (Loggable a, ToHTTPReq a) => String -> String -> Cloud a
 minput a b= Web.minput a (BS.pack b)
 
 data HELLO= HELLO deriving (Read,Show)
@@ -263,8 +263,8 @@ minput que soporte entrada post
 -- newtype BODY= BODY [BS.ByteString] deriving (Typeable,Show)
 -- newtype POSTD a=   POSTD a deriving (Typeable, Show ,Read)
 -- instance (Typeable a, Read a, Show a) => Loggable (POSTD a)
--- instance (Typeable a, Show a, Read a,Default a,ToJSON a) => ToRest (POSTD a) where
---   toRest (POSTD x)= do
+-- instance (Typeable a, Show a, Read a,Default a,ToJSON a) => ToHTTPReq (POSTD a) where
+--   toHTTPReq (POSTD x)= do
 --     nelem <- process $ encode (def `asTypeOf` x)
 --     return mempty{reqbody=nelem}
 --     where
