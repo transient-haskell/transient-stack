@@ -5,8 +5,8 @@ module Transient.Parse(
 setParseStream, setParseString, withParseString, withParseStream,
 -- * parsing
 string, tDropUntilToken, tTakeUntilToken, integer, hex, int, double, tChar,anyChar, manyTill, chainManyTill,between, symbol,parens, braces,angles,brackets,
-semi, comma, dot,colon, sepBy, sepBy1, chainSepBy, chainSepBy1,chainMany,
-commaSep, semiSep, commaSep1, dropSpaces,dropTillEndOfLine,
+semi, comma, dot,colon, sepBy, chainSepBy,chainMany,
+commaSep, semiSep,  dropSpaces,dropTillEndOfLine,
 parseString, tTakeWhile,tTakeUntil, tTakeWhile', tTake, tDrop, tDropUntil, tPutStr,
 isDone,dropUntilDone,
 -- * giving the parse string
@@ -184,15 +184,15 @@ double= do
       <|> return 0
 
 
--- | read many results with a parser (at least one) until a `end` parser succeed.
+-- | read many results with a parser (at least one) until a `end` parser succeed. The end IS consumed
 manyTill :: TransIO a -> TransIO b -> TransIO [a]
 manyTill= chainManyTill (:)
 
 --chainManyTill   :: Monoid m =>  (m -> a -> a) -> TransIO m -> TransIO t -> TransIO a
--- | like `manyTill` with an adittional parmeter that stablush how the fragments are chained
+-- | like `manyTill` with an adittional parmeter that define how the fragments are chained
 chainManyTill op p end= scan
       where
-      scan  = do {try end ; return mempty }
+      scan  = do { end ; return mempty }
             <|>
               op <$> p <*> scan
               -- do{ x <- p; xs <- scan; return (x `op` xs) }
@@ -235,11 +235,11 @@ chainSepBy1 chain p sep= do{ x <- p
                         }
                         -- !> "chainSepBy "
 
-chainMany chain v= (do isDone >>= guard; return mempty) <|> (chain <$> v <*> chainMany chain v) <|> return mempty
+chainMany chain v=   {- (do tr "chainMany"; isDone >>= guard; return mempty) <|> -} (chain <$> v <*> chainMany chain v) <|> return mempty
 -- chainMany chain v=  do
---                  t <- isDone
---                  tr ("isdone",t)
---                  if t then return mempty else 
+--                 --  t <- isDone
+--                 --  tr ("isdone",t)
+--                 --  if t then return mempty else 
 --                   (do x <- v; xs <- chainMany chain v; return $ x `chain` xs) <|> 
 --                    return mempty
 
@@ -545,18 +545,7 @@ producer |- qonsumer =  sandbox $ do
     modify $ \ s -> s{parseContext= p{done=done pc}}
     return r
 
-{-
- retorno de la string no parseada al proc 
- ParseContext give take
- give = return string
- take str= set str+ string
 
-
-
- give = readIORef string <> takeMVar
- take str= writeIORef str
- give = 
--}
 
   initp v pcontext= do
     abduce
@@ -568,7 +557,7 @@ producer |- qonsumer =  sandbox $ do
             d <- liftIO $ readIORef done
             if d then do  tr "sendDone";liftIO  $ putMVar v SDone; repeatIt else do
                 r <- producer
-                tr ("PRODUCED",r)
+                -- tr ("PRODUCED",r)
                 liftIO  $ putMVar v r  -- `catch` \(_ :: BlockedIndefinitelyOnMVar) -> return  False
 
                 p <- gets parseContext
