@@ -107,12 +107,12 @@ class (Show a, Read a,Typeable a) => Loggable a where
     deserializePure :: BS.ByteString -> Maybe(a, BS.ByteString)
     deserializePure s' = r
       where
-      (s,rest)= BS.span (/='/') s'
+      (s,rest)= BS.span (/='/') s' -- to avoid packing/unpacking the entire string
       r= case readsErr $ BS.unpack s   of -- `traceShow` ("deserialize",typeOf $ typeOf1 r,s) of
-              []       -> Nothing  -- !> "Nothing"
-              (r,_): _ -> return (r, rest)
+              []           -> Nothing  -- !> "Nothing"
+              (r,rest'): _ -> return (r,  (BS.pack rest') <> rest)
       {-# INLINE readsErr #-}
-      readsErr s=unsafePerformIO $ return(reads s) `catch`\(e :: SomeException) ->  return []
+      readsErr s=unsafePerformIO $  return(reads s) `catch`\(e :: SomeException) ->  return []
     {-
     deserializePure s = r
       where
@@ -132,8 +132,8 @@ class (Show a, Read a,Typeable a) => Loggable a where
                     Just x -> return x
 
 
-instance Show Builder where
-  show b= show $ toLazyByteString b
+-- instance Show Builder where
+--  show b= show $ toLazyByteString b
 
 instance Read Builder where
    readsPrec n str= -- [(lazyByteString $ read str,"")]
@@ -173,7 +173,7 @@ instance Loggable Int
 instance Loggable Integer
  
 
-instance  {-# OVERLAPPING #-}  (Typeable a, Loggable a) => Loggable[a]  where
+instance   (Typeable a, Loggable a) => Loggable [a]  where
     serialize []= byteString "[]"
     serialize (s@(x:xs))
               | typeOf x== typeOf (undefined :: Char) = byteString $ BSS.pack (unsafeCoerce s) 
@@ -187,7 +187,7 @@ instance  {-# OVERLAPPING #-}  (Typeable a, Loggable a) => Loggable[a]  where
       ty :: TransIO [a] -> [a]
       ty = undefined
       r= if typeOf (ty r) /= typeOf (undefined :: String) 
-              then tChar '[' >> commaSep deserialize <* tChar ']'
+              then tChar '[' *> commaSep deserialize <* tChar ']'
               else  unsafeCoerce <$> BS.unpack <$> deserialize
 
 
@@ -260,7 +260,7 @@ instance Loggable BS.ByteString where
             anyChar
             return r )
           
-          <|> tTakeUntil (\s -> let c= BS.head s in c == '/' || c==' ') 
+          <|> tTakeUntil (\s -> let c= BS.head s in c == '/') -- || c==' ')  -- problems wih "inputParse deserialize" in Web.h?
 #endif
 
 #ifndef ghcjs_HOST_OS
@@ -601,8 +601,9 @@ substwait ld build = fromJust $ substwait1 ld build
                               Just x  -> Just $ LD $ prev ++ [LX  x]
 
 
-#ifndef ghcjs_HOST_OS
+-- #ifndef ghcjs_HOST_OS
 
+-- Tnese primitives have been substituted by 'Transient.Move.job'
 
 -- -- | Reads the saved logs from the @logs@ subdirectory of the current
 -- -- directory, restores the state of the computation from the logs, and runs the
@@ -694,7 +695,7 @@ substwait ld build = fromJust $ substwait1 ld build
 -- restore :: TransIO a -> TransIO a
 -- restore= const empty
 
-#endif
+-- #endif
 
 getLog :: TransMonad m =>  m Log
 getLog= getData `onNothing` return emptyLog
@@ -719,16 +720,22 @@ hashDone= 1000
 
 logged :: Loggable a => TransIO a -> TransIO a
 logged mx = do
+
   indent
-  tr ("executing logged stmt of type",typeOf res) 
-  
+  debug <- getParseBuffer
+  tr ("executing logged stmt of type",typeOf res,"with log",debug) 
+
+  -- mode <- gets execMode
+  -- ttr ("execMode",mode)
+
   r <- res
   
   tr ("finish logged stmt of type",typeOf res)   
   outdent
+
   return r
   where
-  res= do
+  res = do
         log <- getLog
 
     -- if typeOf res == typeOf () then  (if recover log then return (unsafeCoerce ()) else unsafeCoerce mx)
@@ -737,8 +744,8 @@ logged mx = do
 
         let full= fulLog log
         rest <- getParseBuffer -- giveParseString
-
-        tr ("parseString",rest)
+        -- ttr "after getparsebuffer"
+        -- ttr ("parsebuffer", if BS.null rest then "NULL" else  BS.take 2 rest )
         let log'= if BS.null rest {-&& typeOf(type1 res) /= typeOf () -}then log{recover=False}  else log
         process rest full log'
  
@@ -749,14 +756,14 @@ logged mx = do
     type1 = undefined
     process rest full log= do
 
-        tr ("process, recover",  recover log,fulLog log)
+        -- tr ("process, recover",  recover log,fulLog log)
 
         let fullexec=   full <> exec
 
         setData log{fulLog= fullexec, hashClosure= hashClosure log + hashDone}
         r <-(if not $ BS.null rest  
-               then do tr "LOGGED RECOVERIT"; recoverIt 
-               else do tr "LOGGED EXECUTING"; mx)  <** modifyData' (\log ->  log{fulLog=fulLog log <<- wait,hashClosure=hashClosure log + hashWait}) emptyLog
+               then do  recoverIt 
+               else do   mx)  <** modifyData' (\log ->  log{fulLog=fulLog log <<- wait,hashClosure=hashClosure log + hashWait}) emptyLog
                             
                             -- when   p1 <|> p2, to avoid the re-execution of p1 at the
                             -- recovery when p1 is asynchronous or  empty
@@ -767,14 +774,14 @@ logged mx = do
             recoverAfter= recover log'
             add=   (serialize r <> byteString "/")   -- Var (toIDyn r):  full
 
-        tr ("RECOVERAFTER",recover log,recover log')
+        -- tr ("RECOVERAFTER",recover log,recover log')
 
-        if BS.null rest && recoverAfter ==True  then do -- XXX eliminar fromCont
-            tr ("SUBLAST", "fulLog log'",fulLog log', "add", add,"sublast",substwait(fulLog log')  add)
+        if BS.null rest && recoverAfter ==True  then do 
+            -- tr ("SUBLAST", "fulLog log'",fulLog log', "add", add,"sublast",substwait(fulLog log')  add)
             setData $ Log{recover=False,fulLog= substwait(fulLog log')  add, hashClosure=hashClosure log + hashExec}
 
         else  do
-            tr ("ADDLOG", "fulexec",fullexec,fullexec <<- add)  
+            -- tr ("ADDLOG", "fulexec",fullexec,fullexec <<- add)  
             setData $ Log{recover=True, fulLog= fullexec <<- add, hashClosure= hashClosure log +hashExec}
 
 
@@ -782,6 +789,7 @@ logged mx = do
 
 
     recoverIt = do
+        tr "recoverit"
         s <- giveParseString
 
         tr ("recoverIt recover", s)
@@ -794,7 +802,8 @@ logged mx = do
 
           ("w/",r) -> do
             setParseString r
-            modify $ \s -> s{execMode=if execMode s /= Remote then Parallel else Remote}  --setData Parallel
+            -- modify $ \s -> s{execMode=if execMode s /= Remote then Parallel else Remote}  --setData Parallel 
+            -- in recovery, execmode can not be parallel
             empty                                --   !> "Wait"
 
           _ -> value 
@@ -804,11 +813,15 @@ logged mx = do
       typeOfr :: TransIO a -> a
       typeOfr _= undefined
 
-      r= do
-        x <- deserialize <|> do psr <- giveParseString; throwt $ ErrorCall ("error parsing \""<> BS.unpack psr <> "\" to " <> show (typeOf $ typeOfr r))
+      r= (do
+        tr "VALUE"
+        x <- deserialize  -- <|> errparse 
+        tr ("value parsed",x)
         psr <- giveParseString
-        when(not $ BS.null psr) $ tChar '/' >> return()
-        return x
+        when(not $ BS.null psr) $ (tChar '/' >> return()) --  <|> errparse
+        return x) <|> errparse
+      errparse :: TransIO a
+      errparse = do psr <- getParseBuffer; throwt $ ErrorCall ("error parsing \""<> BS.unpack psr <> "\" to " <> show (typeOf $ typeOfr r))
 
 {-
 
