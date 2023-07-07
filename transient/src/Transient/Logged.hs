@@ -66,7 +66,7 @@ import Data.IORef
 import System.IO.Unsafe
 -- #ifndef ghcjs_HOST_OS
 import Data.ByteString.Builder
-import System.Random
+-- import System.Random
 import Debug.Trace
 -- #else
 --import Data.JSString hiding (empty)
@@ -107,12 +107,20 @@ class (Show a, Read a,Typeable a) => Loggable a where
     deserializePure :: BS.ByteString -> Maybe(a, BS.ByteString)
     deserializePure s' = r
       where
-      (s,rest)= BS.span (/='/') s' -- to avoid packing/unpacking the entire string
+      (s,rest)= span1  s' -- to avoid packing/unpacking the entire string
       r= case readsErr $ BS.unpack s   of -- `traceShow` ("deserialize",typeOf $ typeOf1 r,s) of
               []           -> Nothing  -- !> "Nothing"
               (r,rest'): _ -> return (r,  (BS.pack rest') <> rest)
       {-# INLINE readsErr #-}
       readsErr s=unsafePerformIO $  return(reads s) `catch`\(e :: SomeException) ->  return []
+      span1 s=
+        let (r,rest)= BS.span (\c-> c /='/' && c /='\"') s -- to avoid packing/unpacking the entire string
+        in if BS.head rest== '\"' 
+            then 
+                     let (r',rest') = BS.span ( /='\"') $ BS.tail rest
+                         (r'',rest'')= BS.span (/= '/') rest'
+                     in (r<> r' <> r'', rest'')
+            else     (r,rest)
     {-
     deserializePure s = r
       where
@@ -821,7 +829,7 @@ logged mx = do
         when(not $ BS.null psr) $ (tChar '/' >> return()) --  <|> errparse
         return x) <|> errparse
       errparse :: TransIO a
-      errparse = do psr <- getParseBuffer; throwt $ ErrorCall ("error parsing \""<> BS.unpack psr <> "\" to " <> show (typeOf $ typeOfr r))
+      errparse = do psr <- getParseBuffer; throwt $ ErrorCall ("error parsing <" <> BS.unpack psr <> "\" to " <> show (typeOf $ typeOfr r) <> ">") 
 
 {-
 
