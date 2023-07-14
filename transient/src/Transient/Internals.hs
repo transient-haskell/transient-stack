@@ -1330,21 +1330,20 @@ async io = do
 
 -- | Avoid the execution of alternative computations when the computation is asynchronous
 --
--- > sync (async  whatever) <|>  liftIO (print "hello") -- never print "hello" uf watever return something
+-- > sync (async  whatever) <|>  liftIO (print "hello") -- never print "hello" and return something
 --
 -- the thread before and after `sync`is the same.
 -- If the comp. return more than one result, the first result will be returned
-
 sync :: TransIO a -> TransIO a
 sync pr= do
     mv <- liftIO newEmptyMVar
     -- if pr is empty the computation does not continue. It blocks
-    (pr >>= liftIO . (putMVar mv) >> empty) <|> liftIO (takeMVar mv)
+    (pr >>= liftIO . (tryPutMVar mv) >> empty) <|> liftIO (takeMVar mv)
         -- mr <- liftIO $ tryTakeMVar mv   do not work
         -- case mr of
         --    Nothing -> empty
         --    Just r  -> return r
--- si proc,que es asincrono, es empty, no sigue. solo sigue cuando devuelve algo
+-- si pr,que es asincrono, es empty, no sigue. solo sigue cuando devuelve algo
 
 -- alternative sync 
 -- sync x = do
