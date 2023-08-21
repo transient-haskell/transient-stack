@@ -3424,13 +3424,13 @@ getClosureLog idConn clos = do
       tr ("JUST",idConn,clos)
       return (localLog closReg, mempty, cont)
 
--- | cold restore  of the closure from the log drom data stored in permanent storage, and run form that point on
+-- | cold restore  of the closure from the log from data stored in permanent storage, and run from that point on
 restoreClosure _ "0" = return ()
 restoreClosure idConn (clos :: BC.ByteString) = do
   tr ("restoreclosure", idConn, clos)
   (_, LD log, cont) <- getClosureLog idConn clos
   -- cont is the nearest continuation above which is loaded and running
-  -- log contains what is necessary to recover to get the continuation that we want to restore
+  -- log contains what is necessary to recover the continuation that we want to restore
   let mf = mfData cont
   let logbase = fromMaybe emptyLog $ unsafeCoerce $ M.lookup (typeOf emptyLog) mf
       LD lb = fulLog logbase
