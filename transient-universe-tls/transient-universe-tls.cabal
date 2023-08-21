@@ -27,7 +27,7 @@ library
     if !impl(ghcjs >=0.1)
         build-depends:
             base >=4.8 && <5.9, tls, cprng-aes, transient , transient-universe >= 0.6.0.0,
-            bytestring, data-default, network, x509-store, x509-system, mtl, directory
+            bytestring, data-default, network, crypton-x509-store,  crypton-x509-system, mtl, directory
     if impl(ghcjs >=0.1)
         build-depends:
             base >=4.8
