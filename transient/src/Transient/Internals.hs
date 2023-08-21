@@ -84,7 +84,7 @@ printColor :: Show a => a -> String
 printColor x= unsafePerformIO $ do
     th <- myThreadId
     sps <- readIORef rindent >>= \n -> return $ take n $ repeat ' '
-    let col=  (read(drop 9(show th)) `mod` (36-31))+31
+    let col=  (read (drop 9 (show th)) `mod` (36-31))+31
     return $ "\x1b["++ show col ++ ";49m" ++ sps ++ show (th,x) ++ "\x1b[0m"
 
     -- 256 colors
@@ -300,7 +300,7 @@ instance Functor TransIO where
 instance Applicative TransIO where
   pure a  = Transient . return $ Just a
 
-  mf <*> mx = do -- do f <- mf; x <- mx ; return $ f x
+  mf <*> mx = do 
 
     r1 <- liftIO $ newIORef Nothing
     r2 <- liftIO $ newIORef Nothing
@@ -310,7 +310,7 @@ instance Applicative TransIO where
 
     fparallel r1 r2= do
       f <- mf
-      liftIO $ (writeIORef r1 $ Just f)
+      liftIO $ writeIORef r1 (Just f)
       mr <- liftIO (readIORef r2)
       case mr of
             Nothing -> empty
@@ -323,13 +323,15 @@ instance Applicative TransIO where
             Nothing -> do
 
               p <- gets execMode
+              ttr ("EXECMODE",p)
               if p== Serial then empty else do 
+                       ttr "parallel"
                        -- the first term may be being executed in parallel and will give his result later
                        x <- mx
-                       liftIO $ (writeIORef r2 $ Just x)
+                       liftIO (writeIORef r2 $ Just x)
 
                        mr <- liftIO (readIORef r1)
-                       tr("XPARALELL",isJust mr)
+                       ttr ("XPARALELL",isJust mr)
                        case mr of
                          Nothing -> empty
                          Just f  -> return $ f x
@@ -768,7 +770,7 @@ oneThread comp = do
     x   <- comp
     th  <- liftIO myThreadId
     chs <- liftIO $ readMVar rchs
-    tr(th,map threadId chs)
+    tr (th,map threadId chs)
     liftIO $ killChildren1 th st
     -- liftIO $ mapM_ (killChildren1 th) chs
 
@@ -780,7 +782,7 @@ killChildren1 th state = do
         ths' <- modifyMVar (children state) $ \ths -> do
                     let (inn, ths')=  partition (\st -> threadId st == th) ths
                     return (inn, ths')
-        tr("tokill",map threadId ths')
+        tr ("tokill",map threadId ths')
         mapM_ (killChildren1  th) ths'
         mapM_ (killThread . threadId) ths'
 
@@ -857,10 +859,81 @@ showThreads st = liftIO $ withMVar printBlock $ const $ do
         chs <- readMVar $ children ch
         mapM_ (showTree $ n + 2) $ reverse chs
   showTree 0 st
-{-
-# 933 "/home/user/transient-stack/transient/src/Transient/Internals.hs"
 
--}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 -- | Return the state of the thread that initiated the transient computation
 -- topState :: TransIO EventF
 
@@ -969,7 +1042,7 @@ addThreads' n= noTrans $ do
   msem <- gets maxThread
   case msem of
     Just sem -> liftIO $ modifyIORef sem $ \n' -> n + n'
-    Nothing  -> return() --do
+    Nothing  -> return () --do
       -- sem <- liftIO (newIORef n)
       -- modify $ \ s -> s { maxThread = Just sem }
 
@@ -1389,7 +1462,7 @@ abduce = async $ return ()
 -- | fork an independent process. It is equivalent to forkIO. The thread(s) created 
 -- are managed with the thread control primitives of transient
 fork :: TransIO () -> TransIO ()
-fork proc= (abduce >> proc >> empty) <|> return()
+fork proc= (abduce >> proc >> empty) <|> return ()
 
 
 -- | Run an IO action one or more times to generate a stream of tasks. The IO
@@ -1426,7 +1499,7 @@ loop parentc rec = forkMaybe False parentc $ \cont -> do
 
   let loop' = do
         (t,lab) <- readIORef $ labelth parentc
-        if t==Dead  then  tr ("Dead parent",t,lab,threadId parentc) >> return(Nothing,cont)  else do
+        if t==Dead  then  tr ("Dead parent",t,lab,threadId parentc) >> return (Nothing,cont)  else do
           --  tr("loop", unsafePerformIO $ myThreadId)
 
             atomicModifyIORef (labelth cont)$ \(_,lab)-> ((Parent, lab),())
@@ -1473,7 +1546,7 @@ loop parentc rec = forkMaybe False parentc $ \cont -> do
   forkMaybe :: Bool -> EventF -> (EventF -> IO (Maybe a,EventF)) -> IO (Maybe a,EventF)
   forkMaybe onemore parent  proc = do
     (t,lab) <- readIORef $ labelth parent
-    if t==Dead  then return(Nothing,parent) else do
+    if t==Dead  then return (Nothing,parent) else do
       rparent <- newIORef $ Just parent
       case maxThread parent  of
         Nothing -> forkIt rparent  proc
@@ -1495,7 +1568,7 @@ loop parentc rec = forkMaybe False parentc $ \cont -> do
          th <- myThreadId
          tr "thread init"
          let cont'= parentState{parent=rparentState, children= chs, labelth= label,threadId=  th}
-         when(not $ freeTh parentState )$ hangThread parentState cont'
+         when (not $ freeTh parentState )$ hangThread parentState cont'
 
 
          proc cont'  )  -- `catch` execute Finish porque es una excepción no tratada. pero para eso hay que quitar el catch inicial?
@@ -1519,7 +1592,7 @@ loop parentc rec = forkMaybe False parentc $ \cont -> do
                   freelogic  rparentState parentState label
                   th <- myThreadId
                   exceptBackg parentState  $ Finish $ show (th,e)
-                  return()
+                  return ()
 
               Right(_,lastCont) -> do
                   freelogic  rparentState parentState label
@@ -1529,10 +1602,10 @@ loop parentc rec = forkMaybe False parentc $ \cont -> do
 
       
                   exceptBackg lastCont  $ Finish $ show (th,"async thread ended")
-                  return()
+                  return ()
 
 
-     return(Nothing,parentState)--  return ()
+     return (Nothing,parentState)--  return ()
 
 
   -- forkFinally1 :: IO a -> (Either SomeException a -> IO ()) -> IO ThreadId
@@ -1562,7 +1635,7 @@ freelogic rparentState parentState label =do
       ((case status of Alive -> Dead ; Parent -> DeadParent; _ -> status, lab),l)
     -- los procesos que acaban de morir sin hijos (deadparent) tambien deben liberarse
     if ({- can /= Parent && can /= DeadParent && -} can /= Listener)
-      then do  tr("FREEE",th); free th actualParent  ; return True
+      then do  tr ("FREEE",th); free th actualParent  ; return True
       else return False
                   -- !> ("th",th,"actualParent",threadId actualParent,can,lab)
 
@@ -1678,8 +1751,8 @@ react setHandler iob= Transient $ do
               (_,cont') <- runStateT (runCont cont) cont{event= Just $ unsafeCoerce dat} `catch` exceptBack cont
               -- let rparent=  parent st
               -- Just parent <- liftIO $ readIORef rparent
-              th <- liftIO myThreadId
-              tr ("THREADID", th)
+              -- th <- liftIO myThreadId
+              -- tr ("THREADID", th)
               -- liftIO $ writeIORef (pthreadId st) th
               -- freelogic rparent st (labelth st)
               exceptBackg cont' $ Finish $ show (unsafePerformIO myThreadId,"react thread ended")
@@ -1884,7 +1957,7 @@ registerBack witness f  = Transient $ do
 forward :: (Typeable b, Show b) => b -> TransIO ()
 forward reason= noTrans $ do
     Backtrack _ stack <- getData `onNothing`  ( return $ backStateOf reason)
-    setData $ Backtrack(Nothing `asTypeOf` Just reason)  stack
+    setData $ Backtrack (Nothing `asTypeOf` Just reason)  stack
 
 -- | put at the end of an backtrack handler intended to backtrack to other previous handlers.
 -- This is the default behaviour in transient. `backtrack` is in order to keep the type compiler happy
@@ -1976,7 +2049,7 @@ newtype Finish= Finish String deriving Show
 -- it does not work with `freeThreads`.
 onFinish exc= do
   cont <- getCont
-  onFinishCont cont (return())  exc
+  onFinishCont cont (return ())  exc
 
 
 -- | A binary onFinish which will return a result when all the threads of the first operand terminates so it can return a result. 
@@ -2040,7 +2113,7 @@ onWaitThreads   mx= do
 
     done <- liftIO $ newIORef False  --finalization already executed?
 
-    r <- return() `onBack`  \(Finish reason) -> do
+    r <- return () `onBack`  \(Finish reason) -> do
                 -- topState >>= showThreads
                 tr ("thread cont",threadId cont)
                 noactive <- liftIO $ noactiveth cont
@@ -2286,6 +2359,6 @@ throwt =  back . toException
 localExceptionHandlers :: TransIO a -> TransIO a
 localExceptionHandlers w= do
    r <- sandboxData (backStateOf  (undefined :: SomeException))  $ w
-   onException $ \(SomeException _) -> return()
+   onException $ \(SomeException _) -> return ()
    return r
 
