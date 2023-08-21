@@ -52,12 +52,12 @@ test=  initNodeServ service  "localhost" portnumber $ do
           node0 <- local getMyNode
           local $ guard (nodePort node0== portnumber)       -- only executes locally in node "portnumber"
           
-          [node1, node2] <-  requestInstance service 2 
-          onAll $ liftIO $ print (node1,node2)
+          [node1] <-  requestInstance service 1
+          -- onAll $ liftIO $ print (node1,node2)
           
           local ( option "f" "fire")   <|> return ""       -- to repeat the tests,  remove the "exit" at the end 
 
-          onAll $ ttr ("node1",node1,"node2",node2)
+      --     onAll $ ttr ("node1",node1,"node2",node2)
 
           -- localIO $ putStrLn "------checking  empty in remote node when the remote call back to the caller #46 --------"
           
@@ -68,22 +68,21 @@ test=  initNodeServ service  "localhost" portnumber $ do
           
 
           localIO $ putStrLn "------checking Alternative distributed--------"
-          r <- (runAt node1 (SHOULDRUNIN( node1) >> return "world" ))
 
-          -- r <-  (runAt node0 (SHOULDRUNIN( node0) >> return "hello" ))
-          --                <|>  (runAt node1 (SHOULDRUNIN( node1) >> return "world" ))
-          --                <|>  (runAt node2 (SHOULDRUNIN( node2) >> return "world2" ))
-          -- localIO $ print r
-          
-          
-          -- assert(sort r== ["hello", "world","world2"]) $ localIO $  print r         
-          
-          -- localIO $ putStrLn "--------------checking Applicative distributed--------"
-          -- r <- loggedc $(runAt node0 (SHOULDRUNIN( node0) >> return "hello "))
-          --           <>  (runAt node1 (SHOULDRUNIN( node1) >> return "world " ))
-          --           <>  (runAt node2 (SHOULDRUNIN( node2) >> return "world2" ))
 
-          -- assert(r== "hello world world2") $ localIO $ print r
+          r <- local $ collect 2 $  runCloud $ (runAt node0 (SHOULDRUNIN( node0) >> return "hello" )) <|>
+                (runAt node1 (SHOULDRUNIN( node1) >> return "world" )) -- <|>
+                -- (runAt node2 (SHOULDRUNIN( node2) >> return "world2" ))
+          
+          
+          assert(sort r== ["hello", "world"]) $ localIO $  print r         
+          
+          localIO $ putStrLn "--------------checking Applicative distributed--------"
+          r <- loggedc $(runAt node0 (SHOULDRUNIN( node0) >> return "hello "))
+                    <>  (runAt node1 (SHOULDRUNIN( node1) >> return "world " ))
+                    -- <>  (runAt node2 (SHOULDRUNIN( node2) >> return "world2" ))
+
+          assert(r== "hello world world2") $ localIO $ print r
 
           -- localIO $ putStrLn "----------------checking monadic, distributed-------------"
           -- r <- runAt node0 (SHOULDRUNIN(node0)

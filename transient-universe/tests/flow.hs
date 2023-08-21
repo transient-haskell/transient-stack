@@ -53,6 +53,8 @@ import Data.String
 import GHC.Generics
 import Data.Default
 import Data.Char
+import Transient.Internals (EventF(execMode))
+import Transient.Move (getNodes)
 -- mainrerun = keep $ rerun "config" $ do
 --   logged $ liftIO $ do
 --      putStrLn "configuring the program"
@@ -353,8 +355,8 @@ como evitar
 
 
 data HI=HI deriving (Read,Show,Typeable)
-data HELLO=HELLO deriving (Read,Show,Typeable)
-data WORLD=WORLD deriving (Read,Show,Typeable)
+data HELLO=HELLO deriving (Read,Show,Typeable,Eq)
+data WORLD=WORLD deriving (Read,Show,Typeable,Eq)
 data PRE=PRE deriving (Read,Show,Typeable)
 data POSTT= POSTT deriving (Read,Show,Typeable)
 data PRE1=PRE1 deriving (Read,Show,Typeable)
@@ -479,14 +481,22 @@ mainsimple= keep $  initNode $ Cloud $ do
 
  
 
-maincomplex= keep $  initNode $ Cloud $ do
-  
+main= keep $ initNode $  do
   -- firstCont
-  proc1 <|> restore1 <|> save
+  r <- proc2 <|> onAll restore1 <|> onAll save
+  localIO $ print ("res",r)
 
   where
+  proc2= 
+     (,) <$> proc3 HELLO <*> proc3 WORLD
+  proc3 x =  do
+    local $ ttr "executing proc3"
+    local $ option x $ "process " <> show x
+    local $ setc
+    
+    return x
 
-  proc1= proc "p1"   <|> proc "p2"
+  proc1= proc "p1" <|> proc "p2"
   proc op= do
     logged $ option op ("process "++ op)
     r <- logged $ return HELLO
@@ -517,10 +527,12 @@ maincomplex= keep $  initNode $ Cloud $ do
     logged $ liftIO $ putStrLn $ show r ++ op
 
     showLog
+    return op
     
 save= do
     option "save" "save execution state"
-    liftIO $ syncCache
+    liftIO  syncCache
+    empty
 
 restore1= do
         option "res" "restore1" 
@@ -528,6 +540,7 @@ restore1= do
         clos <- input (const True) "closure >"
 
         noTrans $ restoreClosure s clos 
+        empty
       
 lprint :: Show a => a -> TransIO ()
 lprint= liftIO . print
@@ -1245,17 +1258,18 @@ mainsandb= keep $ do
       setState True
       throwt $ ErrorCall "err"
 
-main= keep $ initNode $ inputNodes <|> do
-  local $ option "go" "go"
+
+
+mainappl= keep $ initNode $ inputNodes <|> do
+  local $ option "go" "go" -- ::Cloud ()
   nodes <- local getNodes 
-  nod <- local getMyNode
-  r <- local $ collect 2 $ runCloud $ runAt (nodes !! 0 ) (proc nod)  <|> runAt (nodes !! 1) (proc nod) -- <|> runAt (nodes !! 2) (proc nod)
+  r <- local (async(return "world local")) <> do onAll $ ttr "runAt" ; runAt (nodes !! 1) (proc ) -- <|> runAt (nodes !! 2) (proc )
 
   localIO $ print r
   where
-  proc nod= do
+  proc = do
       node <- local getMyNode
-      localIO $ print $ "hello from " <> show nod
+      localIO $ print $ "hello from " <> show node
       return $ "world "  ++ show node
 
 
