@@ -97,7 +97,7 @@ toLazyByteString (Builder b)=  b  mempty
 -}
 -- #endif
 u= unsafePerformIO
-exec=  LD[LX mempty] --byteString "e/"
+exec=  LD [LX mempty] --byteString "e/"
 wait=   byteString "w/"
 
 class (Show a, Read a,Typeable a) => Loggable a where
@@ -105,21 +105,27 @@ class (Show a, Read a,Typeable a) => Loggable a where
     serialize = byteString . BSS.pack . show
 
     deserializePure :: BS.ByteString -> Maybe(a, BS.ByteString)
+    
     deserializePure s' = r
       where
-      (s,rest)= span1  s' -- to avoid packing/unpacking the entire string
+      (s,rest)=  span1  s' -- to avoid packing/unpacking the entire string
       r= case readsErr $ BS.unpack s   of -- `traceShow` ("deserialize",typeOf $ typeOf1 r,s) of
               []           -> Nothing  -- !> "Nothing"
-              (r,rest'): _ -> return (r,  (BS.pack rest') <> rest)
+              (r,rest'): _ -> return (r,  BS.pack rest' <> rest)
+
       {-# INLINE readsErr #-}
-      readsErr s=unsafePerformIO $  return(reads s) `catch`\(e :: SomeException) ->  return []
-      span1 s=
-        let (r,rest)= BS.span (\c-> c /='/' && c /='\"') s -- to avoid packing/unpacking the entire string
-        in if BS.head rest== '\"' 
-            then 
+      readsErr s=unsafePerformIO $  return (reads s) `catch`\(e :: SomeException) ->  return []
+      
+      span1 s
+       |BS.null s= (mempty,mempty)
+       |otherwise=
+        let (r,rest)=  BS.span (\c-> c /='/' && c /='\"') s -- to avoid packing/unpacking the entire string
+        in if BS.head rest== '\"'
+            then
                      let (r',rest') = BS.span ( /='\"') $ BS.tail rest
-                         (r'',rest'')= BS.span (/= '/') rest'
-                     in (r<> r' <> r'', rest'')
+                         (r'',rest'')= span1 $ BS.tail rest'
+                         res= (r<> "\"" <> r' <> "\"" <> r'', rest'')
+                     in  res
             else     (r,rest)
     {-
     deserializePure s = r
@@ -130,7 +136,7 @@ class (Show a, Read a,Typeable a) => Loggable a where
            (r,t): _ -> return (r, BS.pack t)
       {-# INLINE readsErr #-}
       readsErr s=unsafePerformIO $ return(reads s) `catch`\(e :: SomeException) ->  return []
-     -} 
+    -}
 
     deserialize ::  TransIO a
     deserialize = x
@@ -166,12 +172,12 @@ instance Loggable ()  where
   serialize _=  "u"
   deserialize= tChar 'u' >> return ()
 
-instance Loggable Bool where 
+instance Loggable Bool where
   serialize b= if b then "t" else "f"
   deserialize = withGetParseString $ \s -> do
             let h= BS.head s
                 tail=  BS.tail s
-            if h== 't' then return (True,tail)  else if h== 'f' then return (False, tail) else empty 
+            if h== 't' then return (True,tail)  else if h== 'f' then return (False, tail) else empty
 
 -- instance {-# OVERLAPPING #-} Loggable String where
   -- serialize s= byteString $ BSS.pack s
@@ -179,22 +185,22 @@ instance Loggable Bool where
 
 instance Loggable Int
 instance Loggable Integer
- 
+
 
 instance   (Typeable a, Loggable a) => Loggable [a]  where
     serialize []= byteString "[]"
     serialize (s@(x:xs))
-              | typeOf x== typeOf (undefined :: Char) = byteString $ BSS.pack (unsafeCoerce s) 
+              | typeOf x== typeOf (undefined :: Char) = byteString $ BSS.pack (unsafeCoerce s)
               | otherwise = byteString "[" <> serialize x <> serialize' xs
           where
           serialize' []= byteString "]"
           serialize' (x:xs)= byteString "," <> serialize x <>  serialize' xs
 
-    deserialize= r 
-      where 
+    deserialize= r
+      where
       ty :: TransIO [a] -> [a]
       ty = undefined
-      r= if typeOf (ty r) /= typeOf (undefined :: String) 
+      r= if typeOf (ty r) /= typeOf (undefined :: String)
               then tChar '[' *> commaSep deserialize <* tChar ']'
               else  unsafeCoerce <$> BS.unpack <$> deserialize
 
@@ -207,37 +213,37 @@ instance Loggable Double
 instance Loggable a => Loggable (Maybe a)
 
 instance (Loggable a,Loggable b) => Loggable (a,b) where
-  serialize (a,b)= serialize a <> byteString "/" <> serialize b 
+  serialize (a,b)= serialize a <> byteString "/" <> serialize b
   deserialize = (,) <$> deserialize <*> (sspace >>  deserialize)
 
 
 instance (Loggable a,Loggable b, Loggable c) => Loggable (a,b,c) where
-  serialize (a,b,c)=  serialize a <> byteString "/" <> serialize b <> byteString "/" <> serialize c 
-  deserialize =  (,,) <$> deserialize <*> (sspace >>  deserialize) <*> (sspace >>  deserialize) 
+  serialize (a,b,c)=  serialize a <> byteString "/" <> serialize b <> byteString "/" <> serialize c
+  deserialize =  (,,) <$> deserialize <*> (sspace >>  deserialize) <*> (sspace >>  deserialize)
 
 instance (Loggable a,Loggable b, Loggable c,Loggable d) => Loggable (a,b,c,d) where
-  serialize (a,b,c,d)=  serialize a <> byteString "/" <> serialize b <> byteString "/" <> serialize c <> byteString "/" <> serialize d 
-  deserialize =  (,,,) <$> deserialize <*> (sspace >>  deserialize) <*> (sspace >>  deserialize) <*> (sspace >>  deserialize) 
+  serialize (a,b,c,d)=  serialize a <> byteString "/" <> serialize b <> byteString "/" <> serialize c <> byteString "/" <> serialize d
+  deserialize =  (,,,) <$> deserialize <*> (sspace >>  deserialize) <*> (sspace >>  deserialize) <*> (sspace >>  deserialize)
 
 instance (Loggable a,Loggable b, Loggable c,Loggable d,Loggable e) => Loggable (a,b,c,d,e) where
-  serialize (a,b,c,d,e)=  serialize a <> byteString "/" <> serialize b <> byteString "/" <> serialize c <> byteString "/" <> serialize d <> byteString "/" <> serialize e 
-  deserialize =  (,,,,) <$> deserialize <*> (sspace >>  deserialize) <*> (sspace >>  deserialize) <*> (sspace >>  deserialize) <*> (sspace >>  deserialize) 
+  serialize (a,b,c,d,e)=  serialize a <> byteString "/" <> serialize b <> byteString "/" <> serialize c <> byteString "/" <> serialize d <> byteString "/" <> serialize e
+  deserialize =  (,,,,) <$> deserialize <*> (sspace >>  deserialize) <*> (sspace >>  deserialize) <*> (sspace >>  deserialize) <*> (sspace >>  deserialize)
 
 instance (Loggable a,Loggable b, Loggable c,Loggable d,Loggable e,Loggable f) => Loggable (a,b,c,d,e,f) where
-  serialize (a,b,c,d,e,f)=  serialize a <> byteString "/" <> serialize b <> byteString "/" <> serialize c <> byteString "/" <> serialize d <> byteString "/" <> serialize e <> byteString "/" <> serialize f 
-  deserialize =  (,,,,,) <$> deserialize <*> (sspace >>  deserialize) <*> (sspace >>  deserialize) <*> (sspace >>  deserialize) <*> (sspace >>  deserialize) <*> (sspace >>  deserialize) 
+  serialize (a,b,c,d,e,f)=  serialize a <> byteString "/" <> serialize b <> byteString "/" <> serialize c <> byteString "/" <> serialize d <> byteString "/" <> serialize e <> byteString "/" <> serialize f
+  deserialize =  (,,,,,) <$> deserialize <*> (sspace >>  deserialize) <*> (sspace >>  deserialize) <*> (sspace >>  deserialize) <*> (sspace >>  deserialize) <*> (sspace >>  deserialize)
 
 instance (Loggable a,Loggable b, Loggable c,Loggable d,Loggable e,Loggable f,Loggable g) => Loggable (a,b,c,d,e,f,g) where
-  serialize (a,b,c,d,e,f,g)=  serialize a <> byteString "/" <> serialize b <> byteString "/" <> serialize c <> byteString "/" <> serialize d <> byteString "/" <> serialize e <> byteString "/" <> serialize f <> byteString "/" <> serialize g 
-  deserialize =  (,,,,,,) <$> deserialize <*> (sspace >>  deserialize) <*> (sspace >>  deserialize) <*> (sspace >>  deserialize) <*> (sspace >>  deserialize) <*> (sspace >>  deserialize) <*> (sspace >>  deserialize) 
+  serialize (a,b,c,d,e,f,g)=  serialize a <> byteString "/" <> serialize b <> byteString "/" <> serialize c <> byteString "/" <> serialize d <> byteString "/" <> serialize e <> byteString "/" <> serialize f <> byteString "/" <> serialize g
+  deserialize =  (,,,,,,) <$> deserialize <*> (sspace >>  deserialize) <*> (sspace >>  deserialize) <*> (sspace >>  deserialize) <*> (sspace >>  deserialize) <*> (sspace >>  deserialize) <*> (sspace >>  deserialize)
 
 instance (Loggable a,Loggable b, Loggable c,Loggable d,Loggable e,Loggable f,Loggable g,Loggable h) => Loggable (a,b,c,d,e,f,g,h) where
-  serialize (a,b,c,d,e,f,g,h)=  serialize a <> byteString "/" <> serialize b <> byteString "/" <> serialize c <> byteString "/" <> serialize d <> byteString "/" <> serialize e <> byteString "/" <> serialize f <> byteString "/" <> serialize g <> byteString "/" <> serialize h 
-  deserialize =  (,,,,,,,) <$> deserialize <*> (sspace >>  deserialize) <*> (sspace >>  deserialize) <*> (sspace >>  deserialize) <*> (sspace >>  deserialize) <*> (sspace >>  deserialize) <*> (sspace >>  deserialize) <*> (sspace >>  deserialize) 
+  serialize (a,b,c,d,e,f,g,h)=  serialize a <> byteString "/" <> serialize b <> byteString "/" <> serialize c <> byteString "/" <> serialize d <> byteString "/" <> serialize e <> byteString "/" <> serialize f <> byteString "/" <> serialize g <> byteString "/" <> serialize h
+  deserialize =  (,,,,,,,) <$> deserialize <*> (sspace >>  deserialize) <*> (sspace >>  deserialize) <*> (sspace >>  deserialize) <*> (sspace >>  deserialize) <*> (sspace >>  deserialize) <*> (sspace >>  deserialize) <*> (sspace >>  deserialize)
 
 instance (Loggable a,Loggable b, Loggable c,Loggable d,Loggable e,Loggable f,Loggable g,Loggable h,Loggable i) => Loggable (a,b,c,d,e,f,g,h,i) where
-  serialize (a,b,c,d,e,f,g,h,i)=  serialize a <> byteString "/" <> serialize b <> byteString "/" <> serialize c <> byteString "/" <> serialize d <> byteString "/" <> serialize e <> byteString "/" <> serialize f <> byteString "/" <> serialize g <> byteString "/" <> serialize h <> byteString "/" <> serialize i 
-  deserialize =  (,,,,,,,,) <$> deserialize <*> (sspace >>  deserialize) <*> (sspace >>  deserialize) <*> (sspace >>  deserialize) <*> (sspace >>  deserialize) <*> (sspace >>  deserialize) <*> (sspace >>  deserialize) <*> (sspace >>  deserialize) <*> (sspace >>  deserialize) 
+  serialize (a,b,c,d,e,f,g,h,i)=  serialize a <> byteString "/" <> serialize b <> byteString "/" <> serialize c <> byteString "/" <> serialize d <> byteString "/" <> serialize e <> byteString "/" <> serialize f <> byteString "/" <> serialize g <> byteString "/" <> serialize h <> byteString "/" <> serialize i
+  deserialize =  (,,,,,,,,) <$> deserialize <*> (sspace >>  deserialize) <*> (sspace >>  deserialize) <*> (sspace >>  deserialize) <*> (sspace >>  deserialize) <*> (sspace >>  deserialize) <*> (sspace >>  deserialize) <*> (sspace >>  deserialize) <*> (sspace >>  deserialize)
 
 
 
@@ -258,24 +264,24 @@ instance (Loggable k, Ord k, Loggable a) => Loggable (M.Map k a)  where
                      <*> (tChar '/' *> deserialize)
       return $ M.fromList list
 
-#ifndef ghcjs_HOST_OS
+
 instance Loggable BS.ByteString where
         serialize str =  lazyByteString str
         deserialize=  (do
             -- for strings between quotes
-            tChar '"' 
-            r<- tTakeUntil (\s ->  BS.head s /= '\\' && BS.head(BS.tail s) =='"') <> tTake 1  
+            tChar '"'
+            r<- tTakeUntil (\s ->  BS.head s /= '\\' && BS.head (BS.tail s) =='"') <> tTake 1
             anyChar
             return r )
-          
-          <|> tTakeUntil (\s -> let c= BS.head s in c == '/') -- || c==' ')  -- problems wih "inputParse deserialize" in Web.h?
-#endif
 
-#ifndef ghcjs_HOST_OS
+          <|> tTakeUntil (\s -> let c= BS.head s in c == '/') -- || c==' ')  -- problems wih "inputParse deserialize" in Web.h?
+
+
+
 instance Loggable BSS.ByteString where
         serialize str = byteString str
         deserialize   = deserialize >>= return . BS.toStrict
-#endif
+
 instance Loggable SomeException
 
 newtype Raw= Raw BS.ByteString deriving (Read,Show)
@@ -296,7 +302,7 @@ newtype LogData=  LD [LogDataElem]  deriving (Read,Show, Typeable)
 
 instance Loggable LogData where
   serialize = toPath
-  deserializePure s= Just (LD[LE  $ lazyByteString s],mempty)
+  deserializePure s= Just (LD [LE  $ lazyByteString s],mempty)
 
 -- instance Semigroup LogData where
 --   (<>)= mappend
@@ -306,7 +312,7 @@ instance Loggable LogData where
 --   LD log `mappend` LD log' = 
 --     case ((splitAt (length log -1) log),log') of
 --       ((_,[LE _]),log') -> LD $ log ++ log' 
-      
+
 --       ((prev,[LX  (LD log'')]),LE log''':rest) -> LD $ prev ++ [LX $ LD(log''++[LE log'''])] <> rest
 --       -- cuando los dos terminos tiene LX, se juntan
 --       ((prev,[LX (log'')]),LX (log'''):rest) -> LD $ prev ++ [LX(log''<>log''')] <> rest
@@ -316,17 +322,17 @@ instance Semigroup LogData where
 instance Monoid LogData where
   mempty= LD mempty
   LD [] `mappend` LD log= LD log
-  LD log `mappend` LD log' = 
+  LD log `mappend` LD log' =
     case (splitAt (length log -1) log) of
-      (_,[LE _]) -> LD $ log ++ log' 
+      (_,[LE _]) -> LD $ log ++ log'
       (prev,[LX  log'']) ->  LD $ prev ++ [LX (log'' <> LD log' )]
 
 
 -- continue a chain at the deep of the second argument
 LD [] `joinlog` LD log= LD log
-LD log `joinlog` LD log' = 
+LD log `joinlog` LD log' =
     case (splitAt (length log -1) log) of
-      (_,[LE _]) -> LD $ log ++ log' 
+      (_,[LE _]) -> LD $ log ++ log'
 
       (prev,[LX (LD [])]) ->LD $ prev ++ log'
 
@@ -334,8 +340,8 @@ LD log `joinlog` LD log' =
          case log' of
                    [] -> LD log
                    (LE _ : _) -> LD $ prev ++ [LX (log'' `joinlog` LD log' )]
-                   
-                   (LX log''':rest) -> LD $ prev ++ [LX(log'' `joinlog` log''')] <> rest
+
+                   (LX log''':rest) -> LD $ prev ++ [LX (log'' `joinlog` log''')] <> rest
 
 
 
@@ -444,16 +450,16 @@ getEnd  (LD log)= let n= g [0] log in reverse n
   where
   g n []= n
 
-  g  ns ((LX (LD []) ):[]) = 0:ns 
+  g  ns ((LX (LD []) ):[]) = 0:ns
 
-  g  ns ((LX (LD rest) ):[]) = g (0:ns)  rest 
-  g  (n:ns) (_:rest) = g (n+1:ns) rest 
+  g  ns ((LX (LD rest) ):[]) = g (0:ns)  rest
+  g  (n:ns) (_:rest) = g (n+1:ns) rest
 
 substLast (LD x) a= LD $ append' x where
   append' []=[]
   append' [LE x]= [LE a]
   append' [LX(LD [])]= []
-  append' [LX(LD xs)]= [LX(LD $ append' xs)]
+  append' [LX(LD xs)]= [LX (LD $ append' xs)]
   append' (x:xs)= x:append' xs
 
 -- dropLast (LD x)= LD $ dropLast' x where
@@ -505,8 +511,8 @@ dropFromIndex [] (LD log)=  log
 -- dropFromIndex [i] (LD log)=  drop i log
 
 
-dropFromIndex (i:is) (LD log)= 
-  let dropi= drop i log 
+dropFromIndex (i:is) (LD log)=
+  let dropi= drop i log
   in case dropi of
     []          -> mempty
     (LX log':t) -> if null is then LX log' : t
@@ -574,11 +580,11 @@ toPathlon' (LX x: b)= byteString "e/" <> toPathLon  x  <> toPathlon' (tail b)
 -- toPathFragment (LX x:rest) = toPath x <> toPathl (tail rest)
 -- toPathFragment other= toPathl other
 
-  
+
 
 pack x=  byteString (BSS.pack x)
 
-(<<) (LD[]) build =LD[LE build]
+(<<) (LD[]) build =LD [LE build]
 (<<) (LD log) build=  case splitAt (length log -1) log of
 
   (_,[LE _]) -> LD $ log ++ [LE build]
@@ -586,21 +592,21 @@ pack x=  byteString (BSS.pack x)
 
 
 
-(<<-) (LD[]) build = LD[LE build]
+(<<-) (LD[]) build = LD [LE build]
 (<<-) (LD l) build=  case splitAt (length l -1) l of
-  
+
   (_,[LE _]) -> LD $ l ++ [LE build]
   (log',[LX (LD [])]) ->  LD $ log'++[LE build]
   (log',[LX (LD log)]) -> case last log of
      LE _ -> LD $ l ++ [LE build]
      _       ->   LD $ log'++[LX $ (LD log) <<- build]
- 
 
-substwait ld build = fromJust $ substwait1 ld build  
+
+substwait ld build = fromJust $ substwait1 ld build
   where
-  substwait1 (LD[]) build =  Just $ LD[LE build]
+  substwait1 (LD[]) build =  Just $ LD [LE build]
   substwait1 (LD l) build=  case splitAt (length l -1) l of
-    
+
     (prev,[LE x]) -> if  toLazyByteString x=="w/" then Just $ LD $ prev ++[LE build] else Nothing -- LD l <> LD [LE build]
     (prev,[LX (LD [])])  ->  Just $ LD $ prev++[LE build]
     (prev,[LX (LD log)]) -> let mr=  (LD log) `substwait1` build  --   LD $ log'++[LX $ (LD log) `substwait` build]
@@ -731,14 +737,14 @@ logged mx = do
 
   indent
   debug <- getParseBuffer
-  tr ("executing logged stmt of type",typeOf res,"with log",debug) 
+  tr ("executing logged stmt of type",typeOf res,"with log",debug)
 
   -- mode <- gets execMode
   -- ttr ("execMode",mode)
 
   r <- res
-  
-  tr ("finish logged stmt of type",typeOf res)   
+
+  tr ("finish logged stmt of type",typeOf res)
   outdent
 
   return r
@@ -756,7 +762,7 @@ logged mx = do
         -- ttr ("parsebuffer", if BS.null rest then "NULL" else  BS.take 2 rest )
         let log'= if BS.null rest {-&& typeOf(type1 res) /= typeOf () -}then log{recover=False}  else log
         process rest full log'
- 
+
 
     where
     -- fmx mx= tr ("executing logged stmt of type",typeOf mx) >> mx
@@ -769,24 +775,24 @@ logged mx = do
         let fullexec=   full <> exec
 
         setData log{fulLog= fullexec, hashClosure= hashClosure log + hashDone}
-        r <-(if not $ BS.null rest  
-               then do  recoverIt 
+        r <-(if not $ BS.null rest
+               then do  recoverIt
                else do   mx)  <** modifyData' (\log ->  log{fulLog=fulLog log <<- wait,hashClosure=hashClosure log + hashWait}) emptyLog
-                            
+
                             -- when   p1 <|> p2, to avoid the re-execution of p1 at the
                             -- recovery when p1 is asynchronous or  empty
-        
-        log' <- getLog 
 
-        let 
+        log' <- getLog
+
+        let
             recoverAfter= recover log'
             add=   (serialize r <> byteString "/")   -- Var (toIDyn r):  full
 
         -- tr ("RECOVERAFTER",recover log,recover log')
 
-        if BS.null rest && recoverAfter ==True  then do 
+        if BS.null rest && recoverAfter ==True  then do
             -- tr ("SUBLAST", "fulLog log'",fulLog log', "add", add,"sublast",substwait(fulLog log')  add)
-            setData $ Log{recover=False,fulLog= substwait(fulLog log')  add, hashClosure=hashClosure log + hashExec}
+            setData $ Log{recover=False,fulLog= substwait (fulLog log')  add, hashClosure=hashClosure log + hashExec}
 
         else  do
             -- tr ("ADDLOG", "fulexec",fullexec,fullexec <<- add)  
@@ -797,7 +803,7 @@ logged mx = do
 
 
     recoverIt = do
-        tr "recoverit"
+
         s <- giveParseString
 
         tr ("recoverIt recover", s)
@@ -805,7 +811,7 @@ logged mx = do
         case BS.splitAt 2 s of
           ("e/",r) -> do
             tr "EXEC"
-            setParseString r                    
+            setParseString r
             mx
 
           ("w/",r) -> do
@@ -814,7 +820,7 @@ logged mx = do
             -- in recovery, execmode can not be parallel
             empty                                --   !> "Wait"
 
-          _ -> value 
+          _ -> value
 
     value = r
       where
@@ -826,10 +832,10 @@ logged mx = do
         x <- deserialize  -- <|> errparse 
         tr ("value parsed",x)
         psr <- giveParseString
-        when(not $ BS.null psr) $ (tChar '/' >> return()) --  <|> errparse
+        when (not $ BS.null psr) $ (tChar '/' >> return ()) --  <|> errparse
         return x) <|> errparse
       errparse :: TransIO a
-      errparse = do psr <- getParseBuffer; throwt $ ErrorCall ("error parsing <" <> BS.unpack psr <> "\" to " <> show (typeOf $ typeOfr r) <> ">") 
+      errparse = do psr <- getParseBuffer; throwt $ ErrorCall ("error parsing <" <> BS.unpack psr <> ">  to " <> show (typeOf $ typeOfr r))
 
 {-
 
