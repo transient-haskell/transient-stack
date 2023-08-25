@@ -1904,7 +1904,7 @@ data ConnectionData
 instance Show WS.Connection where
   show _ = "WS"
 
-data HTTPHeaders = HTTPHeaders (BS.ByteString, B.ByteString, BS.ByteString) [(CI BC.ByteString, BC.ByteString)] deriving (Show)
+data HTTPHeaders = HTTPHeaders (BS.ByteString, B.ByteString, BS.ByteString) NWS.Headers deriving (Show)
 
 newtype PersistId = PersistId Integer deriving (Read, Show, Typeable)
 
@@ -2190,6 +2190,8 @@ listenNew port conn' = do
       -- it is a HTTP request
       -- processMessage the current request in his own thread and then (<|>) any other request that arrive in the same connection
       -- first@(method,uri, vers) <-cutBody firstLine headers <|> parMany cutHTTPRequest
+
+      -- all requests are parsed here
       httpHeaders@(HTTPHeaders (first@(method,uri, vers)) headers) <- cutBody firstLine headers <|> parMany cutHTTPRequest
 
 
@@ -2384,7 +2386,7 @@ listenNew port conn' = do
       -- setState $ HTTPHeaders first headers
       cutBody first headers
 
-    cutBody (first@(method, _, _)) headers = do
+    cutBody (first@(method, _, _)) (headers :: NWS.Headers) = do
       -- tr "cutBody"
       let ret=  HTTPHeaders first headers
       -- tr("headers",headers)
@@ -2884,7 +2886,7 @@ makeWebsocketConnection conn uri headers = liftIO $ do
 
 -- if it is a websocket request, end. otherwise serve the page and stop
 
-servePage (method, uri, headers) = do
+servePage (method, uri, headers :: NWS.Headers) = do
   --   return ()                        !> ("HTTP request",method,uri, headers)
   conn <- getSData <|> error " servePageMode: no connection"
 
@@ -2974,7 +2976,7 @@ http10 = "HTTP/1.0"
 
 isWebSocketsReq =
   not . null
-    . filter ((== mk "Sec-WebSocket-Key") . fst)
+    . filter ((==  "Sec-WebSocket-Key") . fst)
 
 data HTTPMethod = GET | POST deriving (Read, Show, Typeable, Eq,Generic)
 
@@ -3009,7 +3011,7 @@ parsePostUrlEncoded = do
     param = tTakeWhile' (/= '=') -- !> "param"
     value = unEscapeString <$> BS.unpack <$> tTakeWhile' (/= '&')
 
-getHeaders = manyTill paramPair (string "\r\n\r\n")  -- !>  (method, uri, vers)
+getHeaders = manyTill paramPair (string "\r\n\r\n") :: TransIO NWS.Headers -- !>  (method, uri, vers)
   where
     paramPair = (,) <$> (mk <$> getParam) <*> getParamValue
 
