@@ -481,7 +481,7 @@ mainsimple= keep $  initNode $ Cloud $ do
 
  
 
-main= keep $ initNode $  do
+main = keep $ initNode $ inputNodes <|> do
   -- firstCont
   r <- proc2 <|> onAll restore1 <|> onAll save
   localIO $ print ("res",r)
@@ -1390,3 +1390,15 @@ receivee conn clos  val= do
       -- setLog 0 (lazyByteString (BS.pack "0/") <> (serialize val)) 0 0 :: TransIO()
 
 
+
+
+maindistrib = keep $ initNode $ inputNodes <|> do
+    local $ option "g" "go"
+    nodes <- local getNodes
+    r <-  runAt (nodes !! 0) (proc "HELLO") <> runAt (nodes !! 1) (proc "WORLD")
+    localIO $ print r
+     
+    where
+    proc x= do
+         localIO $ print x
+         return x

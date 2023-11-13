@@ -323,15 +323,15 @@ instance Applicative TransIO where
             Nothing -> do
 
               p <- gets execMode
-              ttr ("EXECMODE",p)
+              tr ("EXECMODE",p)
               if p== Serial then empty else do 
-                       ttr "parallel"
+                       
                        -- the first term may be being executed in parallel and will give his result later
                        x <- mx
                        liftIO (writeIORef r2 $ Just x)
 
                        mr <- liftIO (readIORef r1)
-                       ttr ("XPARALELL",isJust mr)
+                       tr ("XPARALELL",isJust mr)
                        case mr of
                          Nothing -> empty
                          Just f  -> return $ f x

@@ -816,8 +816,8 @@ logged mx = do
 
           ("w/",r) -> do
             setParseString r
-            -- modify $ \s -> s{execMode=if execMode s /= Remote then Parallel else Remote}  --setData Parallel 
-            -- in recovery, execmode can not be parallel
+            modify $ \s -> s{execMode=if execMode s /= Remote then Parallel else Remote}  --setData Parallel 
+            -- in recovery, execmode can not be parallel(NO; see below)
             empty                                --   !> "Wait"
 
           _ -> value
@@ -829,7 +829,8 @@ logged mx = do
 
       r= (do
         tr "VALUE"
-        x <- deserialize  -- <|> errparse 
+        -- set serial for deserialization, restor execution mode
+        x <- do mod <-gets execMode;modify $ \s -> s{execMode=Serial}; r <- deserialize; modify $ \s -> s{execMode= mod};return r  -- <|> errparse 
         tr ("value parsed",x)
         psr <- giveParseString
         when (not $ BS.null psr) $ (tChar '/' >> return ()) --  <|> errparse
@@ -837,90 +838,7 @@ logged mx = do
       errparse :: TransIO a
       errparse = do psr <- getParseBuffer; throwt $ ErrorCall ("error parsing <" <> BS.unpack psr <> ">  to " <> show (typeOf $ typeOfr r))
 
-{-
 
-logged :: Loggable a => TransIO a -> TransIO a
-logged mx =   do
-        log <- getLog
-        -- tr ("BUILD inicio", toPath $ fulLog log)
-
-        let full= fulLog log
-        rest <- giveParseString
-
-        if recover log                  -- !> ("recover",recover log)
-           then
-                  if not $ BS.null rest 
-                    then recoverIt log     !> "RECOVER" 
-                    else
-                      notRecover full log  !> "NOTRECOVER"
-
-           else notRecover full log
-    where
-    notRecover full log= do
-
-      --  tr ("BUILDLOG0,before exec",  toPath full)
-
-        let fullexec=  full <> exec  
-        setData $ Log False  False fullexec (hashClosure log + 1000)     
-
-        r <-  mx <** do setData $ Log False  False (fullexec <<- wait)  (hashClosure log + 100000)
-                            -- when   p1 <|> p2, to avoid the re-execution of p1 at the
-                            -- recovery when p1 is asynchronous or  empty
-
-        log' <- getLog 
-
-        tr ("BUILDLOG7 after exec recoveryafter?", recover log', toPath $ fulLog log')
-
-        let 
-            recoverAfter= recover log'
-            add=  (serialize r <> byteString "/")   -- Var (toIDyn r):  full
-        if recoverAfter == True then
-              setData $ log'{fulLog= fulLog log' <<- add} --,hashClosure=hashClosure log' +10000000}
-        -- else if recoverAfter == Restore then
-        --       setData $ log'{fulLog= fulLog log'{recover=Restore}} -- ,hashClosure=hashClosure log' +10000000}
-        else 
-              setData $ Log{recover= False, fulLog= fullexec <<- add, hashClosure=hashClosure log +10000000}
-              {- exec vacio permite logged $ do .. pero como se quita si no es necesario
-                 se junta en Restore o True
-              -}
-        return r
-
-    recoverIt log= do
-        s <- giveParseString
-
-        tr ("BUILDLOG3 recover", s,fulLog log)
-
-        case BS.splitAt 2 s of
-          ("e/",r) -> do
-            setData $ log{ hashClosure= hashClosure log + 1000}
-            setParseString r                     --   !> "Exec"
-            mx
-
-          ("w/",r) -> do
-            setData $ log{ hashClosure= hashClosure log + 100000}
-            setParseString r
-            modify $ \s -> s{execMode= Parallel}  --setData Parallel
-            empty                                --   !> "Wait"
-
-          _ -> value log
-
-    value log= r
-      where
-      typeOfr :: TransIO a -> a
-      typeOfr _= undefined
-      r= do
-            x <- deserialize <|> do
-                   psr <- giveParseString
-                   error  (show("error parsing",psr,"to",typeOf $ typeOfr r))
-                  
-            tChar '/'
-
-            setData $ log{{-recover= True, -}hashClosure= hashClosure log + 10000000}
-            tr ("BUILDLOG31 recover",   toPath $ fulLog log)
-
-            return x
-
--}
 
 
 -------- parsing the log for API's

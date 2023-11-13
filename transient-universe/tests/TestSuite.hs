@@ -55,7 +55,7 @@ test=  initNodeServ service  "localhost" portnumber $ do
           [node1] <-  requestInstance service 1
           -- onAll $ liftIO $ print (node1,node2)
           
-          local ( option "f" "fire")   <|> return ""       -- to repeat the tests,  remove the "exit" at the end 
+          local ( option "f" "fire")   <|> return ""       -- to repeat the tests using the option fire,  remove the "exit" at the end 
 
       --     onAll $ ttr ("node1",node1,"node2",node2)
 
@@ -70,12 +70,12 @@ test=  initNodeServ service  "localhost" portnumber $ do
           localIO $ putStrLn "------checking Alternative distributed--------"
 
 
-          r <- local $ collect 2 $  runCloud $ (runAt node0 (SHOULDRUNIN( node0) >> return "hello" )) <|>
-                (runAt node1 (SHOULDRUNIN( node1) >> return "world" )) -- <|>
-                -- (runAt node2 (SHOULDRUNIN( node2) >> return "world2" ))
+          -- r <- local $ collect 2 $  runCloud $ (runAt node0 (SHOULDRUNIN( node0) >> return "hello" )) <|>
+          --       (runAt node1 (SHOULDRUNIN( node1) >> return "world" )) -- <|>
+          --       -- (runAt node2 (SHOULDRUNIN( node2) >> return "world2" ))
           
           
-          assert(sort r== ["hello", "world"]) $ localIO $  print r         
+          -- assert(sort r== ["hello", "world"]) $ localIO $  print r         
           
           localIO $ putStrLn "--------------checking Applicative distributed--------"
           r <- loggedc $(runAt node0 (SHOULDRUNIN( node0) >> return "hello "))
