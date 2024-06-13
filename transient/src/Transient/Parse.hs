@@ -260,7 +260,7 @@ dropTillEndOfLine= withGetParseString $ \str -> return ((),BS.dropWhile ( /= '\n
 parseString= do
     dropSpaces
     r <- tTakeWhile (not . isSpace)
-    tr ("PARSESTRING",r)
+    -- tr ("PARSESTRING",r)
     if BS.null r then empty else return r
 
 
@@ -387,15 +387,15 @@ withGetParseString parser=  Transient $ do
               -- tr "DONE in withGetParseString" 
               return mempty else do
             (mr,_) <- runTransient readMore
-            tr ("READMORE1",mr)
+            -- tr ("READMORE1",mr)
             case mr of
               Nothing -> mempty
               Just(SMore r) ->  return r <> do
                                               d <- readIORef done
                                               if d then mempty else loop
 
-              Just(SLast r) -> do tr "LAST"; writeIORef done True ; return r
-              Just SDone -> do  tr  "DONE"; writeIORef done True ; return mempty  -- !> "withGetParseString SDONE" 
+              Just(SLast r) -> do  writeIORef done True ; return r
+              Just SDone -> do  writeIORef done True ; return mempty  -- !> "withGetParseString SDONE" 
 
     -- str <-  liftIO $ (s <> ) `liftM`  loop
     str <- liftIO $ return s <> loop
@@ -457,12 +457,12 @@ tPutStr s'= withGetParseString $ \s -> return ((),s'<> s)
 isDone :: (MonadIO m,TransMonad m) => m Bool
 isDone=   do
     ParseContext _ _ done<- gets parseContext
-    tr "ISDONE"
+    -- tr "ISDONE"
     liftIO $ readIORef done
  
 
 dropUntilDone= (withGetParseString $ \s -> do
-    tr "dropUntilDone"
+    -- tr "dropUntilDone"
     ParseContext _ _ done <- gets parseContext
     let loop s= do
             if (unsafePerformIO $ readIORef done)== True ||  BS.null s then return((), s) else loop $ BS.tail s
@@ -536,7 +536,7 @@ producer |- qonsumer =  sandbox $ do
     --abduce
     
     setParseStream (liftIO $ takeMVar v)--  `catch`  \(_:: SomeException) -> return SDone ) 
-    tr "CONSUMER"
+    -- tr "CONSUMER"
     r <- qonsumer
     dropUntilDone
     Just p <- liftIO $ readIORef pcontext
