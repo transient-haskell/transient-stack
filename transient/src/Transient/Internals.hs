@@ -323,7 +323,7 @@ instance Applicative TransIO where
             Nothing -> do
 
               p <- gets execMode
-              tr ("EXECMODE",p)
+              -- tr ("EXECMODE",p)
               if p== Serial then empty else do 
                        
                        -- the first term may be being executed in parallel and will give his result later
@@ -331,7 +331,7 @@ instance Applicative TransIO where
                        liftIO (writeIORef r2 $ Just x)
 
                        mr <- liftIO (readIORef r1)
-                       tr ("XPARALELL",isJust mr)
+                      --  tr ("XPARALELL",isJust mr)
                        case mr of
                          Nothing -> empty
                          Just f  -> return $ f x
@@ -782,7 +782,7 @@ killChildren1 th state = do
         ths' <- modifyMVar (children state) $ \ths -> do
                     let (inn, ths')=  partition (\st -> threadId st == th) ths
                     return (inn, ths')
-        tr ("tokill",map threadId ths')
+        -- tr ("tokill",map threadId ths')
         mapM_ (killChildren1  th) ths'
         mapM_ (killThread . threadId) ths'
 
@@ -1401,14 +1401,43 @@ async io = do
     SLast  x -> return x
     SError e -> back   e
 
--- | Avoid the execution of alternative computations when the computation is asynchronous
+-- | sync executes an asynchronous computation, until no thread in that computation is active, and return the list of results without executing any alternative computation. 
+-- if the list of results is empty, the alternative computation is executed.
 --
--- > sync (async  whatever) <|>  liftIO (print "hello") -- never print "hello" and return something
+-- > ghci> keep' $ sync (abduce >> empty) <|> return "hello"
+-- > ["hello"]
+-- >
+-- > ghci> keep' $ sync (abduce >> return "hello") <|> return "world"
+-- > ["hello"]
 --
--- the thread before and after `sync`is the same.
--- If the comp. return more than one result, the first result will be returned
-sync :: TransIO a -> TransIO a
-sync pr= do
+-- But, withou sync:
+--
+-- > ghci> keep' $ (abduce >> return "hello") <|> return "world"
+-- > ["world","hello"]
+--
+-- Network operations usually do not work well with sync at this moment, since it is difficult to determine his termination if they have 
+-- use sync1 which forces termination after the first result.
+sync :: TransIO a -> TransIO [a]
+sync x = syncProd  $ collect' 0 0 x
+
+-- | to enclose collect operations avoiding alternative operations and return the result in the original thread.
+
+syncProd :: TransIO [a] -> TransIO [a]
+syncProd x= do
+    mv <- liftIO newEmptyMVar
+    do
+      anyThreads abduce
+      r <- avoidAlternative x
+      liftIO (putMVar mv r)
+      empty
+      
+     <|> do
+      r <- liftIO (takeMVar mv)
+      case r of
+        [] -> empty
+        rs -> return  rs
+  
+sync' pr= do
     mv <- liftIO newEmptyMVar
     -- if pr is empty the computation does not continue. It blocks
     (pr >>= liftIO . (tryPutMVar mv) >> empty) <|> liftIO (takeMVar mv)
@@ -1416,20 +1445,19 @@ sync pr= do
         -- case mr of
         --    Nothing -> empty
         --    Just r  -> return r
--- si pr,que es asincrono, es empty, no sigue. solo sigue cuando devuelve algo
 
--- alternative sync 
--- sync x = do
---   was <- gets execMode 
---   -- solo garantiza que el alternativo no se va a ejecutar
---   r <- x <** modify (\s ->s{execMode= Remote})
---   modify $ \s -> s{execMode= was}
---   return r
+avoidAlternative x= do
+    ns <-  x <** modify (\s -> s{execMode= Remote})
+    modify $ \s -> s{execMode= Parallel}
+    return ns
 
+-- | return the first result of sync
+sync1 :: TransIO a -> TransIO a
+sync1 x = do rs <- syncProd  $ collect' 1 0 x; return $ head rs
 
 
 -- | Another name for `sync`
-await :: TransIO a -> TransIO a
+await :: TransIO a -> TransIO [a]
 await=sync
 
 -- | create task threads faster, but with no thread control: @spawn = freeThreads . waitEvents@
@@ -1493,6 +1521,8 @@ parallel ioaction = Transient $ do
 
 -- | Execute the IO action and the continuation
 -- loop ::  EventF -> IO (StreamData t) -> IO ()
+forkMaybe' _ par   proc= proc par -- (proc par >>= \(_,cont) -> exceptBackg cont $ Finish $ show (unsafePerformIO myThreadId,"loop thread ended"))
+                              `catch` \e -> exceptBack par e
 loop parentc rec = forkMaybe False parentc $ \cont -> do
 
   liftIO $ atomicModifyIORef (labelth cont) $ \(_,label) -> ((Listener,label),())
@@ -1552,6 +1582,8 @@ loop parentc rec = forkMaybe False parentc $ \cont -> do
         Nothing -> forkIt rparent  proc
         Just sem  -> do
           dofork <- waitQSemB onemore sem
+          th <-myThreadId
+          -- liftIO $ print (dofork,th)
           if dofork
             then forkIt rparent proc
             else ( proc parent   >>= \(_,cont) -> exceptBackg cont $ Finish $ show (unsafePerformIO myThreadId,"loop thread ended"))
@@ -1566,7 +1598,7 @@ loop parentc rec = forkMaybe False parentc $ \cont -> do
 
      void $ forkFinally1  (do
          th <- myThreadId
-         tr "thread init"
+        --  tr "thread init"
          let cont'= parentState{parent=rparentState, children= chs, labelth= label,threadId=  th}
          when (not $ freeTh parentState )$ hangThread parentState cont'
 
@@ -1596,7 +1628,7 @@ loop parentc rec = forkMaybe False parentc $ \cont -> do
 
               Right(_,lastCont) -> do
                   freelogic  rparentState parentState label
-                  tr ("finalizing normal",threadId lastCont, unsafePerformIO $ readIORef $ labelth lastCont)
+                  -- tr ("finalizing normal",threadId lastCont, unsafePerformIO $ readIORef $ labelth lastCont)
                   th <- myThreadId
                   -- tr "antes de exceptbaack"
 
@@ -1635,7 +1667,7 @@ freelogic rparentState parentState label =do
       ((case status of Alive -> Dead ; Parent -> DeadParent; _ -> status, lab),l)
     -- los procesos que acaban de morir sin hijos (deadparent) tambien deben liberarse
     if ({- can /= Parent && can /= DeadParent && -} can /= Listener)
-      then do  tr ("FREEE",th); free th actualParent  ; return True
+      then do   free th actualParent  ; return True
       else return False
                   -- !> ("th",th,"actualParent",threadId actualParent,can,lab)
 
@@ -1652,14 +1684,14 @@ free th env = do
          then do
 
            (typ,_) <- readIORef $ labelth env
-           tr ("freeing:",th,typ,"in",threadId env,"childs parent", length sbs',map threadId sbs',isJust (unsafePerformIO $ readIORef $ parent env))
+          --  tr ("freeing:",th,typ,"in",threadId env,"childs parent", length sbs',map threadId sbs',isJust (unsafePerformIO $ readIORef $ parent env))
            if (null sbs' && typ /= Listener && isJust (unsafePerformIO $ readIORef $ parent env))
             -- free the parent
               then  do
                 (typ,_) <- readIORef $ labelth env
                 if typ==DeadParent
                   then do
-                      tr "DEADPARENT"
+                      -- tr "DEADPARENT"
                       free (threadId env) (fromJust $ unsafePerformIO $ readIORef  $ parent env)
                       -- return True 
                   else return False -- if typ== Parent then return True else return False
@@ -1833,7 +1865,7 @@ collect' number time proc' = hookedThreads $ do
                 -- tr "forward" 
                 forward (Finish "");
 
-        --  -- the finished thread is free. It must be "hanged" -- 
+        --  -- the finished thread is free. It must be "hanged" to the tree -- 
                 st <- noTrans $ do
                     th <- liftIO $ myThreadId
                     liftIO $ killChildren1 th cont  --kill remaining threads
@@ -1852,7 +1884,7 @@ collect' number time proc' = hookedThreads $ do
 
 -- | look up in the parent chain for a parent state/thread that is still active
 findAliveParent st=  do
-      par <- readIORef (parent st) `onNothing`  error "findAliveParent: Nothing"
+      par <- readIORef (parent st) `onNothing` return st --  error "findAliveParent: Nothing"
       (st,_) <- readIORef $labelth par
       case st of
           Dead -> findAliveParent par
@@ -1903,8 +1935,10 @@ onBack ac bac = registerBack (typeof bac) $ Transient $ do
      Backtrack mreason stack <- getData `onNothing` (return $ backStateOf (typeof bac))
     --  tr ("onBackstack",mreason, length stack)
      runTrans $ case mreason of
-                  Nothing     -> tr "ONBACK NOTHING" >> ac                    
-                  Just reason -> tr ("ONBACK JUST",reason) >> bac reason              
+                  Nothing     -> do -- tr "ONBACK NOTHING" 
+                                    ac                    
+                  Just reason -> do -- tr ("ONBACK JUST",reason) ; 
+                                    bac reason              
      where
      typeof :: (b -> TransIO a) -> b
      typeof = undefined
@@ -2230,7 +2264,7 @@ tmask proc= Transient $ do
 -- If you want to manage exceptions only in the first argument and have the semantics of `catch` in transient, use `catcht`
 onException' :: Exception e => TransIO a -> (e -> TransIO a) -> TransIO a
 onException' mx f= onAnyException mx $ \e -> do
-            tr  "EXCEPTION HANDLER EXEC" 
+            -- tr  "EXCEPTION HANDLER EXEC" 
             case fromException e of
                Nothing -> do
                   -- Backtrack r stack <- getData  `onNothing`  return (backStateOf  e)      
