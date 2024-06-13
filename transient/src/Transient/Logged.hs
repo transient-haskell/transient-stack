@@ -190,7 +190,7 @@ instance Loggable Integer
 instance   (Typeable a, Loggable a) => Loggable [a]  where
     serialize []= byteString "[]"
     serialize (s@(x:xs))
-              | typeOf x== typeOf (undefined :: Char) = byteString $ BSS.pack (unsafeCoerce s)
+              | typeOf x== typeOf (undefined :: Char) = serialize $ BS.pack (unsafeCoerce s)
               | otherwise = byteString "[" <> serialize x <> serialize' xs
           where
           serialize' []= byteString "]"
@@ -264,22 +264,32 @@ instance (Loggable k, Ord k, Loggable a) => Loggable (M.Map k a)  where
                      <*> (tChar '/' *> deserialize)
       return $ M.fromList list
 
+dupSlash s= BS.foldl dupCharSlash (lazyByteString "") s where
+  dupCharSlash s '/'=  (s <> lazyByteString "//") !> "slash"
+  dupCharSlash s c= s <> lazyByteString (BS.singleton c) !> c
+
+undupSlash = do
+    s <- tTakeUntil $ \s -> BS.head s == '/'
+    do string "//"
+       return s <> "/" <> undupSlash
+     <|> return s 
 
 instance Loggable BS.ByteString where
-        serialize str =  lazyByteString str
-        deserialize=  (do
-            -- for strings between quotes
-            tChar '"'
-            r<- tTakeUntil (\s ->  BS.head s /= '\\' && BS.head (BS.tail s) =='"') <> tTake 1
-            anyChar
-            return r )
+        serialize str =   dupSlash str !> "serialize bytestring"
+        deserialize= undupSlash
+          --  (do
+          --   -- for strings between quotes
+          --   tChar '"'
+          --   r<- tTakeUntil (\s ->  BS.head s /= '\\' && BS.head (BS.tail s) =='"') <> tTake 1
+          --   anyChar
+          --   return r )
 
-          <|> tTakeUntil (\s -> let c= BS.head s in c == '/') -- || c==' ')  -- problems wih "inputParse deserialize" in Web.h?
+          -- <|> tTakeUntil (\s -> let c= BS.head s in c == '/') -- || c==' ')  -- problems wih "inputParse deserialize" in Web.h?
 
 
 
 instance Loggable BSS.ByteString where
-        serialize str = byteString str
+        serialize str = serialize $ BS.fromStrict  str
         deserialize   = deserialize >>= return . BS.toStrict
 
 instance Loggable SomeException
@@ -737,14 +747,14 @@ logged mx = do
 
   indent
   debug <- getParseBuffer
-  tr ("executing logged stmt of type",typeOf res,"with log",debug)
+  -- tr ("executing logged stmt of type",typeOf res,"with log",debug)
 
   -- mode <- gets execMode
   -- ttr ("execMode",mode)
 
   r <- res
 
-  tr ("finish logged stmt of type",typeOf res)
+  -- tr ("finish logged stmt of type",typeOf res)
   outdent
 
   return r
@@ -806,11 +816,11 @@ logged mx = do
 
         s <- giveParseString
 
-        tr ("recoverIt recover", s)
+        -- tr ("recoverIt recover", s)
 
         case BS.splitAt 2 s of
           ("e/",r) -> do
-            tr "EXEC"
+            -- tr "EXEC"
             setParseString r
             mx
 
@@ -828,7 +838,7 @@ logged mx = do
       typeOfr _= undefined
 
       r= (do
-        tr "VALUE"
+        -- tr "VALUE"
         -- set serial for deserialization, restor execution mode
         x <- do mod <-gets execMode;modify $ \s -> s{execMode=Serial}; r <- deserialize; modify $ \s -> s{execMode= mod};return r  -- <|> errparse 
         tr ("value parsed",x)
