@@ -58,7 +58,8 @@ library
             text -any,
             aeson -any,
             data-default,
-            syb
+            syb,
+            hashable
             --primitive < 0.6.4.0
             -- entropy <= 0.3.6, 
     build-depends:
@@ -194,6 +195,7 @@ executable test-transient1
             aeson,
             old-time,
             data-default
+            
             
             
     main-is: TestSuite.hs
