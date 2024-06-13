@@ -154,27 +154,27 @@ returnInstances = do
                 thisNode <- getMyNode
                 let node= Node (nodeHost thisNode)  port Nothing  ([service])  --  ++ [relayinfo thisNode]) -- node to be published
                 addNodes [node] 
-                return node
+                return $ stripService node
         --   `catcht` \(e :: SomeException) ->  liftIO (putStr "INSTALL error: " >> print e) >> empty
           
         relayinfo mon= if nodeHost mon /= "localhost" then [("relay",show(nodeHost mon,nodePort mon))] else []
+        stripService n= n{nodeServices=[Service(M.singleton "service" (fromMaybe "unknown" $ M.lookup "service" s)) | Service s <- nodeServices n ]}
 
 
 
 install ::  Service  -> Int -> TransIO ()
 
 install  service port= do
-    -- return () !> "IIIIIIIIIIIIIIINSTALL"
 
-    install'  -- `catcht` \(e :: SomeException) -> liftIO (putStr "INSTALL error: " >> print e) >> empty 
-    where
-    install'= do
+    -- install'  -- `catcht` \(e :: SomeException) -> liftIO (putStr "INSTALL error: " >> print e) >> empty 
+    -- where
+    -- install'= do
         my <- getMyNode
         let host= nodeHost my
         program <- return (lookupService "executable" service) `onNothing` empty
-        -- return ()  !> ("program",program)
-        tryExec program host port  <|> tryDocker service host port program
-                                   <|> do tryInstall service  ; tryExec program host port
+      
+        tryExec program host port  -- <|> tryDocker service host port program
+                                  -- <|> do tryInstall service  ; tryExec program host port
 
 
 tryInstall :: Service -> TransIO ()
@@ -195,9 +195,10 @@ tryDocker service host port program= do
 
 
 tryExec program host port= do
-    Transient $ liftIO $ findExecutable program  -- if it is not int the executable paths would abandon (empty) if the executable is not found
-
-    sync $ spawnProgram program host port  --  !>"spawn"
+    (Transient $ liftIO $ findExecutable program)  -- if it is not int the executable paths would abandon (empty) if the executable is not found
+                                 <|> error (program ++ " not found")
+    sync' $ spawnProgram program host port  --  !>"spawn"
+    return()
     where
     spawnProgram  program host port= do
 
@@ -293,7 +294,7 @@ logFileName expr= logFolder ++ subst expr ++ ".log"
 
 
      
-networkExecuteStreamIt :: String -> TransIO String
+-- networkExecuteStreamIt :: String -> TransIO String
 networkExecuteStreamIt expr = do
       liftIO $ createDirectoryIfMissing True logFolder
       blocked <- liftIO $ newMVar () 
