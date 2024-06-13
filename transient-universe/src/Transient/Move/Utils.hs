@@ -12,7 +12,7 @@
 --
 -----------------------------------------------------------------------------
 {-# LANGUAGE CPP, ScopedTypeVariables #-}
-module Transient.Move.Utils (initNode,initNodeDef, initNodeServ, inputNodes, simpleWebApp, initWebApp
+module Transient.Move.Utils (initNode,initNodeDef, initNodeServ, addService, inputNodes, simpleWebApp, initWebApp
 , onServer, onBrowser, atServer, atBrowser, runTestNodes, showURL)
  where
 
@@ -91,7 +91,7 @@ getNodeParams  =
           option "start" "re/start node"
 
           host <- input' (Just "localhost") (const True) "hostname of this node. (Must be reachable, default:localhost)? "
-          retry <-input' (Just "n") (== "retry") "if you want to retry with port+1 when the port is busy, write 'retry': "
+          retry <-input' (Just "n") (== "retry") "if you want to retry with higher port numbers when the port is busy, write 'retry': "
           when (retry == "retry") $ liftIO $ writeIORef rretry True
           port <- input  (const True) "port to listen? "
           liftIO $ createNode host port
@@ -122,6 +122,19 @@ initNodeDef host port app= do
    def= do
         args <- liftIO  getArgs
         if null args then liftIO $ createNode host port else empty
+
+-- Add a service
+addService :: Service -> Cloud ()
+addService s= local $ do
+   node <- getMyNode
+   let node'= node{nodeServices= s:nodeServices node}
+   setMyNode node'
+   nodes <- getNodes
+   setNodes $ node' : tail nodes
+
+   
+   
+
 
 initNodeServ :: Loggable a => Service -> String -> Int -> Cloud a -> TransIO a
 initNodeServ services host port app= do
@@ -204,6 +217,9 @@ simpleWebApp port app = do
    node <- createNode "localhost" $ fromIntegral port
    keep $ initWebApp node app
    return ()
+
+
+
 
 -- | use this instead of simpleWebApp when you have to do some initializations in the server prior to the
 -- initialization of the web server
