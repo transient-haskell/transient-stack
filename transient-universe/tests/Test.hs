@@ -1,13 +1,17 @@
 
-{-# LANGUAGE ScopedTypeVariables,OverloadedStrings #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 import Transient.Internals
+import Transient.Console
 import Transient.Move.Internals
+import Transient.Move.Services
 import Transient.Move.Utils
 import Transient.Logged
+import System.IO
 import Control.Monad.IO.Class
 import Control.Applicative
 import Control.Concurrent
 import Control.Monad
+import Control.Exception
 import Data.String
 import Transient.Indeterminism
 import Data.String
@@ -61,7 +65,7 @@ mainyest= keep $  do
         liftIO $ print ("----->",fulLog log,toPath $ fulLog log)
 
 
-main= keep $ initNode $ inputNodes <|> do 
+main15= keep $ initNode $ inputNodes <|> do 
     -- local $ do
     --     node1 <- liftIO $createNode "localhost" 8001
     --     addNodes[node1]
@@ -399,4 +403,34 @@ main12= keep $ initNode $ inputNodes <|> do
 --              handle <- getSData <|> error "no handle"
 --              liftIO $ hClose handle
 
+service= Service $ M.fromList
+         [("service","test suite")
+         ,("executable", "test-transient1")
+         ,("package","https://github.com/agocorona/transient-universe")]
      
+liftA1 tcomp ccomp= local $ tcomp $ runCloud ccomp
+
+main= keep $ initNode $ inputNodes <|> do
+           local $ option ("go" :: String) "go"
+           (node1,node2) <- local $ getNodes >>= \ns -> return $ (ns !! 0, ns !! 1)
+           r <-  do liftA1 sync1  ( do runAt node2  $ return "returned" -- (local $ option "f" "fire")
+                                       localIO $ print "passed1"
+                                       local $ topState >>= showThreads) 
+                    localIO $ print "passed2"; return "hello" <|>  (return "altermativ eexecuted")
+           localIO $ print r
+           stop
+
+
+
+
+
+           h <- onAll $ liftIO $ openFile "../loop.sh" ReadMode
+           i  <- local $ parallel $ (SMore <$> hGetLine h) `catch` \(e:: SomeException) -> return SDone
+           localIO $ print i
+           empty
+           node <- local $ getNodes >>= \ns -> return $ ns !! 1
+           [node1] <-  requestInstance service 1
+           localIO $ print node1
+           empty
+           r <- local (async (return "hello")) <|> runAt node (return "world")
+           localIO $ print (r :: String)
