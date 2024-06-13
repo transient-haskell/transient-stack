@@ -210,7 +210,7 @@ minput ident msg' = response
                 ps <- giveParseString
                 -- log <- getLog
 
-                tr ("PARSE BEFORE LOGGED EN MINPUT",ps, recover log)
+                -- tr ("PARSE BEFORE LOGGED EN MINPUT",ps, recover log)
                 
                 -- setData log{recover=True}
                 (string "e/" >> string "e/") <|> return "e/"
@@ -741,7 +741,7 @@ serializeToJSON = lazyByteString . encode
 deserializeJSON :: FromJSON a => TransIO a
 deserializeJSON = do
   modify $ \s -> s{execMode=Serial}
-  tr ("BEFOFE DECODE")
+  -- tr ("BEFOFE DECODE")
   s <- jsElem
   tr ("decode", s)
 
@@ -788,9 +788,9 @@ rawHTTP node restmsg =res
   c <-
     do
       c <- mconnect' node
-      tr ("after mconnect'")
+      -- tr ("after mconnect'")
       cc <- liftIO $ readIORef $ connData c
-      tr ("CONDATA",isJust cc)
+      -- tr ("CONDATA",isJust cc)
 
       sendRawRecover c $ BS.pack restmsg
 
@@ -808,7 +808,7 @@ rawHTTP node restmsg =res
         is <- isTLS c
         px <- getHTTProxyParams is
         tr ("PX=", px)
-        (if isJust px then return True else do c <- anyChar; tPutStr $ BS.singleton c; tr "anyChar"; return True) <|> do
+        (if isJust px then return True else do c <- anyChar; tPutStr $ BS.singleton c;  return True) <|> do
           TOD t _ <- liftIO $ getClockTime
           -- ("PUTMVAR",nodeHost node)
           liftIO $ putMVar (isBlocked c) $ Just t
@@ -826,7 +826,7 @@ rawHTTP node restmsg =res
       r <- notParsed
       endthings c mcon http10 blocked []
       error $ "No HTTP header received:\n" ++ up r
-  tr ("FIRST line", first)
+  -- tr ("FIRST line", first)
   headers <- getHeaders
   let hdrs = HTTPHeaders first headers
   setState hdrs
