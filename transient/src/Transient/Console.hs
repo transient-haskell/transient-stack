@@ -1,7 +1,7 @@
 {-# LANGUAGE ScopedTypeVariables,CPP #-}
 
 
-module Transient.Console(keep, keep',keepCollect,option, option1, input, input', inputf, inputParse, processLine,rprompt,rcb) where
+module Transient.Console(keep, keep',keepCollect,option, option1, input, input', inputf, inputParse, processLine,rprompt,rcb,thereIsArgPath) where
 
 import Control.Applicative
 import Control.Concurrent
@@ -53,17 +53,17 @@ optionf ::
   b ->
   String ->
   TransIO b
-optionf flag ret message = do
+optionf remove ret message = do
   let sret = if typeOf ret == typeOf "" then unsafeCoerce ret else show ret
   let msg = "Enter  " ++ "\x1b[1;31m" ++ sret ++ "\x1b[0m" ++ "\t\tto: " ++ message ++ "\n"
-  inputf flag sret msg Nothing (== sret)
+  inputf remove sret msg Nothing (== sret)
   liftIO $ putStr "\noption: " >> putStrLn sret
   -- abduce
   return ret
 
 -- | General asynchronous console input.
 --
--- inputf <remove input listener after sucessful or not> <listener identifier> <prompt>
+-- inputf <remove> <input listener after sucessful or not> <listener identifier> <prompt>
 --      <Maybe default value> <validation proc>
 inputf :: (Show a, Read a, Typeable a) => Bool -> String -> String -> Maybe a -> (a -> Bool) -> TransIO a
 inputf remove ident message mv cond = do
@@ -170,7 +170,7 @@ rconsumed = unsafePerformIO $ newIORef Nothing
 
 -- | execute a set of console commands separated by '/', ':' or space that are consumed by the console input primitives
 processLine line = liftIO $ do
-  tr ("LINE",line)
+  -- tr ("LINE",line)
   mbs <- readIORef rcb
   process 5 mbs line
   where
@@ -445,18 +445,18 @@ keepCollect n time mx = do
 
 execCommandLine :: IO ()
 execCommandLine = do
-  args <- getArgs
-  let mindex = findIndex (\o -> o == "-p" || o == "--path") args
-  when (isJust mindex) $ do
-    let i = fromJust mindex + 1
-    when (length args >= i) $ do
-      let path = args !! i
+      path <- thereIsArgPath
       --print $ drop (i-1) args
       --putStr "Executing: " >> print  path
       threadDelay 100000
       processLine path
 
--- u = undefined
+thereIsArgPath=  do
+  args <- getArgs
+  let mindex = findIndex (\o -> o == "-p" || o == "--path") args
+  if (isNothing mindex) then return [] else do
+    let i = fromJust mindex + 1
+    return $ if (length args >= i) then   args !! i else []
 
 -- | write a message and parse a complete line from the console. The parser is constructed with 'Transient.Parse' primitives
 inputParse :: (Typeable b) => TransIO b -> String -> TransIO b
