@@ -338,7 +338,7 @@ local mx = Cloud $
             -- tr ("PARSESTRING", "recover", parseString, recover log)
             let end = getEnd $ fulLog log
             -- tr ("END=", end, fulLog log)
-            -- tr ("setIndexdata", idConn conn, a, b, end)
+            tr ("setIndexData local", idConn conn, Closure  a b end,fulLog log)
             setIndexData (idConn conn) (Closure a b end)
 
             --modifyData' (\log -> log{fromCont=True})  $ error "no log"
@@ -468,7 +468,7 @@ atRemote proc = loggedc' $ do
   modify $ \s -> s {execMode = if execMode s == Parallel then Parallel else Serial} 
   r <- loggedc $ proc <** modify (\s -> s {execMode = Remote}) 
   teleport
-
+  tr ("AFTER atRemote", r)
   return r
 
 
@@ -636,7 +636,7 @@ teleport = do
     conn@Connection {idConn = idConn, connData = contype, synchronous = synchronous} <-
       getData
         `onNothing` error "teleport: No connection defined: use wormhole"
-    tr ("teleport REMOTE NODE", unsafePerformIO $ readIORef $ remoteNode conn, idConn  )
+    tr ("teleport REMOTE NODE", fmap  nodePort $ unsafePerformIO $ readIORef $ remoteNode conn, idConn  )
 
     Transient $ do
       --  labelState  "teleport"
@@ -658,10 +658,10 @@ teleport = do
             _ -> do
               -- tr ("teleport remote call", idConn)
               (Closure sess closRemote n) <- getIndexData idConn `onNothing` return (Closure 0 "0" [])
-              -- tr ("getIndexData", idConn, sess, closRemote, n)
+              tr ("getIndexData", idConn, sess, closRemote, n)
               let fragment = dropFromIndex n $ fulLog log
               let tosend = if null n then toPath $ LD fragment else toPathFragment fragment -- if a fragment, avoid the LX LX
-              -- tr ("MSEND END", getEnd $ fulLog log, fulLog log, "n=", n)
+              tr ("MSEND END", getEnd $ fulLog log, fulLog log, "n=", n,"tosend=",tosend)
               -- tr ("idconn", idConn, "REMOTE CLOSURE", closRemote, "FULLLOG", fulLog log, n, "CUT FULLOG", fragment, tosend)
 
               let closLocal = BC.pack $show $ hashClosure log
@@ -670,6 +670,7 @@ teleport = do
                 msend conn $ toLazyByteString $ serialize $ SMore $ ClosureData closRemote sess closLocal idSession tosend
                 tr ("RECEIVER NODE", unsafePerformIO $ readIORef $ remoteNode conn, idConn )
                 receive conn Nothing idSession
+                tr "AFTER RECEIVE"
                 
         else return $ Just ()
 
@@ -698,17 +699,19 @@ receive conn clos idSession = do
         Right (SDone, _, _, _)    -> empty
         Right (SError e, _, _, _) -> error $ show("receive:",e)
         Right (SLast log, s2, closr, conn') -> do
-          cdata <- liftIO $ readIORef $ connData conn' -- connection may have been changed
-          liftIO $ writeIORef (connData conn) cdata
-          -- setData conn'
+          -- cdata <- liftIO $ readIORef $ connData conn' -- connection may have been changed
+          -- liftIO $ writeIORef (connData conn) cdata
+          setData conn'
           -- tr ("RECEIVED <------- SLAST", log)
-          setLog (idConn conn) log s2 closr
+          setLog (idConn conn') log s2 closr
         Right (SMore log, s2, closr, conn') -> do
-          cdata <- liftIO $ readIORef $ connData conn'
-          liftIO $ writeIORef (connData conn) cdata
-          -- setData conn'
+          -- cdata <- liftIO $ readIORef $ connData conn'
+          -- liftIO $ writeIORef (connData conn) cdata
+          setData conn'
           tr ("receive REMOTE NODE", unsafePerformIO $ readIORef $ remoteNode conn,idConn conn)
-          setLog (idConn conn) log s2 closr
+          tr ("receive REMOTE NODE'", unsafePerformIO $ readIORef $ remoteNode conn',idConn conn')
+
+          setLog (idConn conn') log s2 closr
         Left except -> do
           throwt except
           empty
@@ -2141,7 +2144,7 @@ listenNew port conn' = do
   let conn = conn' {idConn = fromIntegral id1, closChildren = chs, remoteNode = noNode {-,localClosures=cls-}}
 
   input <- liftIO $ SBSL.getContents sock
-  tr "INPUT"
+  -- tr "INPUT"
 
   let nod = unsafePerformIO $ liftIO $ createNode "incoming connection" 0
    in modify $ \s ->
@@ -2206,7 +2209,7 @@ listenNew port conn' = do
 
 
       let uri' = BC.tail $ uriPath uri -- !> uriPath uri
-      tr ("uri'", uri')
+      -- tr ("uri'", uri')
 
 
       case BC.span (/= '/') uri' of
@@ -2232,12 +2235,12 @@ listenNew port conn' = do
                   setParseString $ BS.take len str
                   return $ log <> "/" <> lazyByteString toDecode -- [(Var $ IDynamic json)]    -- TODO hande this serialization
                 Just "application/x-www-form-urlencoded" -> do
-                  tr ("POST HEADERS=", BS.take len str)
+                  -- tr ("POST HEADERS=", BS.take len str)
 
                   setParseString $ BS.take len str
                   return $ log <> lazyByteString (BS.take len str) -- [(Var . IDynamic $ postParams)]  TODO: solve deserialization
                 Just x -> do
-                  tr ("POST HEADERS=", BS.take len str)
+                  -- tr ("POST HEADERS=", BS.take len str)
                   let str = BS.take len str
                   return $ log <> lazyByteString str --  ++ [Var $ IDynamic  str]
                 _ -> return $ log
@@ -2795,7 +2798,7 @@ setLog idConn log sessionId closr = do
   -}
   setIndexData idConn (Closure sessionId closr [])
   setParseString $ toLazyByteString log
-  -- tr ("setLog", idConn, Closure sessionId closr [], log)
+  tr ("setIndexData setLog", idConn, Closure sessionId closr [],log)
 
   modifyData' (\log -> log {recover = True}) (error "setLog no log")
 
