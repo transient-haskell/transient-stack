@@ -796,9 +796,9 @@ rawHTTP node restmsg =res
 
       c <- getState <|> error "rawHTTP: no connection?"
       let blocked = isBlocked c -- TODO: the same flag is used now for sending and receiving
-      tr "before blocked"
+      -- tr "before blocked"
       liftIO $ takeMVar blocked
-      tr "after blocked"
+      -- tr "after blocked"
       ctx <- liftIO $ readIORef $ istream c
       
       liftIO $ writeIORef (done ctx) False
@@ -807,7 +807,7 @@ rawHTTP node restmsg =res
       `while` \c -> do
         is <- isTLS c
         px <- getHTTProxyParams is
-        tr ("PX=", px)
+        -- tr ("PX=", px)
         (if isJust px then return True else do c <- anyChar; tPutStr $ BS.singleton c;  return True) <|> do
           TOD t _ <- liftIO $ getClockTime
           -- ("PUTMVAR",nodeHost node)
@@ -819,7 +819,7 @@ rawHTTP node restmsg =res
 
   modify $ \s -> s {execMode = Serial}
   let blocked = isBlocked c -- TODO: the same flag is used now for sending and receiving
-  tr "after send"
+  -- tr "after send"
 
   first@(vers, code, _) <-
     getFirstLineResp <|> do

@@ -185,7 +185,7 @@ requestInstance service num=  loggedc $ do
        tr ("ENCODE",encode ("",service, num ))
 
        AsJSON nodes <- callService  monitorService $ encode ("",service, num )
-       onAll $ ttr ("RESP",nodes)
+      --  onAll $ ttr ("RESP",nodes)
        local $ addNodes nodes                                                       -- !> ("ADDNODES",service)
        return nodes
        
