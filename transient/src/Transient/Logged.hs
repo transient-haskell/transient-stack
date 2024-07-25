@@ -43,7 +43,7 @@ Loggable(..), logged, received, param, getLog, exec,wait, emptyLog,
 --  suspend, checkpoint, rerun, restore,
 -- #endif
 
-Log(..), toPath,toPathFragment, toPathLon, getEnd, joinlog,substLast,substwait, dropFromIndex,recover, (<<),(<<-), LogData(..),LogDataElem(..),  toLazyByteString, byteString, lazyByteString, Raw(..)
+Log(..), toPath,toPathLon,toPathFragment, getEnd, joinlog, dropFromIndex,recover, (<<),(<<-), LogData(..),LogDataElem(..),  toLazyByteString, byteString, lazyByteString, Raw(..)
 ,hashExec) where
 
 import Data.Typeable
@@ -465,60 +465,11 @@ getEnd  (LD log)= let n= g [0] log in reverse n
   g  ns ((LX (LD rest) ):[]) = g (0:ns)  rest
   g  (n:ns) (_:rest) = g (n+1:ns) rest
 
-substLast (LD x) a= LD $ append' x where
-  append' []=[]
-  append' [LE x]= [LE a]
-  append' [LX(LD [])]= []
-  append' [LX(LD xs)]= [LX (LD $ append' xs)]
-  append' (x:xs)= x:append' xs
-
--- dropLast (LD x)= LD $ dropLast' x where
---   dropLast' []=[]
---   dropLast' [LE x]= []
---   dropLast' [LX(LD [])]= []
---   dropLast' [LX(LD xs)]= [LX(LD $ dropLast' xs)]
---   dropLast' (x:xs)= x:dropLast' xs
-
--- getLogFromIndex :: [Int] -> LogData -> Builder
--- getLogFromIndex [] (LD log)= toPathl log
-
--- getLogFromIndex [0] (LD log)= toPathl log
-
--- getLogFromIndex (i:is) (LD log)= 
---   let dropi= drop i  log
---   in case dropi of
---     [] -> mempty
---     _ ->
---       case head dropi of
---         LX log' -> (if null is then byteString "e/" else mempty)  <> getLogFromIndex is log'  <> 
---                                      case dropi of
---                                        [_] -> mempty
---                                        _   -> toPathl (tail $ tail dropi)
---         _ -> toPathl   dropi
-
-
-
-
--- dropFromIndex :: [Int] -> LogData -> [LogDataElem]
--- dropFromIndex [] (LD log)=  log
-
--- dropFromIndex [i] (LD log)=  drop i log
-
-
--- dropFromIndex (i:is) (LD log)= 
---   let dropi= drop i  log 
---   in case dropi of
---     []          -> mempty
---     (LX log':t) -> if null is then [LX $ LD $ dropFromIndex is log'] <> t
---                                    else dropFromIndex is log'  <> if null t then [] else tail t
---     (LE x:_)    -> if toLazyByteString x== "w/"  then dropi else                   
---                         error "dropFormIndex: level too deep" -- drop (length is) dropi  -- shoud be error
 
 
 dropFromIndex :: [Int] -> LogData -> [LogDataElem]
 dropFromIndex [] (LD log)=  log
 
--- dropFromIndex [i] (LD log)=  drop i log
 
 
 dropFromIndex (i:is) (LD log)=
@@ -573,22 +524,6 @@ toPathlon' (LE b:rest)= b <> toPathlon' rest
 
 toPathlon' (LX x:[])= byteString "e/" <> toPathLon  x
 toPathlon' (LX x: b)= byteString "e/" <> toPathLon  x  <> toPathlon' (tail b)
-
--- >>> toPathLon $ LD $ [e "\"HI\"/",LX (LD [])] <>  [e "\"HELLO\"/",e "()/",LX (LD [])] <>  [e "\"WORLD\"/",e "()/",LX (LD [])]
--- "\"HI\"/e/\"HELLO\"/()/e/\"WORLD\"/()/e/"
---
-
--- >>> toPathLon $ LD [e "\"proc\"/",e "HELLO/",e "()/",LX (LD [e "\"pre\"/"]),e "\"post\"/",e "WORLD/",e "()/"]
--- "\"proc\"/HELLO/()/e/\"pre\"/\"post\"/WORLD/()/"
---
-
-
--- toPathFragment :: [LogDataElem] -> Builder
--- toPathFragment []= mempty
--- toPathFragment (LX x:[]) = toPath x 
-
--- toPathFragment (LX x:rest) = toPath x <> toPathl (tail rest)
--- toPathFragment other= toPathl other
 
 
 
@@ -752,10 +687,10 @@ logged mx = do
   -- mode <- gets execMode
   -- ttr ("execMode",mode)
 
-  r <- res
+  r <- res <** outdent
 
   -- tr ("finish logged stmt of type",typeOf res)
-  outdent
+  
 
   return r
   where
@@ -839,7 +774,7 @@ logged mx = do
 
       r= (do
         -- tr "VALUE"
-        -- set serial for deserialization, restor execution mode
+        -- set serial for deserialization, restore execution mode
         x <- do mod <-gets execMode;modify $ \s -> s{execMode=Serial}; r <- deserialize; modify $ \s -> s{execMode= mod};return r  -- <|> errparse 
         tr ("value parsed",x)
         psr <- giveParseString
