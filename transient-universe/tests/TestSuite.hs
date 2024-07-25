@@ -23,6 +23,7 @@ import           Control.Exception
 import           Control.Concurrent.MVar
 
 import           Control.Concurrent(threadDelay )
+import           Data.Typeable
 
 
 #define SHOULDRUNIN(x)    (local $ do p <-getMyNode;assert ( p == (x)) (liftIO $ print p))
@@ -83,22 +84,45 @@ batchTest= do
           requestInstance service 3
 
 
+data HELLO= HELLO deriving (Read, Show, Typeable)
+instance Loggable HELLO
+data WORLD= WORLD deriving (Read, Show, Typeable)
+instance Loggable WORLD
 
+runAt' n doit= wormhole n $ do
+                    teleport
+                    r <- doit
+                    teleport
+                    return r
 testIt nodes = do
-          let node1:node2:node3:_ = nodes
+          let n3002:n3003:n3004:_ = nodes
           node0 <- local getMyNode
-          -- onAll $ liftIO $ print (node1)
-      --     onAll $ ttr ("node1",node1,"node2",node2)
+
 
           localIO $ putStrLn "------checking  empty in remote node when the remote call back to the caller #46 --------"
-          
-          -- runAt node1 $ runAt node2 $ runAt node1 $ return "hello"
-          -- empty
 
-          r <- runAt node1 $ do
-                   runAt node2 $  (runAt node1 $ SHOULDRUNIN(node1) >>  return "hello" ) 
+          -- node0 <- local getMyNode
+          -- r <- runAt' n3002 $ do
+          --       runAt' node0 $ do
+          --           localIO $ print HELLO 
+          --           return WORLD
+          -- localIO $ print r
+  
+
+          r <-  runAt' n3002 $ do
+                  SHOULDRUNIN(n3002) 
+                  r <- runAt' n3003 $ do
+                          SHOULDRUNIN(n3003)  
+                          runAt' n3002 $ do 
+                              SHOULDRUNIN(n3002) 
+                              return HELLO
+                          return  WORLD
+                  localIO $ tr ("RESULT=",r)
+                  local $ tr "AFTER RUNAT n3003" 
+                  return r
                    
-          localIO $ putStrLn r
+          localIO $ print r
+
 
           empty
           
@@ -107,28 +131,28 @@ testIt nodes = do
 
 
           -- r <-  (runAt node0 (SHOULDRUNIN( node0) >> return "hello" )) <|>
-          --        (runAt node1 (SHOULDRUNIN( node1) >> return "world" )) -- <|>
-          --       -- (runAt node2 (SHOULDRUNIN( node2) >> return "world2" ))
+          --        (runAt n3002 (SHOULDRUNIN( n3002) >> return "world" )) -- <|>
+          --       -- (runAt n3003 (SHOULDRUNIN( n3003) >> return "world2" ))
           -- -- 
           
           -- -- assert(sort r== ["hello", "world"]) $ localIO $  print r
 
-          -- -- r <- runAt node1 $ local $ return "world "
+          -- -- r <- runAt n3002 $ local $ return "world "
           -- localIO $ print r
           -- empty
 
           
           -- localIO $ putStrLn "--------------checking Applicative distributed--------"
           -- r <- loggedc $(runAt node0 (SHOULDRUNIN( node0) >> return "hello "))
-          --           <>  (runAt node1 (SHOULDRUNIN( node1) >> return "world " ))
-          --           -- <>  (runAt node2 (SHOULDRUNIN( node2) >> return "world2" ))
+          --           <>  (runAt n3002 (SHOULDRUNIN( n3002) >> return "world " ))
+          --           -- <>  (runAt n3003 (SHOULDRUNIN( n3003) >> return "world2" ))
        
           -- assert(r== "hello world ") $ localIO $ print r
 
           localIO $ putStrLn "----------------checking monadic, distributed-------------"
           r <- runAt node0 (SHOULDRUNIN(node0)
-                  >> runAt node1 (SHOULDRUNIN(node1) >>  (return "HELLO" )))
-                      --  >> runAt node2 (SHOULDRUNIN(node2) >>  (return "HELLO" ))))
+                  >> runAt n3002 (SHOULDRUNIN(n3002) >>  (return "HELLO" )))
+                      --  >> runAt n3003 (SHOULDRUNIN(n3003) >>  (return "HELLO" ))))
 
           assert(r== "HELLO") $ localIO $ print r
  
