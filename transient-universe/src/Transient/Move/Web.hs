@@ -87,7 +87,14 @@ instance Semigroup HTTPReq where
       (c <> c')
       (d <> d')
 
-
+-- Multiple input. It accept a console option as well as  a GET or POST web request at the point where it 
+-- is inserted
+--
+-- minput is fully composable
+--
+-- It is the main way for interacting with users and programs which do not share the same base code.
+-- Otherwise a transient program distributed among different nodes, including web nodes, would use `runAt` and other
+-- distributed primitives
 minput :: (Loggable a, ToHTTPReq a,ToJSON b,Typeable b) => String -> b -> Cloud a
 minput ident msg' = response
   where
@@ -292,7 +299,7 @@ public key inp= inp  <|> add key
 
 -- | set a pending endpoint for a key.if the endpoint is executed, it dissapears from the list for this key. 
 -- For example an userid or a wallet may be the key. An use case:  in te middle of a some smart contract or in 
--- general, in any workflo the user/wallet does not complete the transaction but the endpoint is marked as pending . 
+-- general, in any workflow the user/wallet does not complete the transaction but the endpoint is marked as pending . 
 -- When he return to the application, 'published key' has this endpoint and may be made visible in the first interaction of this
 -- new session. 
 -- pending key inp= do
