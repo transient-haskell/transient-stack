@@ -1,7 +1,7 @@
 {-# LANGUAGE ScopedTypeVariables,CPP #-}
 
 
-module Transient.Console(keep, keep',keepCollect,option, option1, input, input', inputf, inputParse, processLine,rprompt,rcb,thereIsArgPath) where
+module Transient.Console(keep, keep',keepCollect,option, option1, input, input', inputf, inputParse, processLine,delConsoleAction,rprompt,rcb,thereIsArgPath) where
 
 import Control.Applicative
 import Control.Concurrent
@@ -32,6 +32,13 @@ import Unsafe.Coerce
 -- matches the first parameter.  The value contained by the task is the matched
 -- value i.e. the first argument itself. The second parameter is a message for
 -- the user. The label is displayed in the console when the option match.
+--
+-- console operations works in multithreaded programs. If two threads invoque two different console operations, both threads stop and the
+-- corresponding menu options appears in the console. If two threads invoque the same menu option, both stop at the option
+-- and collapse. no two options with the same key are presented, but one.
+-- 
+-- As always, options can be composed with alternative operators and others
+
 option ::
   (Typeable b, Show b, Read b, Eq b) =>
   b ->
@@ -73,11 +80,19 @@ inputf remove ident message mv cond = do
   -- labelState ide
 
   str <- react (addConsoleAction ident message) (return ())
-  -- need to remove previous element in task list
+  cont <- getCont 
 
-  when remove $ liftIO $ delConsoleAction ident
+  when remove $ do 
+        liftIO $ delConsoleAction ident
+
+        liftIO $ atomicModifyIORef (labelth cont) $ \(_,label) -> ((Dead,label),())
+
+        return()
+
+
   c <- liftIO $ readIORef rconsumed
-  if isJust c
+  if isJust c -- lo ha consumido otro  
+              -- o la linea esta vacia
     then returnm mv
     else do
       let res = read2 str
@@ -87,7 +102,14 @@ inputf remove ident message mv cond = do
           if cond x
             then liftIO $ do
               writeIORef rconsumed $ Just $ dropspaces rest
-              when remove $ print x
+              when remove $ do 
+                   print x
+                   -- remove the react task this also remove the remaining option1 composed with this one
+                   -- Alabado sea Jesucristo
+                   par <- readIORef $ parent cont
+                   when (isJust par) $ do liftIO $ free (threadId cont) $ fromJust par; return()
+                   return()
+
               -- print x
               -- hFlush stdout
               return x
@@ -136,6 +158,7 @@ addConsoleAction name message cb = atomicModifyIORef rcb $ \cbs ->
   where
     fst (x, _, _) = x
 
+-- To deactivate a option*, input* with that key
 delConsoleAction :: String -> IO ()
 delConsoleAction name = atomicModifyIORef rcb $ \cbs -> (filter ((/=) name . fst) cbs, ())
   where
@@ -155,7 +178,8 @@ inputLoop =
   do
     prompt <- readIORef rprompt
     when (not $ null prompt) $ do putStr prompt; hFlush stdout
-    line <- getLine
+    line' <- getLine
+    let line =if null line' then " " else line'
     --threadDelay 1000000
 
     processLine line
@@ -164,8 +188,10 @@ inputLoop =
     `catch` \(SomeException _) -> inputLoop -- myThreadId >>= killThread
 
 {-# NOINLINE rconsumed #-}
+
 rconsumed :: IORef (Maybe String)
 rconsumed = unsafePerformIO $ newIORef Nothing
+
 
 
 -- | execute a set of console commands separated by '/', ':' or space that are consumed by the console input primitives
@@ -178,7 +204,7 @@ processLine line = liftIO $ do
     process _ _ [] = writeIORef rconsumed Nothing >> return ()
     process 0 [] line = do
       let (r, rest) = span (\x -> (not $ elem x "/: ")) line
-      hPutStr stderr r >> hPutStrLn stderr ": can't read, skip"
+      when ( not $ rest == " ") $ hPutStr stderr r >> hPutStrLn stderr ": can't read, skip"
       mbs <- readIORef rcb
       writeIORef rconsumed Nothing
       process 5 mbs $ dropspaces rest
@@ -200,63 +226,7 @@ processLine line = liftIO $ do
       where
         trd (_, _, x) = x
 
-{-
-processLine r = do
-    linepro <- readIORef lineprocessmode
-    if linepro then do
-            mapM' invokeParsers [r]
-       else do
-            let rs = breakSlash [] r
-            mapM' invokeParsers rs
 
-    where
-    invokeParsers x= do
-       mbs <- readIORef rcb
-       mapM_ (\cb -> cb x) $ map (\(_,_,p)-> p) mbs
-
-    mapM' _ []= return ()
-    mapM' f (xss@(x:xs)) =do
-        f x
-        r <- readIORef rconsumed
-
-        if  r
-          then do
-            writeIORef riterloop 0
-            writeIORef rconsumed False
-            mapM' f xs
-
-          else do
-            threadDelay 1000
-            n <- atomicModifyIORef riterloop $ \n -> (n+1,n)
-            if n==1
-              then do
-                when (not $ null x) $ hPutStr  stderr x >> hPutStrLn stderr ": can't read, skip"
-                writeIORef riterloop 0
-                writeIORef rconsumed False
-                mapM' f xs
-              else mapM' f xss
-
-    riterloop= unsafePerformIO $ newIORef 0
-
-breakSlash :: [String] -> String -> [String]
-breakSlash [] ""= [""]
-breakSlash s ""= s
-breakSlash res ('\"':s)=
-    let (r,rest) = span(/= '\"') s
-    in breakSlash (res++[r]) $ tail1 rest
-
-breakSlash res s=
-    let (r,rest) = span(\x -> (not $ elem x "/: ")) s
-    in breakSlash (res++[r]) $ tail1 rest
-
-tail1 []= []
-tail1 x= tail x
-
--- >>> breakSlash [] "test.hs/0/\"-prof -auto\""
--- ["test.hs","0","-prof -auto"]
---
-
--}
 
 -- | Wait for the execution of `exit` and return the result or the exhaustion of thread activity
 stay rexit =
@@ -338,9 +308,8 @@ keep mx = do
             do
               option "options" "show all options"
               mbs <- liftIO $ readIORef rcb
-              let filteryn x = x == "y" || x == "n" || x == "Y" || x == "N"
-              prefix <- input' (Just "") (not . filteryn) "prefix? "
-              tr ("prefix",prefix)
+              let filteryn x = x == "y" || x == "n" || x == "Y" || x  == "N"
+              prefix <- input' (Just "") (not . filteryn) "command prefix? (default none) "
               liftIO $ mapM_ (\c -> when (prefix `isPrefixOf` c) $ do putStr c; putStr "|") $ map (\(fst, _, _) -> fst) mbs
 
               d <- input' (Just "n") filteryn "\nDetails? N/y "
@@ -476,5 +445,4 @@ inputParse parse message = r
       liftIO $ do writeIORef rconsumed $ Just  $ BSL.unpack rest
       return r
 
-    -- t :: TransIO a -> a
-    -- t = u
+ 
