@@ -32,7 +32,7 @@ import Data.List((\\), isPrefixOf)
 import qualified Data.ByteString.Lazy.Char8 as BS
 import Control.Exception hiding(onException)
 import System.IO.Unsafe
-import Data.TCache(syncCache)
+import Data.TCache(syncCache,clearSyncCacheProc,defaultCheck)
 
 rretry= unsafePerformIO $ newIORef False
 
@@ -96,14 +96,30 @@ getNodeParams  =
           port <- input  (const True) "port to listen? "
           liftIO $ createNode host port
          <|> getCookie
-         <|> commit
+         <|> syncmodes
       
     where
-      
+    syncmodes= commit <|> confsave
+    confsave= do
+       option "savepol" "configure synchronization policy with permanent storage"
+       maxnum <- input' (Just 1000) (const True) "max number of cached objects? (default 1000)"
+       time <- input' (Just 10) (const True) "time between check for objects to be saved? (default 10 sec)"
+       liftIO $ clearSyncCacheProc time defaultCheck maxnum
+       liftIO $ delConsoleAction "savepol"
+       liftIO $ do
+          putStr "syncing each "
+          print time
+          putStr "seconds."
+          putStr " Max objects: "
+          print maxnum
+          putStrLn ""
+
+       empty
     commit= do
-      option "save" "commit the current execution state"
+      option "save" "commit now the current execution state to permanent storage"
       abduce
       liftIO $ syncCache
+      liftIO $ print "saved the execution state"
       empty
       
     getCookie= do
