@@ -337,8 +337,8 @@ local mx = Cloud $
             log <- getLog
             -- tr ("PARSESTRING", "recover", parseString, recover log)
             let end = getEnd $ fulLog log
-            -- tr ("END=", end, fulLog log)
-            tr ("setIndexData local", idConn conn, Closure  a b end,fulLog log)
+            tr ("END=", end, fulLog log)
+            tr ("setIndexData local", idConn conn, Closure  a b end, fulLog log)
             setIndexData (idConn conn) (Closure a b end)
 
             --modifyData' (\log -> log{fromCont=True})  $ error "no log"
@@ -461,11 +461,13 @@ callTo node remoteProc = wormhole' node $ atRemote remoteProc
 -- >           r <- foo              -- executed in node2
 -- >           s <- atRemote bar r   -- executed in the original node
 -- >           baz s                 -- in node2
--- >     bat t                      -- in the original node
+-- >     bat t                       -- in the original node
 atRemote :: Loggable a => Cloud a -> Cloud a
 atRemote proc = loggedc' $ do
   teleport
+  -- recover mode is executed in serial mode
   modify $ \s -> s {execMode = if execMode s == Parallel then Parallel else Serial} 
+  -- The remote computation should'nt execute alternative computations afterwards
   r <- loggedc $ proc <** modify (\s -> s {execMode = Remote}) 
   teleport
   tr ("AFTER atRemote", r)
@@ -661,7 +663,7 @@ teleport = do
               tr ("getIndexData", idConn, sess, closRemote, n)
               let fragment = dropFromIndex n $ fulLog log
               let tosend = if null n then toPath $ LD fragment else toPathFragment fragment -- if a fragment, avoid the LX LX
-              tr ("MSEND END", getEnd $ fulLog log, fulLog log, "n=", n,"tosend=",tosend)
+              -- tr ("MSEND END", getEnd $ fulLog log, fulLog log, "n=", n,"tosend=",tosend)
               -- tr ("idconn", idConn, "REMOTE CLOSURE", closRemote, "FULLLOG", fulLog log, n, "CUT FULLOG", fragment, tosend)
 
               let closLocal = BC.pack $show $ hashClosure log
@@ -750,7 +752,8 @@ firstCont = do
 --   (mclos,idSession) <- local $ return (mclos,idSession)
 --   onAll $ setContT mclos idSession
 
--- | store the program state. if the state is saved, and the program restarted `restoreClosure` with the same parameters will rerun the program with this state
+-- | store the program state. if the state is saved, and the program restarted `restoreClosure` with 
+-- the same parameters will rerun the program with this state
 setCont mclos idSession = do
   mprev <- getData
 
@@ -2670,32 +2673,7 @@ processMessage s1 closl s2 closr mlog deleteClosure = do
       conn <- getData `onNothing` error "Listen: myNode not set"
       tr ("processMessage REMOTE NODE", unsafePerformIO $ readIORef $ remoteNode conn, idConn conn )
 
-      -- if closl== 0 then do
-      -- --  if deleteClosure then return False else do
-      --     case mlog of
-      --       Left except -> do
-      --         setData emptyLog
-      --         tr "Exception received from network 1"
-      --         runTrans $ throwt except
-      --         empty
-      --       Right log -> do
-      --         tr ("CLOSURE 0",log)
-      --         -- full'= dropEnd mempty 0 0 $  toLazyByteString log
-      --         setData Log{recover= True,  fulLog= LD[LE log],  hashClosure= 0} --Log True [] []
-
-      --         -- setState $ Closure  closr
-      --         conn <- getData `onNothing` error "no connection"
-      --         let idata = getEnd $ LD[LE log]
-
-      --         setIndexData (idConn conn) (Closure s2 closr,idata :: [Int])
-
-      --         -- setRState $ DialogInWormholeInitiated True
-      --         return $ Just()
-      --  else do
-      --  mcont <- liftIO $ modifyMVar localClosures
-      --                  $ \map -> return (if  deleteClosure then
-      --                                    M.delete closl map
-      --                                  else map, M.lookup closl map)
+    
 
       let dbref = getDBRef $ kLocalClos s1 closl
       tr ("lookup", dbref)
@@ -2761,48 +2739,15 @@ processMessage s1 closl s2 closr mlog deleteClosure = do
 
           return Nothing
 
-{-
-setLog idConn log s2 closr= do
-  Log{fulLog=fulLog, hashClosure=hashClosure} <- getLog
-  tr("SETLOG",toPath fulLog,log)
-  let nlog=  fulLog <> LD[LE log ]
-  setData $ Log{fromCont=False,recover= True,  fulLog= nlog,  hashClosure= hashClosure}  -- TODO hashClosure must change?
-  tr("NLOG", nlog,toPath nlog)
-  let idata = getEnd nlog
 
-  setIndexData idConn (Closure s2 closr,   idata:: [Int])
-  tr ("SEtTING RREMOTE CLOSURE",idConn,closr,nlog,idata)
-  setParseString $ toLazyByteString log
--}
 
 setLog idConn log sessionId closr = do
-  -- Log{fulLog=fulLog, hashClosure=hashClosure} <- getLog
-  -- tr("SETLOG",toPath fulLog,log)
-  -- let nlog=  fulLog <> LD[LE log ]
-  -- setData $ Log{fromCont=False,recover= True,  fulLog= nlog,  hashClosure= hashClosure}  -- TODO hashClosure must change?
-  -- tr("NLOG", nlog,toPath nlog)
-  -- let idata = getEnd nlog
 
-  -- hay que posponer y pasar setIndexData a logged, solo hacer setParseString aqui
-  -- añadir a Log idConn y idata
-  -- la primera vez que parsestring= null poner el idata en el indexData
-  --         campo indexData :: [Int]
-  --      if parseString== mempty && pendingSetIndexData log then do
-  --        conn <- getData `onNothing` error "no connection"
-  --        hacer withIndexData (idConn conn) $ \(clos,_) ->(clos,indexData log))
-  -- hacer el getEnd continuamente.
-
-  {-
-     si exe, añadir un nivel. si no añadir uno al ultimo.
-     setIndexData idConn idsession closr Nothing
-  -}
   setIndexData idConn (Closure sessionId closr [])
   setParseString $ toLazyByteString log
   tr ("setIndexData setLog", idConn, Closure sessionId closr [],log)
 
   modifyData' (\log -> log {recover = True}) (error "setLog no log")
-
-  -- tr "SETLOG recover= True"
 
   return ()
 
@@ -3436,8 +3381,9 @@ getClosureLog idConn "0" = do
   tr ("getClosureLog", idConn, 0)
 
   clos <- liftIO $ atomically $ (readDBRef $ getDBRef $ kLocalClos 0 "0") `onNothing` error "closure 0 not found in DB"
-  let cont = fromMaybe (error "please run flowAssign before") $ localCont clos
+  let cont = fromMaybe (error "please run firstCont before") $ localCont clos
   return (localLog clos, mempty, cont)
+
 getClosureLog idConn clos = do
   tr ("getClosureLog", idConn, clos)
   closReg <- liftIO $ atomically $ (readDBRef $ getDBRef $ kLocalClos idConn clos) `onNothing` error ("closure not found in DB:" <> show (idConn,clos))
@@ -3446,9 +3392,9 @@ getClosureLog idConn clos = do
     Nothing -> do
       (baselog, prevLog, cont) <- getClosureLog (localCon prev) (localClos prev)
       let locallogclos = localLog closReg
-      tr ("PREVLOG", prevLog)
-      tr ("LOCALLOG", locallogclos)
-      tr ("SUM", prevLog `joinlog` locallogclos)
+      ttr ("PREVLOG", toPathLon prevLog)
+      ttr ("LOCALLOG", toPathLon locallogclos)
+      ttr ("SUM", toPathLon $ prevLog `joinlog` locallogclos)
       return (baselog, prevLog `joinlog` locallogclos, cont)
     Just cont -> do
       tr ("JUST",idConn,clos)
