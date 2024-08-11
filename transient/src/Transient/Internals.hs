@@ -47,6 +47,7 @@ import           Data.IORef
 import           Data.String
 import qualified Data.ByteString.Char8 as BS
 import qualified Data.ByteString.Lazy.Char8             as BSL
+import Data.ByteString.Builder
 import           Data.Typeable
 import           Control.Monad.Fail
 import           System.Directory
@@ -1748,14 +1749,17 @@ killChildren childs  = do
 -- whenever an event occurs. The effect is called "de-inversion of control"
 --
 -- The first parameter is a callback setter. The second parameter is a value to be
--- returned to the callback; if the callback expects no return value it
--- can just be @return ()@. The callback setter expects a function taking the
+-- returned to the callback; If the callback expects no return value it
+-- can just  @return ()@. The callback setter expects a function taking the
 -- @eventdata@ as an argument and returning a value; this
 -- function is the continuation, which is supplied by 'react'.
 --
 -- Callbacks from foreign code can be wrapped into such a handler and hooked
 -- into the transient monad using 'react'. Every time the callback is called it
--- continues the execution on the current transient computation.
+-- continues the execution inside of the current transient computation.
+--
+-- This allows the composition of code activated by callbacks with any other transient code
+-- 
 --
 -- >     
 -- >  do
@@ -1769,7 +1773,8 @@ react
 react setHandler iob= Transient $ do
         -- st <- cloneInChild "react"
         -- delete  all  current finish handlers since they should not trigger
-        setData $ Backtrack (Nothing `asTypeOf` Just (Finish "")) []
+        -- yes option1 uses react and should disable react and trigger a finish
+        -- setData $ Backtrack (Nothing `asTypeOf` Just (Finish "")) []
 
         modify $ \s -> s{execMode=let rs= execMode s in if rs /= Remote then Parallel else rs}
         cont <- get
@@ -1828,7 +1833,10 @@ exit x= do
 
 -- | Collect the results of the first @n@ tasks (first parameter) or in a time t (second)
 -- and terminate all the non-free threads remaining before
--- returning the results.  n= 0: collect all the results. t==0: no time limit
+-- returning the results.  n= 0: collect all the results until no thread is active. t==0: no time limit.
+-- Concerning thread activity, all react, option primitives which listen for events will maintain threads active
+-- use option1 wich finalizes the listener thread to allow collect 0 to finish.
+
 collect' :: Int -> Int -> TransIO a -> TransIO [a]
 collect' number time proc' = hookedThreads $ do
     res <- liftIO $ newIORef []
@@ -1925,19 +1933,42 @@ backCut reason= Transient $ do
 undoCut ::  TransientIO ()
 undoCut = backCut ()
 
+data Log  = Log{ recover :: Bool , fulLog :: LogData,  hashClosure :: Int} deriving (Show)
+
+data LogDataElem= LE  Builder  | LX LogData deriving (Read,Show, Typeable)
+
+-- contains a log tree which includes intermediate results caputured with `logged` `local` and `loggedc`.
+-- these primitives can invoque code that call recursively further `logged` etc primitives at arbitrary deeep
+-- Each LogDataElem may be a LE, single result serialized in a builder or a LX block that means a `logged` statement
+-- that is being executed and has not yet finised whith the corresponding internal `logged`results. 
+-- At the end of a LX block, if any, there is even the final result of finalized `logged`statement that initiated
+-- the LX block. Furter elements after the LX block are further serialized results.
+newtype LogData=  LD [LogDataElem]  deriving (Read,Show, Typeable)
+
+instance Read Builder where
+   readsPrec n str= -- [(lazyByteString $ read str,"")]
+     let [(x,r)] = readsPrec n str
+     in [(byteString x,r)]
+
 -- | Run the action in the first parameter and register the second parameter as
 -- the action to be performed in case of backtracking. When 'back' initiates the backtrack, this second parameter is called
 -- An `onBack` action can use `forward` to stop the backtracking process and resume to execute forward. 
 {-# NOINLINE onBack #-}
 onBack :: (Typeable b, Show b) => TransientIO a -> ( b -> TransientIO a) -> TransientIO a
-onBack ac bac = registerBack (typeof bac) $ Transient $ do
+onBack ac bac = do
+  mlog :: Maybe Log <- getData
+
+  registerBack (typeof bac) $ Transient $ do
     --  tr "onBack"
      Backtrack mreason stack <- getData `onNothing` (return $ backStateOf (typeof bac))
     --  tr ("onBackstack",mreason, length stack)
      runTrans $ case mreason of
                   Nothing     -> do -- tr "ONBACK NOTHING" 
                                     ac                    
-                  Just reason -> do -- tr ("ONBACK JUST",reason) ; 
+                  Just reason -> do -- tr ("ONBACK JUST",reason) ;
+                                    -- log must be restored to play well with backtracking
+                                    -- Todo lo puedo en Cristo que me fortalece
+                                    when(isJust mlog) $ setData $ fromJust mlog
                                     bac reason              
      where
      typeof :: (b -> TransIO a) -> b
@@ -2134,9 +2165,12 @@ onFinishCont cont proc mx= do
 
 -- | Abort finish. Stop executing more finish actions and resume normal
 -- execution.  Used inside 'onFinish' actions.
--- NOT RECOMMENDED FINISH ACTIONS SHOULD NOT BE ABORTED. USE EXCEPTIONS INSTEAD
+-- NOT RECOMMENDED. FINISH ACTIONS SHOULD NOT BE ABORTED. USE EXCEPTIONS INSTEAD
 noFinish= forward $ Finish ""
 
+-- | initiate the Finish backtracking. Normally you do not need to use this. It is initiated automatically by each thread at the end
+finish :: String -> TransIO ()
+finish reason= back reason
 
 -- | trigger the execution of the argument when all the threads under the statement are stopped and waiting for events.
 -- usage example https://gitter.im/Transient-Transient-Universe-HPlay/Lobby?at=61be6ec15a172871a911dd61
@@ -2180,9 +2214,7 @@ noactiveth st=
 {-# NOINLINE execWhenEvaluate #-}
 execWhenEvaluate= unsafePerformIO
 
--- | initiate the Finish backtracking. Normally you do not need to use this. It is initiated automatically by each thread at the end
-finish :: String -> TransIO ()
-finish reason= back reason
+
 
 hasNoChildThreads :: EventF -> TransIO Bool
 hasNoChildThreads st= do  -- necesario saber si no tiene threads Y NO TIENE LOOP PENDIENTE
@@ -2195,7 +2227,7 @@ hasNoChildThreads st= do  -- necesario saber si no tiene threads Y NO TIENE LOOP
 
 
 -- | open a resouce `a` and close it when it is no longer used.
--- See https://gitter.im/Transient-Transient-Universe-HPlay/Lobby?at=6011851a5500a97f82caed53 
+-- See https://matrix.to/#/!kThWcanpHQZJuFHvcB:gitter.im/$ZQK1tPKUWfRbEUbPufz3IHY9U2e5PglpzBYQpCS16Pg?via=gitter.im&via=matrix.org&via=matrix.freyachat.eu 
 openClose :: (TransIO a) -> (a -> TransIO ()) -> TransIO a
 openClose open close= tmask $ do
                 res <- open
@@ -2222,8 +2254,8 @@ checkFinalize v=
 onException :: Exception e => (e -> TransIO ()) -> TransIO ()
 onException exc= return () `onException'` exc
 
--- | set an exception point. Thi is a point in the backtracking in which exception handlers can be inserted with `onExceptionPoint`
--- it is an specialization of `backPoint` for exceptions.
+-- | set an exception point. Thi is a point in the backtracking in which exception handlers can be inserted with `onExceptionPoint`.
+-- It is an specialization of `backPoint` for exceptions.
 --
 -- When an exception backtracking reach the backPoint it executes all the handlers registered for it.
 --
@@ -2258,10 +2290,10 @@ tmask proc= Transient $ do
   put st'
   return mx
 
--- | Binary version of `onException`.  Used mainly for expressing how a resource is treated when an exception happens in the first argument 
+-- | Binary version of `onException`.  Used mainly for expressing where a resource is treated when an exception happens in the first argument 
 -- OR in the rest of the code below. This last should be remarked. It is the semantic of `onBack` but restricted to exceptions.
 --
--- If you want to manage exceptions only in the first argument and have the semantics of `catch` in transient, use `catcht`
+-- If you want to manage exceptions occuring only in the first argument and have the semantics of `catch` in transient, use `catcht`
 onException' :: Exception e => TransIO a -> (e -> TransIO a) -> TransIO a
 onException' mx f= onAnyException mx $ \e -> do
             -- tr  "EXCEPTION HANDLER EXEC" 
@@ -2307,7 +2339,7 @@ exceptBack  =  exceptBackg
 
 exceptBackg :: (Typeable e, Show e) => EventF -> e -> IO (Maybe a, EventF)
 exceptBackg st e= do
-                      -- tr ("back",e)
+                      ttr ("back",e)
                       runStateT ( runTrans $  back e ) st                 -- !> "EXCEPTBACK"
 
 -- re execute the first argument as long as the exception is produced within the argument. 
