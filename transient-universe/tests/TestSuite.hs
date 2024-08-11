@@ -89,10 +89,12 @@ instance Loggable HELLO
 data WORLD= WORLD deriving (Read, Show, Typeable)
 instance Loggable WORLD
 
-runAt' n doit= wormhole n $ do
+runAt' n doit= wormhole' n $ do
                     teleport
+                    tr "after teleport2"
                     r <- doit
                     teleport
+                    tr "after teleport2"
                     return r
 testIt nodes = do
           let n3002:n3003:n3004:_ = nodes
@@ -109,14 +111,15 @@ testIt nodes = do
           -- localIO $ print r
   
 
-          r <-  runAt' n3002 $ do
+          r <-  runAt n3002 $ do
                   SHOULDRUNIN(n3002) 
-                  r <- runAt' n3003 $ do
+                  r <- runAt n3003 $ do
                           SHOULDRUNIN(n3003)  
-                          runAt' n3002 $ do 
+                          runAt n3002 $ do 
                               SHOULDRUNIN(n3002) 
                               return HELLO
                           return  WORLD
+                          
                   localIO $ tr ("RESULT=",r)
                   local $ tr "AFTER RUNAT n3003" 
                   return r
