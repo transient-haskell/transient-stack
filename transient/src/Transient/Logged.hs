@@ -8,42 +8,26 @@
 -- Maintainer  :  agocorona@gmail.com
 -- Stability   :
 -- Portability :
+-- 
+--
+-- Author: Alabado sea Dios que inspira todo lo bueno que hago. Porque Él es el que obra en mi
 --
 -- | The 'logged' primitive is used to save the results of the subcomputations
--- of a transient computation (including all its threads) in a log buffer. At
--- any point, a 'suspend' or 'checkpoint' can be used to save the accumulated
--- log on a persistent storage. A 'restore' reads the saved logs and resumes
--- the computation from the saved checkpoint. On resumption, the saved results
--- are used for the computations which have already been performed. The log
+-- of a transient computation (including all its threads) in a  buffer.  The log
 -- contains purely application level state, and is therefore independent of the
 -- underlying machine architecture. The saved logs can be sent across the wire
 -- to another machine and the computation can then be resumed on that machine.
 -- We can also save the log to gather diagnostic information.
 --
--- The following example illustrates the APIs. In its first run 'suspend' saves
--- the state in a directory named @logs@ and exits, in the second run it
--- resumes from that point and then stops at the 'checkpoint', in the third run
--- it resumes from the checkpoint and then finishes.
---
--- @
--- main= keep $ restore  $ do
---      r <- logged $ choose [1..10 :: Int]
---      logged $ liftIO $ print (\"A",r)
---      suspend ()
---      logged $ liftIO $ print (\"B",r)
---      checkpoint
---      liftIO $ print (\"C",r)
--- @
+
 -----------------------------------------------------------------------------
 {-# LANGUAGE  CPP, ExistentialQuantification, FlexibleInstances, ScopedTypeVariables, UndecidableInstances #-}
 module Transient.Logged(
 Loggable(..), logged, received, param, getLog, exec,wait, emptyLog,
 
--- #ifndef ghcjs_HOST_OS
---  suspend, checkpoint, rerun, restore,
--- #endif
 
-Log(..), toPath,toPathLon,toPathFragment, getEnd, joinlog, dropFromIndex,recover, (<<),(<<-), LogData(..),LogDataElem(..),  toLazyByteString, byteString, lazyByteString, Raw(..)
+
+Log(..), toPath,toPathLon,toPathFragment, getEnd, joinlog, dropFromIndex,recover, (<<), LogData(..),LogDataElem(..),  toLazyByteString, byteString, lazyByteString, Raw(..)
 ,hashExec) where
 
 import Data.Typeable
@@ -52,7 +36,6 @@ import Unsafe.Coerce
 import Transient.Internals
 
 import Transient.Indeterminism(choose)
---import Transient.Internals -- (onNothing,reads1,IDynamic(..),Log(..),LE(..),execMode(..),StateIO)
 import Transient.Parse
 import Control.Applicative
 import Control.Monad.State
@@ -64,38 +47,12 @@ import qualified Data.ByteString.Char8 as BSS
 import qualified Data.Map as M
 import Data.IORef
 import System.IO.Unsafe
--- #ifndef ghcjs_HOST_OS
+import GHC.Stack
+
 import Data.ByteString.Builder
--- import System.Random
-import Debug.Trace
--- #else
---import Data.JSString hiding (empty)
--- #endif
 
 
 
--- #ifndef ghcjs_HOST_OS
--- pack= BSS.pack
-
--- #else
-{-
-newtype Builder= Builder(JSString -> JSString)
-instance Monoid Builder where
-   mappend (Builder fx) (Builder fy)= Builder $ \next -> fx (fy next)
-   mempty= Builder id
-
-instance Semigroup Builder where
-    (<>)= mappend
-
-byteString :: JSString -> Builder
-byteString ss= Builder $ \s -> ss <> s
-lazyByteString = byteString
-
-
-toLazyByteString :: Builder -> JSString
-toLazyByteString (Builder b)=  b  mempty
--}
--- #endif
 u= unsafePerformIO
 exec=  LD [LX mempty] --byteString "e/"
 wait=   byteString "w/"
@@ -149,10 +106,7 @@ class (Show a, Read a,Typeable a) => Loggable a where
 -- instance Show Builder where
 --  show b= show $ toLazyByteString b
 
-instance Read Builder where
-   readsPrec n str= -- [(lazyByteString $ read str,"")]
-     let [(x,r)] = readsPrec n str
-     in [(byteString x,r)]
+
 
 
 instance Loggable a => Loggable (StreamData a) where
@@ -304,11 +258,7 @@ instance Loggable Raw where
 -- data Recover= False | True {-  Restore -} deriving (Show,Eq)
 -- recover log= let r =recover log in r== True    --   ||  r== Restore
 
-data Log  = Log{ recover :: Bool , fulLog :: LogData,  hashClosure :: Int} deriving (Show)
 
-data LogDataElem= LE  Builder  | LX LogData deriving (Read,Show, Typeable)
-
-newtype LogData=  LD [LogDataElem]  deriving (Read,Show, Typeable)
 
 instance Loggable LogData where
   serialize = toPath
@@ -338,7 +288,7 @@ instance Monoid LogData where
       (prev,[LX  log'']) ->  LD $ prev ++ [LX (log'' <> LD log' )]
 
 
--- continue a chain at the deep of the second argument
+-- continue a chain at the innermost open branch of the first argument
 LD [] `joinlog` LD log= LD log
 LD log `joinlog` LD log' =
     case (splitAt (length log -1) log) of
@@ -356,15 +306,15 @@ LD log `joinlog` LD log' =
 
 
 -- >>> getEnd $ LD [LX (LD [LX (LD [])])]
--- [0,0]
---
+
 
 -- >>> getEnd $  LD  [LE $ e "hello/",LX [LE $ e "world/"] ]
--- [1,1]
+
+
 --
 
 -- >>> getEnd $   [LE $pack "hello/",LX [LE $ pack "world/",LE $ pack"rest/",LE $ pack"rest2/"] ]
--- [3,1]
+
 --
 
 
@@ -434,8 +384,7 @@ e x= LE $ pack x
 -- "()/e/"
 --
 
--- >>> LD [e "\"p1\"/",e "HELLO/",e "()/",e "WORLD/",e "()/",LX (LD [e "PRE/",LX (LD [e "PRE1/",e "w/"])])] `substLast`  (pack "POST1")
--- LD [LE "\"p1\"/",LE "HELLO/",LE "()/",LE "WORLD/",LE "()/",LX (LD [LE "PRE/",LX (LD [LE "PRE1/",LE "POST1"])])]
+
 --
 
 
@@ -496,7 +445,6 @@ dropFromIndex (i:is) (LD log)=
 debe ser [[LE "\"HO\"/"],LE "HELLO/",LE "()/"]
 necesario algo para preservar la estructura.
 
-el path LogData está estructurado de manera que siempre a continuacion de un LX figura su resultado final 
 -}
 
 
@@ -547,7 +495,9 @@ pack x=  byteString (BSS.pack x)
      _       ->   LD $ log'++[LX $ (LD log) <<- build]
 
 
-substwait ld build = fromJust $ substwait1 ld build
+substwait (ld@(LD ldelm)) build = case  substwait1 ld build of -- fromJust $ substwait1 ld build
+  Just r -> r
+  Nothing ->  LD $ ldelm ++ [LE build]
   where
   substwait1 (LD[]) build =  Just $ LD [LE build]
   substwait1 (LD l) build=  case splitAt (length l -1) l of
@@ -677,17 +627,20 @@ hashExec= 10000000
 hashWait= 100000
 hashDone= 1000
 
+
+
+
 logged :: Loggable a => TransIO a -> TransIO a
 logged mx = do
 
-  indent
+  -- indent
   debug <- getParseBuffer
   -- tr ("executing logged stmt of type",typeOf res,"with log",debug)
 
   -- mode <- gets execMode
   -- ttr ("execMode",mode)
 
-  r <- res <** outdent
+  r <- res -- <** outdent
 
   -- tr ("finish logged stmt of type",typeOf res)
   
@@ -781,7 +734,9 @@ logged mx = do
         when (not $ BS.null psr) $ (tChar '/' >> return ()) --  <|> errparse
         return x) <|> errparse
       errparse :: TransIO a
-      errparse = do psr <- getParseBuffer; throwt $ ErrorCall ("error parsing <" <> BS.unpack psr <> ">  to " <> show (typeOf $ typeOfr r))
+      errparse = do psr <- getParseBuffer;
+                    stack <- liftIO currentCallStack
+                    errorWithStackTrace  ("error parsing <" <> BS.unpack psr <> ">  to " <> show (typeOf $ typeOfr r) <> "\n" <> show stack)
 
 
 
