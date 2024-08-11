@@ -24,6 +24,7 @@ import           Transient.Move.Internals
 import           Transient.Move.Utils
 import           Transient.Move.Web  
 import           Transient.Move.IPFS
+import           Transient.Move.Job
 import           Control.Applicative
 import           System.Info
 import           Control.Concurrent
@@ -190,32 +191,7 @@ closCheckpoint = noTrans $ do
       tiene que ser una variable de estado PrevClos idConn Clos
                
 -}
--- getClosureLog idConn clos= do
---     liftIO $ print ("getClosureLog",clos)
---     -- (prevClos :: Int,ns :: [Int], log) <- return . read =<< liftIO (readFile $ logs <> show clos)
---     -- asume se ha creado el registro de la sesion actual y closcheckpoint ha rellenado la continuacion
---     clos <- liftIO $ atomically $ (readDBRef $ getDBRef $ kLocalClos idConn clos) `onNothing` error "closure not found in DB"
---     -- let nlog= LogData[ LE $ lazyByteString localLog] 
 
---     -- mcont <- getIndexData clos -- quien puebla esa estructura? closCheckpoint
-    
---     prev <- liftIO $ atomically $ readDBRef (prevClos clos) `onNothing` error "prevClos not found"
---     case localCont clos of
---       Nothing -> do
---         (prevLog,cont) <- getClosureLog (localCon prev)(localClos prev)
-
---         return (prevLog <> localLog clos,cont)
---       Just cont -> return (localLog clos,cont)
-        
-
--- restoreClosure _ 0= return()
--- restoreClosure idConn (clos :: Int)= Transient $ do
---   (log,cont) <- getClosureLog idConn clos
---   modifyData' (\prevlog->prevlog{fulLog=fulLog prevlog <> log})
---               (emptyLog{fulLog=log})
---   setParseString  $ toLazyByteString $ toPath log
-  
---   runContinuation cont ()
 
 {- hay que tener los conexiones en una variable global para reasignar estados
  no hace falta si solo es el estado de la LastClosure
@@ -311,31 +287,8 @@ guardNetworkRequest conn= do
 --   closCheckpoint
 --   logged $ liftIO $ print $ x <> y
 
-haply x= x <|> return()
 
-{-
-flowAssign=  do
 
-      cont <- get
-      log <- getLog
-      let rs= getDBRef "0-0"-- TC.key this
-
-      tr ("assign",log)
-      when (not $ recover log) $ do
-
-        let this=LocalClosure{
-                localCon= 0,
-                prevClos= rs, 
-                localLog=   fulLog log, -- codificar en flow.hs
-                localClos= 0, -- hashClosure log,
-                localEnd=getEnd $ fulLog log, -- codificar en flow.hs
-                localEvar= Nothing,localMvar=error "no mvar",localCont= Just cont}
-
-        tr ("end", localEnd this, fulLog log)
-
-        liftIO $ atomically $ writeDBRef rs this
-      setState $ PrevClos rs
--}
 {-
 processMessage para que reciba de un proceso IO
 actualmente recibe un Log de builder
@@ -479,11 +432,52 @@ mainsimple= keep $  initNode $ Cloud $ do
 
     showLog
 
+main= keep $ initNode $  do
+  r <-  local $ return "HELLO" `onBack` \(SomeException e) ->do
+                option "c" "continue" >> continue  >> return "HELLO"
+  local showLog
+  onAll $ throwt $ ErrorCall "err"
+  return()
+
+mainjob2= keep $ initNode $  do
+  runJobs
+  local $ option "go" "go"
+  job $  localIO $ print "hello"
+  job $ local $ option "c" "continue"  <|>( option "s" "stop" >> empty)
+  job $  localIO $ print "world"
+  
+maincollect0= keep $ do 
+     option "go" "go"
+     r <-    do
+                topState >>= showThreads
+                r <- collect 0 $ option1 "x" "x" <|> option1 "y" "y" <|> option1 "z" "z"
+                topState >>= showThreads
+                return r
+
+     liftIO $ print ("r=",r)
+
+
+
+mainbug= keep $ initNode $ inputNodes <|> go <|> onAll restoren
+  where
+  go=  do
+    local $ option "go" "go"
+    local $ setcn  "one"
+
+    r <-   local $ return HELLO
+
+    local $ setcn "two"
+    w <- local $ return WORLD
+    local $ setcn "three"
+    w' <- local $ return THAT
+    local $ setcn "four"
+    w'' <- local $ return THAT1
+    localIO $ print (r,w,w', w'')
  
 
-main = keep $ initNode $ inputNodes <|> do
+maincomplex = keep $ initNode $ inputNodes <|> do
   -- firstCont
-  r <- proc2 <|> onAll restore1 <|> onAll save
+  r <- proc2 <|> onAll restore1 -- <|> onAll save
   localIO $ print ("res",r)
 
   where
@@ -534,12 +528,14 @@ save= do
     liftIO  syncCache
     empty
 
-restore1= do
+restoren= do
         option "res" "restore1" 
-        s    <- input (const True) "sesion  >"
         clos <- input (const True) "closure >"
 
-        noTrans $ restoreClosure s clos 
+        noTrans $ restoreClosure 0 clos 
+
+restore1= do
+        restoren
         empty
       
 lprint :: Show a => a -> TransIO ()
@@ -549,9 +545,18 @@ setc =  do
     (lc,_) <-  setCont Nothing 0
     liftIO $ putStr  "0 ">> print (localClos lc)
 
+setcn n=  do
+    (lc,_) <- setCont (Just $ BC.pack n)  0
+    liftIO $ putStr  "0 ">> print (localClos lc)
+
+setcc= do
+  setc
+  option1 "c" "continue" <|> (option "n" "abort" >> empty)
+
 showLog=do
   log <- getLog
-  tr $ ("SHOWLOG",fulLog log," ",toPath $ fulLog log,"  ",toPathLon $ fulLog log)
+  -- ttr $ ("SHOWLOG",fulLog log," ",toPath $ fulLog log,"  ",toPathLon $ fulLog log)
+  ttr  ("SHOWLOG",toPath $ fulLog log)
 
 
 {- 
@@ -1007,77 +1012,6 @@ syncFlush= do
 
 
 
-    
--- setCont idSession log = do    
---     cont <- get
-   
---     ev <- newEVar
---     let closLocal = hashClosure log
---     let dblocalclos = getDBRef $ kLocalClos idSession closLocal  :: DBRef LocalClosure
---     mr <- liftIO $ atomically $ readDBRef dblocalclos
---     pair <- case mr of
-
---         Just (locClos@LocalClosure{..}) -> do
-
---             return locClos{localEvar=Just ev,localCont=Just cont} -- (localClos,localMVar,ev,cont)
-
---         _ ->   do 
---                 mv <- liftIO $ newEmptyMVar
---                 PrevClos prev <- getData `onNothing` error "no previous session"
---                 tr ("previous data",prev)
---                 prevClosData <- liftIO $ atomically $ readDBRef  prev `onNothing` error "no previous session data"
---                 log <- getLog
---                 let ns = localEnd prevClosData
---                 tr ("FULLOG",fulLog log,toPath $ fulLog log)
-                
---                 let lc= LocalClosure{
---                         localCon= idSession,
---                         prevClos= prev, 
---                         localLog= LogData[LE $ getLogFromIndex ns  $ fulLog log], -- codificar en flow.hs
---                         localClos=closLocal,
---                         localEnd=getEnd $ fulLog log, -- codificar en flow.hs
---                         localEvar= Just ev,localMvar=mv,localCont= Just cont} -- (closRemote',mv,ev,cont)
---                 setState $ PrevClos dblocalclos
---                 return lc
-
-
---     -- liftIO $ modifyMVar_ localClosures $ \map ->  return $ M.insert closLocal pair map
---     liftIO $ atomically $ writeDBRef dblocalclos pair
---     tr ("writing",dblocalclos)
---     return pair
-
--- receive  conn   closLocal = do
---     log <- getLog
---     let idSession= if (recover log) then idConn conn -1 else idConn conn
-
---     lc <- setCont idSession log 
---     when (synchronous conn) $ liftIO $ takeMVar $ localMvar lc
-
---     mr@(Right(a,b,c,_)) <-  readEVar (fromJust $ localEvar lc)
-    
---     tr ("RECEIVED",(a,b,c))
-    
---     case mr  of
---       Right(SDone,_,_,_)    -> empty 
---       Right(SError _,_,_,_) -> error "teleport: SERROR"
---       Right(SLast log,s2,closr,conn') -> do
---         cdata <- liftIO $ readIORef $ connData conn'
---         liftIO $ writeIORef (connData conn) cdata
---         tr ("RECEIVEDDDDDDDDDDDDDDDDDDDDDDD SLAST",log)
-
---         setLog (idConn conn) log s2 closr
-
---       Right(SMore log,s2, closr,conn') -> do
---         cdata <- liftIO $ readIORef $ connData conn'
---         liftIO $ writeIORef (connData conn) cdata
---         tr ("RECEIVEDDDDDDDDDDDDDDDDDDDDDDD",log,closr)
---         setLog (idConn conn) log s2 closr
-
-
---       Left except -> do
---         throwt except
---         empty
-
 
   
 {-
@@ -1088,70 +1022,11 @@ hayq que hacer restoreClosure inmediatamente.
 jobs debe almacenar la lista de sesiones y closures que hay que ejecutar de inmediato
 
 -}
-data Jobs= Jobs{pending :: [(Int,BC.ByteString)]}  deriving (Read,Show)
-
-instance TC.Indexable Jobs where key _= "__Jobs"
-
--- newtype CloudCounter= CCount Int
--- genCCounter= modifyData' (\(CCount n) -> CCount $ n+1) (CCount 0) :: TransIO CloudCounter
-
-{-
-se crean automaticamente
-como se eleminan esos jobs?
-usando onFinish?
 
 
-Como se notifica al usuario?
- ev <- newEVar
- job ev x <|> jobstatus ev
- 
- jobstatus= do
-    st <- readEVar status
-    minput stream st -> strean json lines until end.
 
-como se acaba? jobstatus pinta el link para continuar
 
--}
--- | if the state of the program is commited (saved) the created thread is restored
--- when the program is restarted by `initNode` as a job.
---
--- if the thread and all his children becomes inactive, the job is removed and the list of result are returned
-job mx = do
-  this@(idSession,_) <- local $ do
-    idSession <- fromIntegral <$> genPersistId
-    log <- getLog <|> error "job: no log"
-    let this = (idSession,BC.pack $ show $ hashClosure log + 10000000) -- es la siguiente closure
 
-    Jobs  pending <- liftIO $ atomically $ readDBRef rjobs `onNothing` return (Jobs[])
-    liftIO $ print ("creating job",this)
-    liftIO $ atomically $ writeDBRef rjobs $ Jobs $ this:pending
-    return this
-
-  local $ do
-      (clos,_)<- setCont Nothing idSession 
-      liftIO $ print $ localClos clos
-
-  rs <- local $ collect 0 $ runCloud mx
-  
-  local $ remove this -- snd $ head rs
-  return $  rs
-
-  
-  where
-
-  remove conclos= liftIO $ atomically $ do
-        unsafeIOToSTM $ print "REMOVE"
-        Jobs  pending <- readDBRef rjobs `onNothing` return (Jobs [])
-        writeDBRef rjobs $ Jobs  $ pending \\ [conclos]
-
-rjobs = getDBRef "__Jobs"
-
-runJobs= local $ fork $ do
-    Jobs  pending <-liftIO $ atomically $ readDBRef rjobs `onNothing` return (Jobs  [])
-    th <- liftIO myThreadId
-    liftIO $ print ("runJobs",pending,th )
-    (id,clos) <- choose pending
-    noTrans $  restoreClosure id clos
 
 data Dat= Dat{field1:: Int,field2 :: Int} deriving (Typeable, Generic,Default)
 
