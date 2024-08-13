@@ -68,6 +68,7 @@ optionf remove ret message = do
   -- abduce
   return ret
 
+newInput= unsafePerformIO $ newIORef False
 -- | General asynchronous console input.
 --
 -- inputf <remove> <input listener after sucessful or not> <listener identifier> <prompt>
@@ -78,7 +79,7 @@ inputf remove ident message mv cond = do
   -- let ide = BS.pack ident
   -- removeState ide
   -- labelState ide
-
+  liftIO $ writeIORef newInput True
   str <- react (addConsoleAction ident message) (return ())
   cont <- getCont 
 
@@ -198,23 +199,26 @@ rconsumed = unsafePerformIO $ newIORef Nothing
 processLine line = liftIO $ do
   -- tr ("LINE",line)
   mbs <- readIORef rcb
-  process 5 mbs line
+  process  mbs line
   where
-    process :: Int -> [(String, String, String -> IO ())] -> String -> IO ()
-    process _ _ [] = writeIORef rconsumed Nothing >> return ()
-    process 0 [] line = do
-      let (r, rest) = span (\x -> (not $ elem x "/: ")) line
-      when ( not $ rest == " ") $ hPutStr stderr r >> hPutStrLn stderr ": can't read, skip"
-      mbs <- readIORef rcb
-      writeIORef rconsumed Nothing
-      process 5 mbs $ dropspaces rest
+    process ::  [(String, String, String -> IO ())] -> String -> IO ()
+    process  _ [] = writeIORef rconsumed Nothing >> return ()
 
-    process n [] line = do
-      threadDelay 100000
-      mbs <- readIORef rcb
-      process (n -1) mbs line
+    process  [] line = do
+      --threadDelay 100000
+      r <- readIORef newInput
+      if r then do
+              writeIORef newInput False
+              mbs <- readIORef rcb
+              process  mbs line
+           else do
+              let (r, rest) = span (\x -> (not $ elem x "/: ")) line
+              when ( not $ rest == " ") $ hPutStr stderr r >> hPutStrLn stderr ": can't read, skip"
+              mbs <- readIORef rcb
+              writeIORef rconsumed Nothing
+              process  mbs $ dropspaces rest
 
-    process n mbs line = do
+    process  mbs line = do
       let cb = trd $ head mbs
       cb line
 
@@ -222,7 +226,7 @@ processLine line = liftIO $ do
       let restLine = fromMaybe line r
       --si se ha consumido leer la lista de callbacks otra vez
       mbs' <- if isJust r then readIORef rcb else return $ tail mbs
-      process n mbs' restLine
+      process  mbs' restLine
       where
         trd (_, _, x) = x
 

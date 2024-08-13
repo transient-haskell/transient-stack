@@ -2339,7 +2339,7 @@ exceptBack  =  exceptBackg
 
 exceptBackg :: (Typeable e, Show e) => EventF -> e -> IO (Maybe a, EventF)
 exceptBackg st e= do
-                      ttr ("back",e)
+                      tr ("back",e)
                       runStateT ( runTrans $  back e ) st                 -- !> "EXCEPTBACK"
 
 -- re execute the first argument as long as the exception is produced within the argument. 
