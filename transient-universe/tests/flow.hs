@@ -35,6 +35,7 @@ import qualified Data.ByteString.Char8 as BC
 import Data.ByteString.Builder
 
 import qualified Data.TCache.DefaultPersistence as TC
+import qualified Data.TCache.Defs  as TC
 import Data.TCache  hiding (onNothing)
 import Data.TCache.IndexQuery
 
@@ -54,8 +55,13 @@ import Data.String
 import GHC.Generics
 import Data.Default
 import Data.Char
-import Transient.Internals (EventF(execMode))
-import Transient.Move (getNodes)
+
+
+-- import System.IO.Streams
+-- import System.IO.Streams.Handle
+import qualified Data.Vector as V
+import Debug.Trace
+
 -- mainrerun = keep $ rerun "config" $ do
 --   logged $ liftIO $ do
 --      putStrLn "configuring the program"
@@ -163,7 +169,7 @@ closCheckpoint = noTrans $ do
         ns<- if prevClos== 0 then return [] else  do
               (_ :: Int,ns, _ :: String) <-  return . read =<< liftIO (readFile $ logs <> show prevClos)
               return ns
-        -- let serial=  serialize (prevClos,getEnd $ fulLog log,toLazyByteString $ getLogFromIndex ns  $ fulLog log)
+        -- let serial=  serialize (prevClos,getEnd $ partLog log,toLazyByteString $ getLogFromIndex ns  $ partLog log)
         -- liftIO $ BS.writeFile (logs <> name) $ toLazyByteString serial
 
         return ()
@@ -343,7 +349,7 @@ instance Loggable THAT1
     -- log <- getLog
     -- setData $ log{fromCont=True}
 
-    -- tr ("CONTINUING",toPath $ fulLog log)
+    -- tr ("CONTINUING",toPath $ partLog log)
     -- ev <- newEVar
     
     -- tr "newevar"
@@ -360,18 +366,18 @@ instance Loggable THAT1
     --             mprevClosData <- liftIO $ atomically $ readDBRef  prev -- `onNothing` error "no previous session data"
 
     --             let ns = if isJust mprevClosData then localEnd (fromJust mprevClosData) else []
-    --             let end= getEnd $ fulLog log
+    --             let end= getEnd $ partLog log
 
     --             let lc= LocalClosure{
     --                     localCon= idSession,
     --                     prevClos= prev, 
-    --                     localLog= LD $ dropFromIndex ns $ fulLog log,  
+    --                     localLog= LD $ dropFromIndex ns $ partLog log,  
     --                     localClos=closLocal,
     --                     localEnd=end, 
     --                     localEvar= Just ev,localMvar=mv,localCont= Just cont} -- (closRemote',mv,ev,cont)
     --             -- setState $ PrevClos dblocalclos
-    --             tr ("FULLLOG",fulLog log)
-    --             tr ("DROP",ns,dropFromIndex ns $ fulLog log)
+    --             tr ("FULLLOG",partLog log)
+    --             tr ("DROP",ns,dropFromIndex ns $ partLog log)
     --             return lc
     
 
@@ -379,13 +385,106 @@ instance Loggable THAT1
     -- liftIO $ atomically $ writeDBRef dblocalclos pair
     
     -- tr ("writing closure",dblocalclos,prevClos pair)
-    -- tr ("fulLog in setCont", fulLog log,recover log)
+    -- tr ("partLog in setCont", partLog log,recover log)
 
 
     -- return ()
 
+-- deriving instance Generic  BS.ByteString
+-- deriving instance FromJSON BS.ByteString
+-- deriving instance ToJSON BS.ByteString 
+
+
+mainnav= keep' $do
+  (liftIO $ putStr "ONE ") `onBack` \(Navigation) -> do liftIO $ putStr "one " ; forward Navigation
+  (liftIO $ putStr "TWO ") `onBack` \(Navigation) -> do liftIO $ putStr "two "
+  (liftIO $ putStr "THREE ") `onBack` \(Navigation) -> do liftIO $ putStr "three " 
+  (liftIO $ putStr "FOUR ") `onBack` \(Navigation) -> do liftIO $ putStr "four " 
+  liftIO $ threadDelay 2000000 >> putChar '\n'
+  
+  back Navigation
+  return()
+
+mainex= keep' $do
+  onException $ \(e::SomeException) -> do liftIO $ putChar '1' ; continue
+  onException $ \(e::SomeException) -> do liftIO $ putChar '2' 
+  onException $ \(e::SomeException) -> do liftIO $ putChar '3' 
+  onException $ \(e::SomeException) -> do liftIO $ putChar '4'
+  liftIO $ putChar '\n'
+  liftIO $ threadDelay 1000000
+  error "error"
+
+newtype TestJSON= TestJSON [String] deriving (Generic,ToJSON,FromJSON)
+
+instance TC.Indexable TestJSON where key= const "TestJSON"
+
+rtext= getDBRef "TestJSON"
+mainexp= keep' $ do
+  liftIO $ do
+     
+     error "err"
+     atomically $ writeDBRef  rtext $ TestJSON ["hello","world"]
+     syncCache
+     atomically $ flushDBRef $ rtext
+     r <- atomically $ readDBRef  rtext
+     liftIO $ print r
+
+setEventCont2 :: TransIO a -> (a -> TransIO b) -> StateIO ()
+setEventCont2 x f  = modify $ \EventF { fcomp = fs, .. }
+                           -> EventF { xcomp = x
+                                     , fcomp =  unsafeCoerce (\x -> ttr "here2" >> f x) :  fs
+                                     , .. }
+
+bind :: (Show a) => TransIO a -> MVar (Maybe a) -> (a -> TransIO b) -> TransIO b
+bind x mv f = Transient $ do
+    setEventCont2 x  (\r -> do ttr r; liftIO (tryPutMVar mv $ Just r); f r)
+    mk <- runTrans x
+    resetEventCont mk
+    ttr "here"
+    case mk of
+      Just k  ->  runTrans (ttr "JUST" >> liftIO (tryPutMVar mv $ Just k) >> f k)
+      Nothing ->  runTrans (ttr "NOTHING"  >> empty)
+
+synca :: Show a => TransIO a -> TransIO a
+synca pr= do
+    mv <- liftIO newEmptyMVar
+    -- if pr is empty the computation does not continue. It blocks
+    (bind pr mv (const empty)) <|> do
+           r <- liftIO $(takeMVar mv) `catch` \BlockedIndefinitelyOnMVar -> return Nothing
+           case r of 
+             Just x -> return x
+             Nothing -> empty
+
+
+main= keep $ do
+   r <-  sync (option1 "p" "p") <|> return ["ho"]
+   ttr ("RESP",r)
+
+
+
+mainback1= keep $  do
+  return() `onBack` \Navigation -> forward Navigation
+
+  r0 <- inputNav (Just "1111") (const True) "one" 
+  r1 <- inputNav (Just False) (const True) "two"   :: TransIO Bool
+  r2 <- inputNav (Just 3333) (const True) "three"  :: TransIO Int
+  r3 <- inputNav (Just "4444") (const True) "four" 
+  r4 <- inputNav (Just "5555") (const True) "five" 
+
+  liftIO $ do print r0  ;  print r1 ; print r2 ;print r3; print r4
+
+  liftIO syncCache
+  back Navigation
+  return ()
+
+
+
+
+  
+    
+
+
 mainalter= keep $ do
-  -- flowAssign
   proc <|> restore1 <|> save
 
   where 
@@ -432,12 +531,129 @@ mainsimple= keep $  initNode $ Cloud $ do
 
     showLog
 
-main= keep $ initNode $  do
-  r <-  local $ return "HELLO" `onBack` \(SomeException e) ->do
-                option "c" "continue" >> continue  >> return "HELLO"
+mainexcept= keep $ initNode $ do
+  r <-  local $ return "WORLD" `onException'` \(SomeException e) ->do
+                liftIO (print "PASA")
+                continue
+                return "HELLO"
   local showLog
-  onAll $ throwt $ ErrorCall "err"
+  local $ return "HI"
+  error "err"
   return()
+
+salutation= unsafePerformIO $ newIORef undefined
+
+onSalutation  mx =  writeIORef salutation mx
+
+main2= do
+  onSalutation $ \s -> do
+    putStr "hello "
+    putStrLn s
+  
+  invocation "Alberto"
+  invocation "Pepe"
+
+
+invocation s= liftIO $ do 
+    proc <- readIORef salutation
+    proc s
+
+maininvoc= keep' $ installation <|> do
+  async (invocation "Alberto") <|> async (putStrLn "some other text") <|> async (invocation "Pepe") 
+  liftIO $ print "something has been called in parallel"
+  where
+  installation= do
+    s <- react onSalutation $ return ()
+    liftIO $ putStr "hello "
+    liftIO $ putStrLn s
+
+-- foreign import ccall  ungetc :: Char -> Void Ptr  -> IO ()
+
+mainraw= do
+  putStrLn "--------------"
+  
+  hSetBuffering System.IO.stdin NoBuffering
+  hSetEcho System.IO.stdin False
+  x <-  hLookAhead System.IO.stdin
+  -- print x
+
+  hSetBuffering System.IO.stdin LineBuffering
+  hSetEcho System.IO.stdin True
+
+  -- wr <- System.IO.Streams.takeBytes 1 System.IO.Streams.Handle.stdin
+  -- x <- System.IO.Streams.read wr
+  -- liftIO $ print x
+  -- unRead (BC.singleton x)  System.IO.Streams.Handle.stdin
+  -- line <- System.IO.Streams.takeBytesWhile (/='\n') System.IO.Streams.Handle.stdin 
+  line <- getLine
+  print line
+  -- termattr <- getTerminalAttributes stdin
+  -- let rawtermattr = withoutMode ProcessInput termattr
+  -- setTerminalAttributes rawtermattr
+  -- c <- getChar
+  -- putStrLn c
+  -- setTerminalAttributes termattr stdin
+
+
+maingold= keep' $ do
+    amount :: Int <-   quantity * price 
+    newExchange <- liftIO $ readIORef newEx
+    guard  newExchange -- avoid printing exchanges when price changes. only when quantities of gold are exchanged
+    liftIO $ writeIORef newEx False
+    liftIO $ putStrLn $ show amount <> "$ exchanged"
+  <|> liftIO  externalInvocations
+ 
+  where
+  quantity :: TransIO Int
+  quantity= do
+    q <- react onQuantity $ return ()
+    liftIO $ writeIORef newEx True
+    liftIO $ putStrLn $ "quantity exchanged :" <> show q <> " ounces"
+    return q
+  
+  price :: TransIO Int
+  price= do
+    p <- react onPriceChange $ return ()
+    liftIO $ putStrLn $ "new price for gold: " <> show p
+    return p
+
+    -- All the rest should provided by the framework
+
+  -- invoked by the framework
+  externalInvocations :: IO()
+  externalInvocations= do
+      invoqueQuantity 10
+      invoqueNewPrice 1000
+      invoqueNewPrice 999
+      invoqueQuantity (-10)
+      invoqueQuantity 100
+
+  newEx= unsafePerformIO $ newIORef False
+  quantityCallback= unsafePerformIO $ newIORef Nothing
+  priceChangeCallback= unsafePerformIO $ newIORef Nothing
+  onQuantity callback= writeIORef quantityCallback $ Just callback
+  onPriceChange callback= writeIORef priceChangeCallback $ Just callback
+
+  invoqueQuantity amount= do
+      cb <- readIORef quantityCallback
+      when (isJust cb) $ (fromJust cb) amount
+
+  invoqueNewPrice price=do
+      cb <- readIORef priceChangeCallback
+      when (isJust cb) $ (fromJust cb) price
+
+mainexcepterr= keep  $ do
+
+    -- abduce
+    -- onFinish $ const $ ttr "==============================FINISH"
+    r <- return "WORLD" `onException'`  \(SomeException e) -> do 
+          continue
+          
+          option1 "c" "continue"
+          return "PASA"
+    ttr r
+    error "---------------------err"
+    return()
 
 mainjob2= keep $ initNode $  do
   runJobs
@@ -555,8 +771,8 @@ setcc= do
 
 showLog=do
   log <- getLog
-  -- ttr $ ("SHOWLOG",fulLog log," ",toPath $ fulLog log,"  ",toPathLon $ fulLog log)
-  ttr  ("SHOWLOG",toPath $ fulLog log)
+  -- ttr $ ("SHOWLOG",partLog log," ",toPath $ partLog log,"  ",toPathLon $ partLog log)
+  ttr  ("SHOWLOG",toPath $ partLog log)
 
 
 {- 
@@ -571,7 +787,7 @@ showLog=do
   el setIndexData es equivalente a la DBRef pero sin log, solo con ends
 -}
 
-main2= keep $  save <|> restore1 <|> proc
+main22= keep $  save <|> restore1 <|> proc
   
   where
   proc= initNode $ Cloud $ do  
@@ -595,7 +811,7 @@ main1= keep $ do
     return WORLD
   logged $ liftIO $ print (r,r1)
   log <- getLog
-  tr ("fulLog",fulLog log)
+  tr ("partLog",partLog log)
 
 
 mainfin= keep' $ do
@@ -717,7 +933,7 @@ autentificacion? investigar
 --   log <- getLog
 --   when(not $recover log) $ do
 --       paths <- readIORef rpaths
---       M.insert fulLog log str paths
+--       M.insert partLog log str paths
 --       setRState pa <> "/" <> str
 
 -- get all the options of a user
@@ -878,8 +1094,8 @@ syncFlush= do
 --           (Closure sess closRemote,n) <- getIndexData idConn `onNothing` return (Closure 0 0,[0]::[Int])
 
 
---           let tosend= getLogFromIndex n $ fulLog log
---           tr  ("idconn",idConn,"REMOTE CLOSURE",closRemote,"FULLLOG",fulLog log,n,"CUT FULLOG",tosend)
+--           let tosend= getLogFromIndex n $ partLog log
+--           tr  ("idconn",idConn,"REMOTE CLOSURE",closRemote,"FULLLOG",partLog log,n,"CUT FULLOG",tosend)
                  
                
 
@@ -1251,7 +1467,7 @@ minput1 ident val = response
 receivee conn clos  val= do
   (lc, log) <- setCont clos 0
   s <- giveParseString
-  -- tr ("receive PARSESTRING",s,"LOG",toPath $ fulLog log)
+  -- tr ("receive PARSESTRING",s,"LOG",toPath $ partLog log)
   if recover log && not (BS.null s)
     then (abduce >> receive1 lc val) <|> return() -- watch this event var and continue restoring
     else  receive1 lc val
