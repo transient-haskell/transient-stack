@@ -2,6 +2,22 @@ All the transient libraries
 
 ## What is Transient?
 
+In the year 2010 Simon Peyton Jones wrote an article **"Tackling the Awkward Squad: monadic input/output, concurrency, exceptions, and foreign-language calls in Haskell"**
+
+*Functional programming may be beautiful, but to write real applications we must grapple with awkward real-world issues: input/output, robustness, concurrency, and interfacing to programs written in other languages*
+
+Transient demostrates that this awkwad squad code can be combined beautifully using the very same operators and classes used for creating pure code. 
+
+The list of impure effects and, in general, code that usually break composability and can be composed beautifully with transient also incudes threading, concurrency, paralelism, callbacks, resource management, Web programming in the server and the browser, exceptions, loops, non determinism, backtracking, distributed computing, recovery of execution state after shutdowm and restart, blocking IO, console input ...
+
+## Motivation
+All of this is done for the glory of God. May Christ reign in the nations and the hearts. «Instaurare omnia in Christo». In the name of the Father, the Son and the Holy Ghost. Amen
+
+Nada se puede hacer sin amor, excepto destruir. Y el amor es Cristo
+
+![img](https://pbs.twimg.com/media/GS2dHnQXwAAeZ4s?format=jpg&name=medium)
+
+## Introduction
 One of the dreams of software engineering is unrestricted composability.
 
 This may be put in these terms:
@@ -12,14 +28,17 @@ Then the combinations:
 
      - ap1 <|> ap2          -- Alternative expression
      - ap1 >>= \x -> ap2    -- monadic sequence
+     - do x <- ap1; ap2 x   --   "        "
      - ap1 <> ap2           -- monoidal expression
      - (,) <$> ap1 <*> ap2  -- Applicative expression
 
-are possible if the types match, and generate new applications that are composable as well.
+are possible if the types match, and generate new applications that are composable as well with the same operators.
+
+Other operators like the math operators etc are also permitted if they makes sense in the context.
 
 Transient does exactly that.
 
-The operators `<$>` `<*>` and `<>` express concurrency, the operator `<|>` express parallelism and `>>=` for sequencing of threads, distributed processes or web widgets. So even in the presence of these effects and others, everything is composable.
+Besides their usual meaning of these operators for single threaded programs, the operators `<$>` `<*>` and `<>` express concurrency, the operator `<|>` express parallelism and `>>=` express sequencing of threads, distributed processes or web widgets. So even in the presence of these effects and others, everything composes.
 
 For this purpose transient is an extensible effects monad with all major effects and primitives for parallelism, events, asynchronous IO, early termination, non-determinism logging and distributed computing. Since it is possible to extend it with more effects without adding monad transformers, the composability is assured.
 
@@ -37,8 +56,7 @@ distribStream= do
 ```
 Read the tutorial to know how to compile and invoke it.
 
-This program will present a link in the browser and stream fibonnacci numbers to the browser when
-yo click it.  (if you have Docker, you can run it straigh from the console; See [this](https://github.com/transient-haskell/axiom#how-to-install--run-fast)
+This other program will present a link in the browser and stream fibonnacci numbers to the browser when you click it.  (if you have Docker, you can run it straigh from the console; See [this](https://github.com/transient-haskell/axiom#how-to-install--run-fast)
 
 ```Haskell
 main= keep . initNode $ webFib
@@ -84,7 +102,7 @@ These articles contain executable examples (not now, since the site no longer su
 
 Plans
 =====
-Once composability in the large is possible, there are a infinite quantity of ideas that may be realized. There are short term and long term goals. An status of development is regularly published in [![Gitter](https://badges.gitter.im/theam/haskell-do.svg)](https://gitter.im/Transient-Transient-Universe-HPlay/Lobby?utm_source=share-link&utm_medium=link&utm_campaign=share-link).  
+Once composability in the large is possible, there are a infinite quantity of ideas that may be realized. There are short term and long term goals. An status of development is regularly published in [![Gitter](https://badges.gitter.im/theam/haskell-do.svg)](https://app.gitter.im/#/room/#Transient-Transient-Universe-HPlay_Lobby:gitter.im).  
 
 Among the most crazy ones is the possibility of extending this framework to other languages and make them interoperable. treating whole packaged applications as components, and docking them as lego pieces in a new layer of the Operating system where the shell allows such kind of type safe docking. this composable docker allows all kinds of composability, while the current docker platform is just a form of degraded monoid that do not compute.
 
