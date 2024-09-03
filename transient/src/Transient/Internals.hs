@@ -1217,6 +1217,10 @@ modifyData' f  v= do
 modifyState :: (TransMonad m, Typeable a) => (Maybe a -> Maybe a) -> m ()
 modifyState = modifyData
 
+-- | Same as modifyData'
+modifyState' :: (TransMonad m, Typeable a) => (a ->  a) ->  a -> m a
+modifyState'= modifyData'
+
 -- | Same as `setData`
 setState :: (TransMonad m, Typeable a) => a -> m ()
 setState = setData
@@ -1419,16 +1423,16 @@ async io = do
 -- Network operations usually do not work well with sync at this moment, since it is difficult to determine his termination if they have 
 -- use sync1 which forces termination after the first result.
 sync :: TransIO a -> TransIO [a]
-sync x = syncProd  $ collect' 0 0 x
+sync x = syncProd  $ collect' 0 0 $ avoidAlternative x
 
 -- | to enclose collect operations avoiding alternative operations and return the result in the original thread.
 
 syncProd :: TransIO [a] -> TransIO [a]
-syncProd x= do
+syncProd x=   do
     mv <- liftIO newEmptyMVar
     do
-      anyThreads abduce
-      r <- avoidAlternative x
+      avoidAlternative $ anyThreads abduce
+      r <-  x
       liftIO (putMVar mv r)
       empty
       
@@ -1440,8 +1444,8 @@ syncProd x= do
   
 sync' pr= do
     mv <- liftIO newEmptyMVar
-    -- if pr is empty the computation does not continue. It blocks
-    (pr >>= liftIO . (tryPutMVar mv) >> empty) <|> liftIO (takeMVar mv)
+    (pr >>= liftIO . (tryPutMVar mv) >> empty) <|>  
+      Transient (liftIO ((takeMVar mv >>= return . Just) `catch` \BlockedIndefinitelyOnMVar -> return Nothing))
         -- mr <- liftIO $ tryTakeMVar mv   do not work
         -- case mr of
         --    Nothing -> empty
@@ -1523,7 +1527,7 @@ parallel ioaction = Transient $ do
 -- | Execute the IO action and the continuation
 -- loop ::  EventF -> IO (StreamData t) -> IO ()
 forkMaybe' _ par   proc= proc par -- (proc par >>= \(_,cont) -> exceptBackg cont $ Finish $ show (unsafePerformIO myThreadId,"loop thread ended"))
-                              `catch` \e -> exceptBack par e
+                              `catch` \e -> exceptBack  par e
 loop parentc rec = forkMaybe False parentc $ \cont -> do
 
   liftIO $ atomicModifyIORef (labelth cont) $ \(_,label) -> ((Listener,label),())
@@ -1588,7 +1592,7 @@ loop parentc rec = forkMaybe False parentc $ \cont -> do
           if dofork
             then forkIt rparent proc
             else ( proc parent   >>= \(_,cont) -> exceptBackg cont $ Finish $ show (unsafePerformIO myThreadId,"loop thread ended"))
-                              `catch` \e -> exceptBack parent e
+                              `catch` \e -> exceptBack  parent e
 
 
   forkIt rparentState  proc= do
@@ -1766,33 +1770,61 @@ killChildren childs  = do
 -- >     event <- react  onEvent $ return ()
 -- >     ....
 -- >
+--
+--  See: https://matrix.to/#/!kThWcanpHQZJuFHvcB:gitter.im/$NL4k640LPNwRp03Zlnek_xOhRkIJ1al5TzxfMksCclI?via=gitter.im&via=matrix.org&via=matrix.freyachat.eu
+--
+-- Gloria a Dios
+
 react
   :: ((eventdata ->  IO response) -> IO ())
   -> IO  response
   -> TransIO eventdata
-react setHandler iob= Transient $ do
-        -- st <- cloneInChild "react"
-        -- delete  all  current finish handlers since they should not trigger
-        -- yes option1 uses react and should disable react and trigger a finish
-        -- setData $ Backtrack (Nothing `asTypeOf` Just (Finish "")) []
+react h iob= do
+  abduce
+  r <- react1 h iob
+  return r
+  where
+  react1
+    :: ((eventdata ->  IO response) -> IO ())
+    -> IO  response
+    -> TransIO eventdata
+  react1 setHandler iob= Transient $ do
 
         modify $ \s -> s{execMode=let rs= execMode s in if rs /= Remote then Parallel else rs}
+{-
+        st <- get
+        liftIO $ atomicModifyIORef (labelth st) $ \(_,label) -> ((Listener,label),())
+
+        (r, st') <- liftIO $ ( runStateT  
+                        (case event st of
+                            Nothing -> do
+                                liftIO $ setHandler $ \dat ->do
+                                  runStateT  (runCont st{event= Just $ unsafeCoerce dat})  st
+                                --  was <- gets execMode -- getData `onNothing` return Serial
+                                --  when (was /= Remote) $ modify $ \s -> s{execMode= Parallel}
+                                  iob
+                                return Nothing
+                                
+
+                            Just r -> do
+                                  put st{event=Nothing}
+                                  return  $ unsafeCoerce r) st)
+                                    `catch` exceptBack 10 st 
+        put st'
+        return r
+-}
         cont <- get
-        -- tr ("THREADS REACT",threadId cont, threadId st)
-        liftIO $ atomicModifyIORef (labelth cont) $ \(_,label) -> ((Listener,label),())
-
-
         case event cont of
           Nothing -> do
             liftIO $ setHandler $ \dat ->do
-              (_,cont') <- runStateT (runCont cont) cont{event= Just $ unsafeCoerce dat} `catch` exceptBack cont
+              (_,cont') <- (runStateT (runCont cont) cont{event= Just $ unsafeCoerce dat}) 
               -- let rparent=  parent st
               -- Just parent <- liftIO $ readIORef rparent
               -- th <- liftIO myThreadId
               -- tr ("THREADID", th)
               -- liftIO $ writeIORef (pthreadId st) th
               -- freelogic rparent st (labelth st)
-              exceptBackg cont' $ Finish $ show (unsafePerformIO myThreadId,"react thread ended")
+              -- (exceptBackg cont' $ Finish $ show (unsafePerformIO myThreadId,"react thread ended")) 
 
               iob
 
@@ -1800,19 +1832,7 @@ react setHandler iob= Transient $ do
 
           j@(Just _) -> do
             put cont{event=Nothing}
-
-            return $ unsafeCoerce j
-
-
-
--- | Same as `keep` but does not read from the standard input, and therefore
--- the async input APIs ('option' and 'input') cannot respond interactively.
--- However, input can still be passed via command line arguments as
--- described in 'keep'.  Useful for debugging or for creating background tasks,
--- as well as to embed the Transient monad inside another computation. It
--- returns either the value returned by `exit` or Nothing, when there are no
--- more threads running
---
+            return $ unsafeCoerce j 
 
 
 
@@ -1933,9 +1953,14 @@ backCut reason= Transient $ do
 undoCut ::  TransientIO ()
 undoCut = backCut ()
 
-data Log  = Log{ recover :: Bool , fulLog :: LogData,  hashClosure :: Int} deriving (Show)
+data Log  = Log{ recover :: Bool , partLog :: LogData,  hashClosure :: Int} deriving (Show)
 
 data LogDataElem= LE  Builder  | LX LogData deriving (Read,Show, Typeable)
+
+getLog :: TransMonad m =>  m Log
+getLog= getData `onNothing` return emptyLog
+
+emptyLog= Log False  (LD [])  0
 
 -- contains a log tree which includes intermediate results caputured with `logged` `local` and `loggedc`.
 -- these primitives can invoque code that call recursively further `logged` etc primitives at arbitrary deeep
@@ -1956,20 +1981,20 @@ instance Read Builder where
 {-# NOINLINE onBack #-}
 onBack :: (Typeable b, Show b) => TransientIO a -> ( b -> TransientIO a) -> TransientIO a
 onBack ac bac = do
-  mlog :: Maybe Log <- getData
-
-  registerBack (typeof bac) $ Transient $ do
+  log <- getLog
+  registerBack  (typeof bac) $  do
     --  tr "onBack"
      Backtrack mreason stack <- getData `onNothing` (return $ backStateOf (typeof bac))
-    --  tr ("onBackstack",mreason, length stack)
-     runTrans $ case mreason of
+    --  ttr ("onBackstack",mreason, length stack)
+     case mreason of
                   Nothing     -> do -- tr "ONBACK NOTHING" 
-                                    ac                    
+                                    ac                 
                   Just reason -> do -- tr ("ONBACK JUST",reason) ;
                                     -- log must be restored to play well with backtracking
                                     -- Todo lo puedo en Cristo que me fortalece
-                                    when(isJust mlog) $ setData $ fromJust mlog
-                                    bac reason              
+                                    setData log
+                                    bac reason 
+
      where
      typeof :: (b -> TransIO a) -> b
      typeof = undefined
@@ -1989,22 +2014,23 @@ onUndo x y= onBack x (\() -> y)
 -- parameter is a "witness" whose type is used to uniquely identify this
 -- backtracking action. The value of the witness parameter is not used.
 --
-registerBack :: (Typeable b, Show b) => b -> TransientIO a -> TransientIO a
-registerBack witness f  = Transient $ do
+-- registerBack :: (Typeable b, Show b) => b -> TransientIO a -> TransientIO a
+registerBack  witness f  = Transient $ do
   --  tr "registerBack"
-   cont@(EventF _ x  _ _ _ _ _ _ _ _ _ _ _)  <- get
+   cont  <- get
  -- if isJust (event cont) then return Nothing else do
    md <- getData `asTypeOf` (Just <$> return (backStateOf witness))
 
    case md of
         Just (Backtrack b []) ->  setData $ Backtrack b  [cont]
         Just (bss@(Backtrack b (bs@((EventF _ x'  _ _ _ _ _ _ _ _ _ _ _):_)))) ->
-          when (isNothing b) $
-                setData $ Backtrack b (cont:bs)
+          -- when (isNothing b) $
+                setData $ Backtrack b  (cont:bs)
 
         Nothing ->  setData $ Backtrack mwit [cont]
 
    runTrans $ return () >> f
+
    where
    mwit= Nothing `asTypeOf` (Just witness)
    --addr x = liftIO $ return . hashStableName =<< (makeStableName $! x)
@@ -2023,6 +2049,8 @@ forward :: (Typeable b, Show b) => b -> TransIO ()
 forward reason= noTrans $ do
     Backtrack _ stack <- getData `onNothing`  ( return $ backStateOf reason)
     setData $ Backtrack (Nothing `asTypeOf` Just reason)  stack
+    -- ttr "set backtrack to Nothing"
+    
 
 -- | put at the end of an backtrack handler intended to backtrack to other previous handlers.
 -- This is the default behaviour in transient. `backtrack` is in order to keep the type compiler happy
@@ -2042,7 +2070,7 @@ back :: (Typeable b, Show b) => b -> TransIO a
 back reason =  do
   -- tr "back"
   bs@(Backtrack mreason stack) <- getData  `onNothing`  return (backStateOf  reason)
-  goBackt  bs                                                    --  !>"GOBACK"
+  goBackt  bs    
 
   where
   runClosure :: EventF -> TransIO a
@@ -2057,11 +2085,11 @@ back reason =  do
         x <-  runClosure first -- <|> tr "EMPTY" <|> empty                              --     !> ("RUNCLOSURE",length stack)
         Backtrack back bs' <- getData `onNothing`  return (backStateOf  reason)
         -- tr ("goBackt",back, length bs')
+        -- ttr ("back=", back)
 
         case back of
                  Nothing    -> do
-                        setData $ Backtrack (Just reason) stack
-                        st <- get
+                        setData $ Backtrack (Nothing `asTypeOf` b) stack
                         runContinuation first x -- `catcht` (\e -> liftIO(exceptBack st e) >> empty)    causes a loop in trowt excep `onException'` 
                  justreason -> do
                         --setData $ Backtrack justreason bs
@@ -2299,8 +2327,8 @@ onException' mx f= onAnyException mx $ \e -> do
             -- tr  "EXCEPTION HANDLER EXEC" 
             case fromException e of
                Nothing -> do
-                  -- Backtrack r stack <- getData  `onNothing`  return (backStateOf  e)      
-                  -- setData $ Backtrack r $ tail stack
+                  Backtrack r stack <- getData  `onNothing`  return (backStateOf  e)      
+                  setData $ Backtrack r $ tail stack
                   back e
                   empty
                Just e' -> f e'
@@ -2309,7 +2337,10 @@ onException' mx f= onAnyException mx $ \e -> do
 
   where
   onAnyException :: TransIO a -> (SomeException ->TransIO a) -> TransIO a
-  onAnyException mx exc= ioexp  `onBack` exc
+  onAnyException mx exc= do
+    r <- ioexp  `onBack` exc
+    threads 0 abduce -- This "magically" solves problems of exception handlers with multithreadint, and react which disables the handler after the first invocation when an exception is thrown.
+    return r
 
   ioexp    = Transient $ do
     st <- get
@@ -2330,13 +2361,17 @@ onException' mx f= onAnyException mx $ \e -> do
           Just r -> do
                 modify $ \s ->  s{event=Nothing}
                 return  $ unsafeCoerce r) st)
-                   `catch` exceptBack st
+                   `catch` exceptBack st 
     put st'
     return mr
 
+-- perform exception backtracking and recursively stablish itself as handler of exceptions
+-- to be triggered in further exceptions in the IO monad
+-- Alabado sea Dios
 exceptBack ::  EventF -> SomeException -> IO (Maybe a, EventF)
-exceptBack  =  exceptBackg
+exceptBack st e =   exceptBackg st e `catch` \e' -> exceptBack  st e'
 
+-- perform general backtracking in the IO monad
 exceptBackg :: (Typeable e, Show e) => EventF -> e -> IO (Maybe a, EventF)
 exceptBackg st e= do
                       tr ("back",e)
@@ -2354,7 +2389,7 @@ cutExceptions :: TransIO ()
 cutExceptions= backCut  (undefined :: SomeException)
 
 -- | Use it inside an exception handler. it stop executing any further exception
--- handlers and resume normal execution from this point on.
+-- handlers and resume normal (forward) execution from this point on.
 continue :: TransIO ()
 continue = forward (undefined :: SomeException)   -- !> "CONTINUE"
 
@@ -2414,7 +2449,7 @@ throwt :: Exception e => e -> TransIO a
 
 throwt =  back . toException
 
--- | to register exception handlers within the computation passed in the parameter. The handlers do not apply outside
+-- | to register exception handlers within the computation passed in the parameter. The handlers defined inside the block do not apply outside
 --
 -- >  onException (e :: ...) -> ...   -- This may be triggered by exceptions anywhere below
 -- >  localExceptionHandlers $ do
