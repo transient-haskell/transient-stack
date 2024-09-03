@@ -231,6 +231,7 @@ rNavResps= getDBRef "NavResps"
 data Navigation= Navigation deriving (Read,Show,Typeable)
 
 -- | input with navigation back so previous inputs can be reedited. they can be navigated back and forth using cursor keys.
+-- see https://matrix.to/#/!kThWcanpHQZJuFHvcB:gitter.im/$6qbK3PeVGumDnNbbmnP82Gs-g-5xalwPLM3Ayl2BJOw?via=gitter.im&via=matrix.org&via=matrix.freyachat.eu
 inputNav :: (Typeable a, Loggable a) =>
      Maybe a -> (a -> Bool) -> String -> TransIO a
 inputNav mv cond prompt= do
