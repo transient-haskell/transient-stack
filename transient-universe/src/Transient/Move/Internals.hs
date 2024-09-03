@@ -7,7 +7,7 @@
 -- Maintainer  :  agocorona@gmail.com
 -- Stability   :
 -- Portability :
---
+-- Dedicated to:  Jesus Chist my Lord and Savior
 --
 -----------------------------------------------------------------------------
 {-# LANGUAGE CPP #-}
@@ -336,9 +336,9 @@ local mx = Cloud $
           when (null ns) $ do
             log <- getLog
             -- tr ("PARSESTRING", "recover", parseString, recover log)
-            let end = getEnd $ fulLog log
-            tr ("END=", end, fulLog log)
-            tr ("setIndexData local", idConn conn, Closure  a b end, fulLog log)
+            let end = getEnd $ partLog log
+            tr ("END=", end, partLog log)
+            tr ("setIndexData local", idConn conn, Closure  a b end, partLog log)
             setIndexData (idConn conn) (Closure a b end)
 
             --modifyData' (\log -> log{fromCont=True})  $ error "no log"
@@ -390,15 +390,15 @@ lazy mx = onAll $ do
   return $ fromJust $ unsafePerformIO $ runStateT (runTrans mx) st >>= return . fst
 
 -- | executes a non-serilizable action in the remote node, whose result can be used by subsequent remote invocations
-fixRemote mx = do
-  r <- lazy mx
-  fixClosure
-  return r
+-- fixRemote mx = do
+--   r <- lazy mx
+--   fixClosure
+--   return r
 
--- | subsequent remote invocatioms will send logs to this closure. Therefore logs will be shorter.
---
--- Also, non serializable statements before it will not be re-executed
-fixClosure = atRemote $ local $ async $ return ()
+-- -- | subsequent remote invocatioms will send logs to this closure. Therefore logs will be shorter.
+-- --
+-- -- Also, non serializable statements before it will not be re-executed
+-- fixClosure = atRemote $ local $ async $ return ()
 
 -- log the result a cloud computation. Like `loogged`, this erases all the log produced by computations
 -- inside and substitute it for that single result when the computation is completed.
@@ -661,10 +661,10 @@ teleport = do
               -- tr ("teleport remote call", idConn)
               (Closure sess closRemote n) <- getIndexData idConn `onNothing` return (Closure 0 "0" [])
               tr ("getIndexData", idConn, sess, closRemote, n)
-              let fragment = dropFromIndex n $ fulLog log
+              let fragment = dropFromIndex n $ partLog log
               let tosend = if null n then toPath $ LD fragment else toPathFragment fragment -- if a fragment, avoid the LX LX
-              -- tr ("MSEND END", getEnd $ fulLog log, fulLog log, "n=", n,"tosend=",tosend)
-              -- tr ("idconn", idConn, "REMOTE CLOSURE", closRemote, "FULLLOG", fulLog log, n, "CUT FULLOG", fragment, tosend)
+              -- tr ("MSEND END", getEnd $ partLog log, partLog log, "n=", n,"tosend=",tosend)
+              -- tr ("idconn", idConn, "REMOTE CLOSURE", closRemote, "FULLLOG", partLog log, n, "CUT FULLOG", fragment, tosend)
 
               let closLocal = BC.pack $show $ hashClosure log
 
@@ -684,7 +684,7 @@ receive conn clos idSession = do
   -- tr ("TO RECEIVE",clos, idSession)
   (lc, log) <- setCont clos idSession
   s <- giveParseString
-  -- tr ("receive PARSESTRING",s,"LOG",toPath $ fulLog log)
+  -- tr ("receive PARSESTRING",s,"LOG",toPath $ partLog log)
   if recover log && not (BS.null s)
     then (abduce >> receive1 lc) <|> return() -- watch this event var and continue restoring
     else  receive1 lc
@@ -731,15 +731,15 @@ firstCont = do
           LocalClosure
             { localCon = 0,
               prevClos = rthis,
-              localLog = fulLog log, 
+              localLog = partLog log, 
               localClos = "0", -- hashClosure log,
-              localEnd = getEnd $ fulLog log, 
+              localEnd = getEnd $ partLog log, 
               localEvar = Just ev,
               localMvar = mv,
               localCont = Just cont
             }
 
-    tr ("end", localEnd this, fulLog log)
+    tr ("end", localEnd this, partLog log)
     -- n <- getMyNode
     -- let url= str "http://" <> str (nodeHost n) <> str "/" <> intt (nodePort n) <>"/0/0/0/0/"
 
@@ -768,7 +768,7 @@ setCont mclos idSession = do
 
   -- setData $ log{fromCont=True}
 
-  -- tr ("SETCONT", toPathLon $ fulLog log, "recover", recover log)
+  -- tr ("SETCONT", toPathLon $ partLog log, "recover", recover log)
   ev <- newEVar
 
   -- tr "newevar"
@@ -783,13 +783,13 @@ setCont mclos idSession = do
       -- mprevClosData <- liftIO $ atomically $ readDBRef  prev -- `onNothing` error "no previous session data"
 
       let ns = if isJust mprevClosData then localEnd (fromJust mprevClosData) else []
-      let end = getEnd $ fulLog log
+      let end = getEnd $ partLog log
       -- tr ("END",closLocal,log,end)
       let lc =
             LocalClosure
               { localCon = idSession,
                 prevClos = fromMaybe dblocalclos $ fmap unPrevClos mprev,
-                localLog = LD $ dropFromIndex ns $ fulLog log,
+                localLog = LD $ dropFromIndex ns $ partLog log,
                 localClos = closLocal,
                 localEnd = end,
                 localEvar = Just ev,
@@ -798,7 +798,7 @@ setCont mclos idSession = do
                 -- setState $ PrevClos dblocalclos
               }
 
-      -- tr $ let drop = dropFromIndex ns $ fulLog log in ("DROP", fulLog log, ns, drop, toPathLon $ LD drop)
+      -- tr $ let drop = dropFromIndex ns $ partLog log in ("DROP", partLog log, ns, drop, toPathLon $ LD drop)
       return lc
 
   -- liftIO $ modifyMVar_ localClosures $ \map ->  return $ M.insert closLocal pair map
@@ -2044,7 +2044,7 @@ listen (node@(Node _ port _ _)) = onAll $ do
   -- fork connectionTimeouts
   --  fork loopClosures
 
-  setData $ Log {recover = False, fulLog = mempty, hashClosure = 0 {-,fromCont=False -}}
+  setData $ Log {recover = False, partLog = mempty, hashClosure = 0 {-,fromCont=False -}}
 
   conn' <- getSData <|> defConnection
   chs <- liftIO $ newIORef M.empty
@@ -2719,12 +2719,12 @@ processMessage s1 closl s2 closr mlog deleteClosure = do
           -- void $ liftIO $ runStateT (case mlog of
           --   Right log -> do
 
-          --     -- Log _ _ fulLog hashClosure <- getData `onNothing` return (Log True [] [] 0)
-          --     Log{fulLog=fulLog, hashClosure=hashClosure} <- getLog
-          --     -- return() !> ("fullog in execlog", reverse fulLog)
+          --     -- Log _ _ partLog hashClosure <- getData `onNothing` return (Log True [] [] 0)
+          --     Log{partLog=partLog, hashClosure=hashClosure} <- getLog
+          --     -- return() !> ("fullog in execlog", reverse partLog)
 
-          --     let nlog= fulLog <> log    -- let nlog= reverse log ++ fulLog
-          --     setData $ Log{recover= True, buildLog=  mempty, fulLog= nlog, lengthFull=error "lengthFull TODO", hashClosure= hashClosure}  -- TODO hashClosure must change?
+          --     let nlog= partLog <> log    -- let nlog= reverse log ++ partLog
+          --     setData $ Log{recover= True, buildLog=  mempty, partLog= nlog, lengthFull=error "lengthFull TODO", hashClosure= hashClosure}  -- TODO hashClosure must change?
           --     setState $ Closure  closr
           --     setRState $ DialogInWormholeInitiated True
           --     setParseString $ toLazyByteString log
@@ -3409,7 +3409,7 @@ restoreClosure idConn (clos :: BC.ByteString) = do
   -- log contains what is necessary to recover the continuation that we want to restore
   let mf = mfData cont
   let logbase = fromMaybe emptyLog $ unsafeCoerce $ M.lookup (typeOf emptyLog) mf
-      LD lb = fulLog logbase
+      LD lb = partLog logbase
   -- let log'=  LD $ lb <> log
 
   -- tr ("TOTAL LOG", log')
