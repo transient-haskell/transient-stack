@@ -41,6 +41,7 @@ import Transient.Internals
 import Transient.Logged
 import Transient.Move.Internals
 import Transient.Parse
+import Transient.JSON
 import Unsafe.Coerce
 import Data.List
 
@@ -369,13 +370,14 @@ showURL= do
            putStr "/"
            putStr $ show  closRemote
            putStr "/"
-           BS.putStr $ toLazyByteString $ toPath $ fulLog log
+           BS.putStr $ toLazyByteString $ toPath $ partLog log
            putStrLn "'"    
 
 {-
 give URL for a new session or the current session?
   new ever? current session are not given by the console
 -}
+-- | menu to show info about the endpoints available
 optionEndpoints = do
   newRState $ Endpoints M.empty
   option ("endpt" :: String) "info about a endpoint"
@@ -385,7 +387,7 @@ optionEndpoints = do
   
   let murl = M.lookup ident  endpts
   case murl of
-    Nothing ->  liftIO $ do putStr $ "there's no endpoint " ; print ident
+    Nothing ->  liftIO $ do putStr $ "No endpoint available" ; print ident
     Just req -> printURL req
   empty
   where
@@ -539,24 +541,6 @@ genSessionId = liftIO $ do
   n <- randomIO
   return $ if n < 0 then - n else n
 
-instance {-# OVERLAPPABLE #-} ToJSON a => Show a where
-  show = BS.unpack . toLazyByteString . serializeToJSON . toJSON
-
-instance FromJSON a => Read a where
-  readsPrec _ _ = error "not implemented read for FromJSON class"
-
-instance {-# OVERLAPPABLE #-} (Typeable a, ToJSON a, FromJSON a) => Loggable a where
-  serialize = serializeToJSON
-  deserialize = deserializeJSON
-
-newtype AsJSON a= AsJSON a
-
--- | to force JSON deserialization
-instance FromJSON a => FromJSON  (AsJSON a) where
-   parseJSON val= AsJSON <$> parseJSON val
-
-instance ToJSON a => ToJSON (AsJSON a) where
-  toJSON (AsJSON x)= toJSON x
 
 class  Typeable a => ToHTTPReq a where
   toHTTPReq :: a -> TransIO HTTPReq
@@ -741,46 +725,6 @@ instance  {-# OVERLAPPING #-} (Default a, ToJSON a, Typeable a) => ToHTTPReq (PO
 
 
 -------------------------------  RAW HTTP client ---------------
-
-serializeToJSON :: ToJSON a => a -> Builder
-serializeToJSON = lazyByteString . encode
-
-deserializeJSON :: FromJSON a => TransIO a
-deserializeJSON = do
-  modify $ \s -> s{execMode=Serial}
-  -- tr ("BEFOFE DECODE")
-  s <- jsElem
-  tr ("decode", s)
-
-  case eitherDecode s of
-    Right x -> return x
-    Left err -> empty
-  
-jsElem :: TransIO BS.ByteString -- just delimites the json string, do not parse it
-jsElem = dropSpaces >> ( jsonObject <|> array <|> atom)
-    where
-    atom = elemString
-
-    array =   try emptyList <|> (brackets $ return "[" <> jsElem <>  ( chainMany mappend (comma <>jsElem)) ) <> return "]"
-
-    emptyList= string "[" <> (dropSpaces >> string "]")
-
-    jsonObject = try emptyObject <|> (braces $ return "{" <> field  <>  (chainMany mappend (comma <> field)) ) <> return "}"
-
-    emptyObject= string "{" <> (dropSpaces >> string "}")
-
-    field =
-      dropSpaces >> string "\"" <> tTakeWhile (/= '\"') <> string "\""
-        <> (dropSpaces >> string ":" <> (dropSpaces >> jsElem))
-
-    elemString = do
-      dropSpaces
-      (string "\"" <> tTakeWhile ( /= '\"' ) <> string "\"" )  <|>
-         tTakeWhile (\c -> c /= '}' && c /= ']' && c /= ',' && c /= '/' && c /= ' ')
-
-instance {-# OVERLAPPING #-} Loggable Value where
-  serialize = serializeToJSON
-  deserialize = deserializeJSON
 
 
 
