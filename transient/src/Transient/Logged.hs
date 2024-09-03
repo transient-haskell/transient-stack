@@ -37,6 +37,8 @@ import Transient.Internals
 
 import Transient.Indeterminism(choose)
 import Transient.Parse
+import Transient.Loggable
+
 import Control.Applicative
 import Control.Monad.State
 import System.Directory
@@ -57,206 +59,6 @@ u= unsafePerformIO
 exec=  LD [LX mempty] --byteString "e/"
 wait=   byteString "w/"
 
-class (Show a, Read a,Typeable a) => Loggable a where
-    serialize :: a -> Builder
-    serialize = byteString . BSS.pack . show
-
-    deserializePure :: BS.ByteString -> Maybe(a, BS.ByteString)
-    
-    deserializePure s' = r
-      where
-      (s,rest)=  span1  s' -- to avoid packing/unpacking the entire string
-      r= case readsErr $ BS.unpack s   of -- `traceShow` ("deserialize",typeOf $ typeOf1 r,s) of
-              []           -> Nothing  -- !> "Nothing"
-              (r,rest'): _ -> return (r,  BS.pack rest' <> rest)
-
-      {-# INLINE readsErr #-}
-      readsErr s=unsafePerformIO $  return (reads s) `catch`\(e :: SomeException) ->  return []
-      
-      span1 s
-       |BS.null s= (mempty,mempty)
-       |otherwise=
-        let (r,rest)=  BS.span (\c-> c /='/' && c /='\"') s -- to avoid packing/unpacking the entire string
-        in if BS.head rest== '\"'
-            then
-                     let (r',rest') = BS.span ( /='\"') $ BS.tail rest
-                         (r'',rest'')= span1 $ BS.tail rest'
-                         res= (r<> "\"" <> r' <> "\"" <> r'', rest'')
-                     in  res
-            else     (r,rest)
-    {-
-    deserializePure s = r
-      where
-      -- hideously inefficient
-      r= case readsErr $ BS.unpack s   of -- `traceShow` ("deserialize",typeOf $ typeOf1 r,s) of
-           []       -> Nothing  -- !> "Nothing"
-           (r,t): _ -> return (r, BS.pack t)
-      {-# INLINE readsErr #-}
-      readsErr s=unsafePerformIO $ return(reads s) `catch`\(e :: SomeException) ->  return []
-    -}
-
-    deserialize ::  TransIO a
-    deserialize = x
-       where
-       x=  withGetParseString $ \s -> case deserializePure s of
-                    Nothing ->   empty
-                    Just x -> return x
-
-
--- instance Show Builder where
---  show b= show $ toLazyByteString b
-
-
-
-
-instance Loggable a => Loggable (StreamData a) where
-    serialize (SMore x)= byteString "SMore/" <> serialize x
-    serialize (SLast x)= byteString "SLast/" <> serialize x
-    serialize SDone= byteString "SDone"
-    serialize (SError e)= byteString "SError/" <> serialize e
-
-    deserialize = smore <|> slast <|> sdone <|> serror
-     where
-     smore = symbol "SMore/" >> (SMore <$> deserialize)
-     slast = symbol "SLast/"  >> (SLast <$> deserialize)
-     sdone = symbol "SDone"  >> return SDone
-     serror= symbol "SError/" >> (SError <$> deserialize)
-
-instance Loggable ()  where
-  serialize _=  "u"
-  deserialize= tChar 'u' >> return ()
-
-instance Loggable Bool where
-  serialize b= if b then "t" else "f"
-  deserialize = withGetParseString $ \s -> do
-            let h= BS.head s
-                tail=  BS.tail s
-            if h== 't' then return (True,tail)  else if h== 'f' then return (False, tail) else empty
-
--- instance {-# OVERLAPPING #-} Loggable String where
-  -- serialize s= byteString $ BSS.pack s
-  -- deserialize= BS.unpack <$> tTakeWhile (/= '/')
-
-instance Loggable Int
-instance Loggable Integer
-
-
-instance   (Typeable a, Loggable a) => Loggable [a]  where
-    serialize []= byteString "[]"
-    serialize (s@(x:xs))
-              | typeOf x== typeOf (undefined :: Char) = serialize $ BS.pack (unsafeCoerce s)
-              | otherwise = byteString "[" <> serialize x <> serialize' xs
-          where
-          serialize' []= byteString "]"
-          serialize' (x:xs)= byteString "," <> serialize x <>  serialize' xs
-
-    deserialize= r
-      where
-      ty :: TransIO [a] -> [a]
-      ty = undefined
-      r= if typeOf (ty r) /= typeOf (undefined :: String)
-              then tChar '[' *> commaSep deserialize <* tChar ']'
-              else  unsafeCoerce <$> BS.unpack <$> deserialize
-
-
-sspace= tChar '/' <|> (many (tChar ' ') >> return ' ')
-
-instance Loggable Char
-instance Loggable Float
-instance Loggable Double
-instance Loggable a => Loggable (Maybe a)
-
-instance (Loggable a,Loggable b) => Loggable (a,b) where
-  serialize (a,b)= serialize a <> byteString "/" <> serialize b
-  deserialize = (,) <$> deserialize <*> (sspace >>  deserialize)
-
-
-instance (Loggable a,Loggable b, Loggable c) => Loggable (a,b,c) where
-  serialize (a,b,c)=  serialize a <> byteString "/" <> serialize b <> byteString "/" <> serialize c
-  deserialize =  (,,) <$> deserialize <*> (sspace >>  deserialize) <*> (sspace >>  deserialize)
-
-instance (Loggable a,Loggable b, Loggable c,Loggable d) => Loggable (a,b,c,d) where
-  serialize (a,b,c,d)=  serialize a <> byteString "/" <> serialize b <> byteString "/" <> serialize c <> byteString "/" <> serialize d
-  deserialize =  (,,,) <$> deserialize <*> (sspace >>  deserialize) <*> (sspace >>  deserialize) <*> (sspace >>  deserialize)
-
-instance (Loggable a,Loggable b, Loggable c,Loggable d,Loggable e) => Loggable (a,b,c,d,e) where
-  serialize (a,b,c,d,e)=  serialize a <> byteString "/" <> serialize b <> byteString "/" <> serialize c <> byteString "/" <> serialize d <> byteString "/" <> serialize e
-  deserialize =  (,,,,) <$> deserialize <*> (sspace >>  deserialize) <*> (sspace >>  deserialize) <*> (sspace >>  deserialize) <*> (sspace >>  deserialize)
-
-instance (Loggable a,Loggable b, Loggable c,Loggable d,Loggable e,Loggable f) => Loggable (a,b,c,d,e,f) where
-  serialize (a,b,c,d,e,f)=  serialize a <> byteString "/" <> serialize b <> byteString "/" <> serialize c <> byteString "/" <> serialize d <> byteString "/" <> serialize e <> byteString "/" <> serialize f
-  deserialize =  (,,,,,) <$> deserialize <*> (sspace >>  deserialize) <*> (sspace >>  deserialize) <*> (sspace >>  deserialize) <*> (sspace >>  deserialize) <*> (sspace >>  deserialize)
-
-instance (Loggable a,Loggable b, Loggable c,Loggable d,Loggable e,Loggable f,Loggable g) => Loggable (a,b,c,d,e,f,g) where
-  serialize (a,b,c,d,e,f,g)=  serialize a <> byteString "/" <> serialize b <> byteString "/" <> serialize c <> byteString "/" <> serialize d <> byteString "/" <> serialize e <> byteString "/" <> serialize f <> byteString "/" <> serialize g
-  deserialize =  (,,,,,,) <$> deserialize <*> (sspace >>  deserialize) <*> (sspace >>  deserialize) <*> (sspace >>  deserialize) <*> (sspace >>  deserialize) <*> (sspace >>  deserialize) <*> (sspace >>  deserialize)
-
-instance (Loggable a,Loggable b, Loggable c,Loggable d,Loggable e,Loggable f,Loggable g,Loggable h) => Loggable (a,b,c,d,e,f,g,h) where
-  serialize (a,b,c,d,e,f,g,h)=  serialize a <> byteString "/" <> serialize b <> byteString "/" <> serialize c <> byteString "/" <> serialize d <> byteString "/" <> serialize e <> byteString "/" <> serialize f <> byteString "/" <> serialize g <> byteString "/" <> serialize h
-  deserialize =  (,,,,,,,) <$> deserialize <*> (sspace >>  deserialize) <*> (sspace >>  deserialize) <*> (sspace >>  deserialize) <*> (sspace >>  deserialize) <*> (sspace >>  deserialize) <*> (sspace >>  deserialize) <*> (sspace >>  deserialize)
-
-instance (Loggable a,Loggable b, Loggable c,Loggable d,Loggable e,Loggable f,Loggable g,Loggable h,Loggable i) => Loggable (a,b,c,d,e,f,g,h,i) where
-  serialize (a,b,c,d,e,f,g,h,i)=  serialize a <> byteString "/" <> serialize b <> byteString "/" <> serialize c <> byteString "/" <> serialize d <> byteString "/" <> serialize e <> byteString "/" <> serialize f <> byteString "/" <> serialize g <> byteString "/" <> serialize h <> byteString "/" <> serialize i
-  deserialize =  (,,,,,,,,) <$> deserialize <*> (sspace >>  deserialize) <*> (sspace >>  deserialize) <*> (sspace >>  deserialize) <*> (sspace >>  deserialize) <*> (sspace >>  deserialize) <*> (sspace >>  deserialize) <*> (sspace >>  deserialize) <*> (sspace >>  deserialize)
-
-
-
-instance (Loggable a, Loggable b) => Loggable (Either a b)
--- #ifdef ghcjs_HOST_OS
-
-
--- intDec i= Builder $ \s -> pack (show i) <> s
--- int64Dec i=  Builder $ \s -> pack (show i) <> s
-
--- #endif
-instance (Loggable k, Ord k, Loggable a) => Loggable (M.Map k a)  where
-  serialize v= intDec (M.size v) <> M.foldlWithKey' (\s k x ->  s <> "/" <> serialize k <> "/" <> serialize x ) mempty v
-  deserialize= do
-      len <- int
-      list <- replicateM len $
-                 (,) <$> (tChar '/' *> deserialize)
-                     <*> (tChar '/' *> deserialize)
-      return $ M.fromList list
-
-dupSlash s= BS.foldl dupCharSlash (lazyByteString "") s where
-  dupCharSlash s '/'=  (s <> lazyByteString "//") !> "slash"
-  dupCharSlash s c= s <> lazyByteString (BS.singleton c) !> c
-
-undupSlash = do
-    s <- tTakeUntil $ \s -> BS.head s == '/'
-    do string "//"
-       return s <> "/" <> undupSlash
-     <|> return s 
-
-instance Loggable BS.ByteString where
-        serialize str =   dupSlash str !> "serialize bytestring"
-        deserialize= undupSlash
-          --  (do
-          --   -- for strings between quotes
-          --   tChar '"'
-          --   r<- tTakeUntil (\s ->  BS.head s /= '\\' && BS.head (BS.tail s) =='"') <> tTake 1
-          --   anyChar
-          --   return r )
-
-          -- <|> tTakeUntil (\s -> let c= BS.head s in c == '/') -- || c==' ')  -- problems wih "inputParse deserialize" in Web.h?
-
-
-
-instance Loggable BSS.ByteString where
-        serialize str = serialize $ BS.fromStrict  str
-        deserialize   = deserialize >>= return . BS.toStrict
-
-instance Loggable SomeException
-
-newtype Raw= Raw BS.ByteString deriving (Read,Show)
-instance Loggable Raw where
-  serialize (Raw str)= lazyByteString str
-  deserialize= Raw <$> do
-        s <- notParsed
-        BS.length s `seq` return s  --force the read till the end 
-
--- data Recover= False | True {-  Restore -} deriving (Show,Eq)
--- recover log= let r =recover log in r== True    --   ||  r== Restore
 
 
 
@@ -550,7 +352,7 @@ substwait (ld@(LD ldelm)) build = case  substwait1 ld build of -- fromJust $ sub
 
 --          log <-  liftIO $ BS.readFile (logs++file)
 --          -- 
---          setData Log{recover= True,fulLog= LD[LE $ lazyByteString log], hashClosure= 0}
+--          setData Log{recover= True,partLog= LD[LE $ lazyByteString log], hashClosure= 0}
 --          setParseString log
 --          when delete $ liftIO $ remove $ logs ++ file
 --          proc
@@ -572,7 +374,7 @@ substwait (ld@(LD ldelm)) build = case  substwait1 ld build of -- fromJust $ sub
 -- suspend  x= do
 --    log <- getLog
 --    if (recover log) then return x else do
---         logAll  $ fulLog log
+--         logAll  $ partLog log
 --         exit x
 
 
@@ -582,7 +384,7 @@ substwait (ld@(LD ldelm)) build = case  substwait1 ld build of -- fromJust $ sub
 -- checkpoint :: TransIO ()
 -- checkpoint = do
 --    log <- getLog
---    if (recover log) then return () else logAll  $ fulLog log
+--    if (recover log) then return () else logAll  $ partLog log
 
 -- logAll :: LogData -> TransIO ()
 -- logAll log= liftIO $do
@@ -606,10 +408,7 @@ substwait (ld@(LD ldelm)) build = case  substwait1 ld build of -- fromJust $ sub
 
 -- #endif
 
-getLog :: TransMonad m =>  m Log
-getLog= getData `onNothing` return emptyLog
 
-emptyLog= Log False  (LD [])  0
 
 -- emptyLogData= let ld=(LogDataChain (LE mempty) (u $ newIORef Nothing)) in LD ld (u $ newIORef ld)
 
@@ -652,9 +451,9 @@ logged mx = do
 
     -- if typeOf res == typeOf () then  (if recover log then return (unsafeCoerce ()) else unsafeCoerce mx)
     --   else do
-        -- tr ("BUILD inicio", toPath $ fulLog log)
+        -- tr ("BUILD inicio", toPath $ partLog log)
 
-        let full= fulLog log
+        let full= partLog log
         rest <- getParseBuffer -- giveParseString
         -- ttr "after getparsebuffer"
         -- ttr ("parsebuffer", if BS.null rest then "NULL" else  BS.take 2 rest )
@@ -668,14 +467,14 @@ logged mx = do
     type1 = undefined
     process rest full log= do
 
-        -- tr ("process, recover",  recover log,fulLog log)
+        -- tr ("process, recover",  recover log,partLog log)
 
         let fullexec=   full <> exec
 
-        setData log{fulLog= fullexec, hashClosure= hashClosure log + hashDone}
+        setData log{partLog= fullexec, hashClosure= hashClosure log + hashDone}
         r <-(if not $ BS.null rest
                then do  recoverIt
-               else do   mx)  <** modifyData' (\log ->  log{fulLog=fulLog log <<- wait,hashClosure=hashClosure log + hashWait}) emptyLog
+               else do   mx)  <** modifyData' (\log ->  log{partLog=partLog log <<- wait,hashClosure=hashClosure log + hashWait}) emptyLog
 
                             -- when   p1 <|> p2, to avoid the re-execution of p1 at the
                             -- recovery when p1 is asynchronous or  empty
@@ -689,12 +488,12 @@ logged mx = do
         -- tr ("RECOVERAFTER",recover log,recover log')
 
         if BS.null rest && recoverAfter ==True  then do
-            -- tr ("SUBLAST", "fulLog log'",fulLog log', "add", add,"sublast",substwait(fulLog log')  add)
-            setData $ Log{recover=False,fulLog= substwait (fulLog log')  add, hashClosure=hashClosure log + hashExec}
+            -- tr ("SUBLAST", "partLog log'",partLog log', "add", add,"sublast",substwait(partLog log')  add)
+            setData $ Log{recover=False,partLog= substwait (partLog log')  add, hashClosure=hashClosure log + hashExec}
 
         else  do
             -- tr ("ADDLOG", "fulexec",fullexec,fullexec <<- add)  
-            setData $ Log{recover=True, fulLog= fullexec <<- add, hashClosure= hashClosure log +hashExec}
+            setData $ Log{recover=True, partLog= fullexec <<- add, hashClosure= hashClosure log +hashExec}
 
 
         return r
