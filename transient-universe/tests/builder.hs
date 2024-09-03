@@ -5,6 +5,7 @@
 {-# LANGUAGE OverloadedStrings,DeriveDataTypeable, FlexibleContexts, ScopedTypeVariables #-}
 import Transient.Internals
 import Transient.Logged hiding (exec)
+import Transient.Console
 import Transient.Move.Internals 
 import Transient.Move.Services
 import Transient.Parse
@@ -24,8 +25,6 @@ import qualified Data.Map as M
 import Control.Concurrent
 --import System.ByteOrder
 --import System.IO.Unsafe
-up = BS.unpack
-pk = BS.pack
 
 {-
 ideas: compile info in central node?
@@ -49,13 +48,10 @@ packageFinder mod=do
         packages <- findPackages mod
         setRState $ PackData $ list ++[(mod,packages)]
 -}
-backtrack :: Monad m => m a
-backtrack= return (error "backtrack should be used only in exceptions or backtracking")
 
-solver= do
-    return  []
-        `onException'`  
-           \(CompilationErrors errs)-> do 
+solver= return  [] `onException'`  solveErrors <> solver
+    where
+    solveErrors (CompilationErrors errs) = do 
 
                 case errs of
                  [] -> empty
@@ -97,20 +93,20 @@ solver= do
 
                                     tr ("EXC******************",packages !! (n-1), BS.takeWhile (/='/')mod')
 
-                                    if packages !! (n-1) /= BS.takeWhile (/='/')mod' then backtrack else do
+                                    if packages !! (n-1) /= BS.takeWhile (/='/') mod' then backtrack else do
                                         continue
                                         guard (n < length packages)<|> error ("exhausted modules for: " ++ up mod)
 
                                         setRState $ n +1
                                         return $ packages !! n
     
-                    (maybeLoadPackage mod pk) <> solver :: TransIO [BS.ByteString]
+                    (maybeLoadPackage mod pk) -- <> solver :: TransIO [BS.ByteString]
 
 
     
-guardNotSolved= do
-    Solved tf <- getRState <|> error "solved"
-    guard $ not tf
+-- guardNotSolved= do
+--     Solved tf <- getRState <|> error "solved"
+--     guard $ not tf
 
 type Dir= BS.ByteString
 
@@ -219,34 +215,24 @@ main4= keep' $ do
                         \    Expected: ‘Data.Time.Clock.Internal.SystemTime’" 
     liftIO $ print r
 -}
-main3= keep' $ do
-    r <- withParseStream (return $ SMore "4\r\n\
-                \Wiki\r\n\
-                \5\r\n\
-                \pedia\r\n\
-                \E\r\n\
-                \ in\r\n\
-                \\r\n\
-                \chunks.\r\n\
-                \0\r\n\
-                \\r\n"
-                {-
-                \4\r\n\
-                \Wika\r\n\
-                \5\r\n\
-                \pedia\r\n\
-                \E\r\n\
-                \ in\r\n\
-                \\r\n\
-                \chunks.\r\n\
-                \0\r\n\
-                \\r\n" -})$  do
-                    r <-(dechunk |- many parseString)
-                    -- tDropUntilToken "\r\n"
-                    -- r2 <-  (dechunk |- many parseString)
-                    -- return  (r,r2)
-                    return r
-    liftIO $ print r
+-- main3= keep' $ do
+--     r <- withParseStream (return $ SMore "4\r\n\
+--                 \Wiki\r\n\
+--                 \5\r\n\
+--                 \pedia\r\n\
+--                 \E\r\n\
+--                 \ in\r\n\
+--                 \\r\n\
+--                 \chunks.\r\n\
+--                 \0\r\n\
+--                 \\r\n"
+    --             )$  do
+    --                 r <-(dechunk |- many parseString)
+    --                 -- tDropUntilToken "\r\n"
+    --                 -- r2 <-  (dechunk |- many parseString)
+    --                 -- return  (r,r2)
+    --                 return r
+    -- liftIO $ print r
 
 {-
 
@@ -303,16 +289,15 @@ main5= keep $ do
 
 
 
-main6= keep' $ do
-    f <- liftIO $ BS.readFile "sal"
-    r <- searchErr f
-    liftIO $ print r
+-- main6= keep' $ do
+--     f <- liftIO $ BS.readFile "sal"
+--     r <- searchErr f
+--     liftIO $ print r
 
 
 main= keep $ do
     option ("compile" :: String) "compile"
     file    <- input  (const  True) "file to compile: " 
-    ths     <- input' (Just 0) (const  True) "Number of jobs? (1) " ::  TransIO Int
     options <- input' (Just "") (const True) "compilation options? "
     liftIO $ print options
     setState $ Options (words options )
@@ -320,9 +305,9 @@ main= keep $ do
     build file 
 
 
+
 data CompilationError=  Module BS.ByteString | CompError BS.ByteString Int Int | CabalError BS.ByteString Int Int deriving (Show)
 
---newtype CompilationErrors= CompilationErrors [Either BS.ByteString (BS.ByteString,Int,Int)] deriving (Show)
 newtype CompilationErrors= CompilationErrors[CompilationError] deriving Show
 instance Exception CompilationErrors
 
@@ -528,12 +513,13 @@ searchHackage mod= do
     where
 
 
-    hackage= [("service","hackage"),("type","HTTP")
+    hackage= Service $ M.fromList
+            [("service","hackage"),("type","HTTP")
             ,("nodehost","hackage.haskell.org")
             ,("nodeport","80")
             ,("HTTPstr","GET /packages/search?terms=$1+$2 HTTP/1.1\r\nHost: $hostnode\r\n\r\n")]
 
-hackageVersions=
+hackageVersions= Service $ M.fromList
             [("service","hackageVersions"),("type","HTTP")
             ,("nodehost","hackage.haskell.org")
             ,("nodeport","80")
@@ -548,7 +534,8 @@ hackageVersions=
 
 callGoogle :: BS.ByteString -> TransIO Pack
 callGoogle mod= runCloud $ callService google mod
-google= [("service","google"),("type","HTTP")
+google= Service $ M.fromList
+        [("service","google"),("type","HTTP")
         ,("nodehost","www.google.com")
         ,("nodeport","80")
         ,("HTTPstr","GET /search?q=+$1+site:hackage.haskell.org HTTP/1.1\r\nHost: $hostnode\r\n\r\n" )]
@@ -601,7 +588,7 @@ newtype Pack= Pack [BS.ByteString] deriving (Read,Show,Typeable)
 instance Loggable Pack where
     serialize (Pack p)= undefined
     deserialize= do
-        Pack .reverse . sort . nub  <$>(many $ do
+      Pack .reverse . sort . nub  <$>(many $ do
         tDropUntilToken "hackage.haskell.org/package/" --"https://hackage.haskell.org/package/"
         --chainManyTill (BS.cons) anyChar (try $ tChar '&' <|> (do tChar '-' ; x <-anyChar ; guard $ isNumber x; return x)))
         r <- tTakeWhile (\c -> not (isNumber c) && c /= '&' && c /= '/') -- (\c -> c /= '/' && c/= '&' && c /= '\"')) -- (/= ' ')) -- (/=' '))
