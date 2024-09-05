@@ -109,9 +109,9 @@ rjobs = getDBRef "__Jobs"
 --
 -- >  runJobs
 -- >  n <- config "basic configuration" $ local $ do
--- >        option1 "name" "ask name" 
+-- >        input (const True) "name? "
 -- >  s <- config "advanced configuration" $ local $ do
--- >        option1 "surname" "ask surname"
+-- >        input (const True)"surname? " 
 
 -- >  localIO $ putStr "hello "; putStr s; putStr " "; putStrLn s
 --
