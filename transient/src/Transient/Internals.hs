@@ -1432,7 +1432,7 @@ syncProd x=   do
     mv <- liftIO newEmptyMVar
     do
       avoidAlternative $ anyThreads abduce
-      r <-  x
+      r <- avoidAlternative x
       liftIO (putMVar mv r)
       empty
       
