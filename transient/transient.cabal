@@ -1,5 +1,5 @@
 name: transient
-version: 0.9.0.0
+version: 0.9.0.2
 author: Alberto G. Corona
 extra-source-files:
     ChangeLog.md README.md
@@ -39,6 +39,9 @@ library
                      , mtl
                      , stm
                      , random
+                     , aeson
+                     , vector
+                     , TCache
 
 
     exposed-modules: Transient.Backtrack
