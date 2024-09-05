@@ -1,4 +1,4 @@
- {-#Language OverloadedStrings #-}
+ {-#Language OverloadedStrings, ScopedTypeVariables #-}
 
 module Transient.Loggable where
 
@@ -8,7 +8,7 @@ import qualified Data.ByteString.Lazy.Char8 as BS
 import qualified Data.ByteString.Char8 as BSS
 import Data.Typeable
 import Data.ByteString.Builder
-import Control.Exception
+import Control.Exception hiding (try)
 import qualified Data.Map as M
 import Control.Applicative
 import System.IO.Unsafe
@@ -21,16 +21,15 @@ class (Show a, Read a,Typeable a) => Loggable a where
     serialize = byteString . BSS.pack . show
 
     deserializePure :: BS.ByteString -> Maybe(a, BS.ByteString)
-    
+
     deserializePure s' = r
       where
       (s,rest)=  fragment  s' -- to avoid packing/unpacking the entire string
-      r= case readsErr $ BS.unpack s   of -- `traceShow` ("deserialize",typeOf $ typeOf1 r,s) of
-              []           -> Nothing  -- !> "Nothing"
+      r= case  readsErr $ BS.unpack s  of
+              []           -> Nothing --  !> "Nothing"
               (r,rest'): _ -> Just (r,  BS.pack rest' <> rest)
 
-      {-# INLINE readsErr #-}
-      readsErr s=unsafePerformIO $  return (reads s) `catch`\(e :: SomeException) ->  return []
+
 
 
     {-
@@ -46,20 +45,25 @@ class (Show a, Read a,Typeable a) => Loggable a where
 
     deserialize ::  TransIO a
     deserialize = x
-       where
-       x=  withGetParseString $ \s -> case deserializePure s of
+      where 
+      x=  withGetParseString $ \s -> case deserializePure s of
                     Nothing ->   empty
                     Just x -> return x
+      t1 :: TransIO a -> Maybe(a,BS.ByteString)
+      t1 x = undefined
 
-separators = "/:\t\n; "
+separators = BS.pack "/:\t\n; "
 
+{-# INLINE readsErr #-}
+readsErr :: Read a => String -> [(a,String)]
+readsErr s=unsafePerformIO $  return (reads s)  `catch`\(e :: SomeException) ->  return []
 
 -- | read a fragment of the log path until unescaped separator      
 fragment s
-       |BS.null s= (mempty,mempty)
-       |otherwise=
-        let (r,rest)=  BS.span (\c-> not (BS.elem c separators) && c /='\"') s -- to avoid packing/unpacking the entire string
-        in trace (r,rest) $ if not (BS.null rest) && BS.head rest== '\"'
+    | BS.null s= (mempty,mempty)
+    | otherwise=
+        let (r,rest)= BS.span (\c-> (not $ BS.elem c separators) && c /= '\"') s -- to avoid packing/unpacking the entire string
+        in if not (BS.null rest) && BS.head rest== '\"'
             then
                      let (r',rest') = BS.span ( /='\"') $ BS.tail rest
                          (r'',rest'')= fragment $ BS.tail rest'
@@ -121,13 +125,19 @@ instance   (Typeable a, Loggable a) => Loggable [a]  where
       r= if typeOf (ty r) /= typeOf (undefined :: String)
               then tChar '[' *> commaSep deserialize <* tChar ']' 
               else 
-                (do (Transient.Internals.try $ tChar '\"') ; unsafeCoerce <$> BS.unpack <$> deserialize) <|>
-                do
-                 str <-withGetParseString $ \s -> return $ BS.span (\c -> not $ BS.elem c separators) s
-                 return $ unsafeCoerce $ BS.unpack str
+                do 
+                  try $ tChar '\"' 
+                  withGetParseString $ \s -> case deserializePure s of
+                    Nothing -> empty
+                    Just x -> return x
+                 <|> unsafeCoerce <$> BS.unpack <$> deserialize
 
 
-sspace= tChar '/' <|> (many (tChar ' ') >> return ' ')
+sspace=  oneSeparator <* dropSpaces
+oneSeparator= withGetParseString $ \s -> 
+   if (not $ BS.null s) && BS.elem (BS.head s) separators 
+      then return (BS.head s, BS.tail s)
+      else empty
 
 instance Loggable Char
 instance Loggable Float
@@ -136,8 +146,7 @@ instance Loggable a => Loggable (Maybe a)
 
 instance (Loggable a,Loggable b) => Loggable (a,b) where
   serialize (a,b)= serialize a <> byteString "/" <> serialize b
-  deserialize = (,) <$> deserialize <*> (sspace >>  deserialize)
-
+  deserialize = (,) <$> deserialize <*> (sspace >>  deserialize) 
 
 instance (Loggable a,Loggable b, Loggable c) => Loggable (a,b,c) where
   serialize (a,b,c)=  serialize a <> byteString "/" <> serialize b <> byteString "/" <> serialize c
@@ -196,22 +205,14 @@ undupSlash = do
        return s <> "/" <> undupSlash
      <|> return s 
 
-instance Loggable BS.ByteString where
+instance Loggable BS.ByteString  where
         serialize str =   dupSlash str !> "serialize bytestring"
         deserialize= undupSlash
-          --  (do
-          --   -- for strings between quotes
-          --   tChar '"'
-          --   r<- tTakeUntil (\s ->  BS.head s /= '\\' && BS.head (BS.tail s) =='"') <> tTake 1
-          --   anyChar
-          --   return r )
-
-          -- <|> tTakeUntil (\s -> let c= BS.head s in c == '/') -- || c==' ')  -- problems wih "inputParse deserialize" in Web.h?
-
+ 
 
 
 instance Loggable BSS.ByteString where
-        serialize str = serialize $ BS.fromStrict  str
+        serialize str = serialize $ BS.fromStrict str
         deserialize   = deserialize >>= return . BS.toStrict
 
 instance Loggable SomeException
@@ -223,5 +224,3 @@ instance Loggable Raw where
         s <- notParsed
         BS.length s `seq` return s  --force the read till the end 
 
--- data Recover= False | True {-  Restore -} deriving (Show,Eq)
--- recover log= let r =recover log in r== True    --   ||  r== Restore
