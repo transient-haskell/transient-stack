@@ -39,12 +39,14 @@ import Transient.Console
 
 import Data.Typeable
 import Control.Applicative
+import Control.Exception(IOException(..))
 import System.Random
 import Data.String
 import qualified Data.ByteString.Char8                  as BC
 import qualified Data.ByteString.Lazy.Char8             as BS
 
 import System.Time
+import System.IO
 import Data.ByteString.Builder
 import qualified Data.TCache.DefaultPersistence as TC
 import Data.TCache  hiding (onNothing)
@@ -1512,9 +1514,7 @@ mconnect1 (node@(Node host port _ services)) = do
           return (conn, noParseContext)
 
     timeout t proc = do
-      -- tr "init timeout"
       r <- syncProd $ collect' 1 t proc
-      -- tr ("timeout", length r)
       case r of
         [] -> tr "TIMEOUT EMPTY" >> empty -- !> "TIMEOUT EMPTY"
         mr : _ -> case mr of
@@ -1567,8 +1567,9 @@ mconnect1 (node@(Node host port _ services)) = do
       -- tr "AFTER HNDSHAKE"
 
     connectNode2Node host port needTLS = localExceptionHandlers $ do
-      onException $ \(e :: SomeException) -> do
-            liftIO $ putStrLn $ "Connection error: Can not connect to "<> show host <> ":" <> show port
+      onException $ \(e :: IOException) -> do
+            
+            liftIO $ System.IO.hPutStrLn  stderr $ "Connection error: Can not connect to "<> show host <> ":" <> show port <> ": " <> show e
             throw  $ ConnectionError (show e) node
 
       -- tr "NODE 2 NODE"
@@ -2747,7 +2748,7 @@ setLog idConn log sessionId closr = do
   setParseString $ toLazyByteString log
   tr ("setIndexData setLog", idConn, Closure sessionId closr [],log)
 
-  modifyData' (\log -> log {recover = True}) (error "setLog no log")
+  modifyData' (\log -> log {recover = True}) emptyLog
 
   return ()
 
