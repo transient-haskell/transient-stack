@@ -221,6 +221,7 @@ initWebApp node app=  do
     conn <- defConnection
     liftIO $ writeIORef (myNode conn)  node
     setNodes  [node]
+    setState conn
     serverNode <- getWebServerNode  :: TransIO Node
     mynode     <- if isBrowserInstance
                     then  do
