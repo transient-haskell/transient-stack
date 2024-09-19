@@ -1423,15 +1423,15 @@ async io = do
 -- Network operations usually do not work well with sync at this moment, since it is difficult to determine his termination if they have 
 -- use sync1 which forces termination after the first result.
 sync :: TransIO a -> TransIO [a]
-sync x = syncProd  $ collect' 0 0 $ avoidAlternative x
+sync x = syncProd  $ collect' 0 0 x
 
 -- | to enclose collect operations avoiding alternative operations and return the result in the original thread.
 
 syncProd :: TransIO [a] -> TransIO [a]
-syncProd x=   do
+syncProd x= do
     mv <- liftIO newEmptyMVar
     do
-      avoidAlternative $ anyThreads abduce
+      anyThreads abduce
       r <- avoidAlternative x
       liftIO (putMVar mv r)
       empty
@@ -2337,10 +2337,10 @@ onException' mx f= onAnyException mx $ \e -> do
 
   where
   onAnyException :: TransIO a -> (SomeException ->TransIO a) -> TransIO a
-  onAnyException mx exc= do
-    r <- ioexp  `onBack` exc
-    threads 0 abduce -- This "magically" solves problems of exception handlers with multithreadint, and react which disables the handler after the first invocation when an exception is thrown.
-    return r
+  onAnyException mx exc=  ioexp  `onBack` exc
+    -- r <- ioexp  `onBack` exc
+    -- threads 0 abduce -- This "magically" solves problems of exception handlers with multithreadint, and react which disables the handler after the first invocation when an exception is thrown.
+    -- return r
 
   ioexp    = Transient $ do
     st <- get

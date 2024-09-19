@@ -115,8 +115,8 @@ testIt nodes = do
                   SHOULDRUNIN(n3002) 
                   r <- runAt n3003 $ do
                           SHOULDRUNIN(n3003)  
-                          runAt n3002 $ do 
-                              SHOULDRUNIN(n3002) 
+                          runAt n3004 $ do 
+                              SHOULDRUNIN(n3004) 
                               return HELLO
                           return  WORLD
                           

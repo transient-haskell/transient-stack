@@ -21,15 +21,16 @@ class (Show a, Read a,Typeable a) => Loggable a where
     serialize = byteString . BSS.pack . show
 
     deserializePure :: BS.ByteString -> Maybe(a, BS.ByteString)
-
+    
     deserializePure s' = r
       where
       (s,rest)=  fragment  s' -- to avoid packing/unpacking the entire string
-      r= case  readsErr $ BS.unpack s  of
-              []           -> Nothing --  !> "Nothing"
+      r= case readsErr $ BS.unpack s   of -- `traceShow` ("deserialize",typeOf $ typeOf1 r,s) of
+              []           -> Nothing  -- !> "Nothing"
               (r,rest'): _ -> Just (r,  BS.pack rest' <> rest)
 
-
+      {-# INLINE readsErr #-}
+      readsErr s=unsafePerformIO $  return (reads s) `catch`\(e :: SomeException) ->  return []
 
 
     {-
@@ -45,25 +46,19 @@ class (Show a, Read a,Typeable a) => Loggable a where
 
     deserialize ::  TransIO a
     deserialize = x
-      where 
-      x=  withGetParseString $ \s -> case deserializePure s of
+       where
+       x=  withGetParseString $ \s -> case deserializePure s of
                     Nothing ->   empty
                     Just x -> return x
-      t1 :: TransIO a -> Maybe(a,BS.ByteString)
-      t1 x = undefined
 
-separators = BS.pack "/:\t\n; "
 
-{-# INLINE readsErr #-}
-readsErr :: Read a => String -> [(a,String)]
-readsErr s=unsafePerformIO $  return (reads s)  `catch`\(e :: SomeException) ->  return []
 
 -- | read a fragment of the log path until unescaped separator      
 fragment s
-    | BS.null s= (mempty,mempty)
-    | otherwise=
-        let (r,rest)= BS.span (\c-> (not $ BS.elem c separators) && c /= '\"') s -- to avoid packing/unpacking the entire string
-        in if not (BS.null rest) && BS.head rest== '\"'
+       |BS.null s= (mempty,mempty)
+       |otherwise=
+        let (r,rest)=  BS.span (\c->c /='/' && c /='\"') s -- to avoid packing/unpacking the entire string
+        in trace (show("FRAGMENT",r,rest)) $ if not (BS.null rest) && BS.head rest== '\"'
             then
                      let (r',rest') = BS.span ( /='\"') $ BS.tail rest
                          (r'',rest'')= fragment $ BS.tail rest'
@@ -132,12 +127,14 @@ instance   (Typeable a, Loggable a) => Loggable [a]  where
                     Just x -> return x
                  <|> unsafeCoerce <$> BS.unpack <$> deserialize
 
+sspace= tChar '/' <|> (many (tChar ' ') >> return ' ')
 
-sspace=  oneSeparator <* dropSpaces
-oneSeparator= withGetParseString $ \s -> 
-   if (not $ BS.null s) && BS.elem (BS.head s) separators 
-      then return (BS.head s, BS.tail s)
-      else empty
+
+-- sspace=  oneSeparator <* dropSpaces
+-- oneSeparator= withGetParseString $ \s -> 
+--    if (not $ BS.null s) && (BS.head s) /= '/' 
+--       then return (BS.head s, BS.tail s)
+--       else empty
 
 instance Loggable Char
 instance Loggable Float

@@ -1,4 +1,4 @@
-{-# LANGUAGE ScopedTypeVariables,CPP #-}
+{-# LANGUAGE ScopedTypeVariables,CPP, GeneralizedNewtypeDeriving,DeriveGeneric #-}
 
 
 
@@ -194,9 +194,8 @@ inputfm remove ident message mv cond = do
                   liftIO $ when (isJust mv) $  putStrLn ""
                   returnm mv
   
-
-separatorss= BSL.unpack separators
-dropspaces s = dropWhile (\x -> elem x separatorss) s
+separators = "/:\t\n; "
+dropspaces s = dropWhile (\x -> elem x separators) s
 
 
 -- | Waits on stdin and return a value when a console input matches the
@@ -411,8 +410,10 @@ rconsumed = unsafePerformIO $ newIORef Nothing
 
 
 -- | execute a set of console commands separated by '/', ':' or space that are consumed by the console input primitives
-processLine line = liftIO $ do
-  -- tr ("LINE",line)
+processLine line' = liftIO $ do
+  let line= subst line'
+  tr ("subst",line)
+  
   mbs <- readIORef rcb
   process  mbs line
   where
@@ -669,8 +670,22 @@ execCommandLine = do
       --putStr "Executing: " >> print  path
       threadDelay 100000
       writeIORef recho True
-      processLine  path
+      processLine    path
       writeIORef recho False
+
+-- substitute one of more separators by a single '/'
+subst   s= subst1 s
+            where
+            subst2 []=[]
+            subst2  (h:t)
+                  | h== '\"' = let (s,r)= span (/= '\"') t in h : s ++  h: subst1 (tail r)
+                  | elem h separators = subst2 t        -- eliminate repeated spaces/separators
+                  | otherwise = h:subst1 t
+            subst1 []=[]
+            subst1  (h:t)
+                  | h== '\"' = let (s,r)= span (/= '\"') t in h : s ++  h: subst1 (tail r)
+                  | elem h separators = '/':subst2 t
+                  | otherwise= h: subst1 t
 
 thereIsArgPath=  do
   args <- getArgs

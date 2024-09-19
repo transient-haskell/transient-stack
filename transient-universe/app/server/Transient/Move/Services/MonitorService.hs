@@ -207,9 +207,9 @@ tryExec program host port= do
 
         networkExecuteStreamIt prog 
         -- fork $ liftIO $ callCommand  prog
-        liftIO $ threadDelay 2000000
+        -- liftIO $ threadDelay 200000
 
-        tr ("INSTALLED", program,port)
+        -- tr ("INSTALLED", program,port)
           
           
 pathExe  program host port=
@@ -301,6 +301,7 @@ networkExecuteStreamIt expr = do
       r <- liftIO $ createProcess $ (shell expr){std_in=CreatePipe,std_err=CreatePipe,std_out=CreatePipe}
       liftIO $ atomicModifyIORef rinput $ \map ->   (M.insert expr (input1 r) map,())
    
+      liftIO $ threadDelay 200000 -- to allow the process to be started
       let logfile= logFileName  expr 
 
       hlog <- liftIO $ openFile logfile WriteMode 
