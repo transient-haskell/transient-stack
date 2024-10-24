@@ -38,6 +38,10 @@ Other operators like the math operators etc are also permitted if they makes sen
 
 Transient does exactly that.
 
+![image](https://github.com/user-attachments/assets/f3dbc353-e118-4988-a679-ae4ac6bb6be8) **<>** ![image](https://github.com/user-attachments/assets/f3dbc353-e118-4988-a679-ae4ac6bb6be8) **=** ![image](https://github.com/user-attachments/assets/f3dbc353-e118-4988-a679-ae4ac6bb6be8)
+
+
+
 Besides their usual meaning of these operators for single threaded programs, the operators `<$>` `<*>` and `<>` express concurrency, the operator `<|>` express parallelism and `>>=` express sequencing of threads, distributed processes or web widgets. So even in the presence of these effects and others, everything composes.
 
 For this purpose transient is an extensible effects monad with all major effects and primitives for parallelism, events, asynchronous IO, early termination, non-determinism logging and distributed computing. Since it is possible to extend it with more effects without adding monad transformers, the composability is assured.
