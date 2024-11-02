@@ -224,7 +224,7 @@ calc=  do
 
   setCloudState rvars  M.empty
 
-  onAll $ return() `onBack` (\(e::Loop) -> runCloud  $ do localIO $ print "REMOVEVAR"; removeVar  e; local (forward Loop) )
+  onAll $ return() `onBack` (\(e::Loop) -> unCloud  $ do localIO $ print "REMOVEVAR"; removeVar  e; local (forward Loop) )
   exprs <- getCloudState rexprs <|> error "no exprs"
   onAll $ liftIO $ print "setCloudState rtries"
 

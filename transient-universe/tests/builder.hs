@@ -195,12 +195,12 @@ main2= keep $ do
     -- liftIO $ print r
 
     setState ("Transient.Internals" :: BS.ByteString)
-    -- r <- runCloud . callService hackageVersions $ up "transient-universe" :: TransIO Vers
+    -- r <- unCloud . callService hackageVersions $ up "transient-universe" :: TransIO Vers
     -- liftIO $ print ("hacageversion", r )
-    -- r <- runCloud . callService hackageVersions $ up "transient" :: TransIO Vers
+    -- r <- unCloud . callService hackageVersions $ up "transient" :: TransIO Vers
     -- liftIO $ print ("hacageversion2", r)
 
-    r <- mapM (runCloud . callService hackageVersions . up)["transient-universe", "transient"]
+    r <- mapM (unCloud . callService hackageVersions . up)["transient-universe", "transient"]
     liftIO $ print ("hacageversion2", r ::[Vers])
 
 newtype HTML= HTML BS.ByteString deriving (Show, Read)
@@ -347,7 +347,7 @@ findPackages mod= do
         Pack packages <- callGoogle mod
         liftIO $ print ("callGoogle=",packages,mod)
         setState mod
-        packs <-runCloud $ mapM (callService' hackageVersions . up )  $ packages :: TransIO [Vers]
+        packs <-unCloud $ mapM (callService' hackageVersions . up )  $ packages :: TransIO [Vers]
         
         r <- return $ concatMap (\(Vers p) ->p)   packs
         liftIO $ print ("findPackages=",r) 
@@ -505,11 +505,11 @@ searchErr ers= catMaybes <$> do
 searchHackage :: BS.ByteString -> TransIO Vers
 searchHackage mod= do
         let (p1,p2)=  BS.span  (/= '.') mod
-        HPack packages <- runCloud $ callService hackage $ (up p1, up p2)
+        HPack packages <- unCloud $ callService hackage $ (up p1, up p2)
         liftIO $ putStr "package: " >> print  packages
         setState mod
         guard (not $ null packages) <|> error "no packages found"
-        runCloud $ callService hackageVersions $ up $ head packages :: TransIO Vers
+        unCloud $ callService hackageVersions $ up $ head packages :: TransIO Vers
     where
 
 
@@ -533,7 +533,7 @@ hackageVersions= Service $ M.fromList
     --     Just x -> return x
 
 callGoogle :: BS.ByteString -> TransIO Pack
-callGoogle mod= runCloud $ callService google mod
+callGoogle mod= unCloud $ callService google mod
 google= Service $ M.fromList
         [("service","google"),("type","HTTP")
         ,("nodehost","www.google.com")

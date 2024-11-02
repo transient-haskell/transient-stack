@@ -15,9 +15,10 @@ import Data.TCache as TC
 import Data.TCache.DefaultPersistence as TC
 import Transient.Internals
 import Transient.Indeterminism
+import Transient.Move.Defs
 import Transient.Move.Internals
 import  qualified Transient.Move.Services  as Services
-import Transient.Logged
+import Transient.Loggable
 import Transient.Parse
 import qualified Data.Map as M
 import Transient.Console
@@ -86,7 +87,7 @@ ipnsKeyGen  = ipfsHeader "POST /api/v0/key/gen?arg=$1" ""
 ipnsPublish = ipfsHeader "POST /api/v0/name/publish?arg=$1&key=$2" ""
 
 
-callService s p= runCloud $ Services.callService s p
+callService s p= unCloud $ Services.callService s p
 
 jsonFilter field (Raw reg)= withParseString reg $ filt field reg
   where

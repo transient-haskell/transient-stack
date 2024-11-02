@@ -26,7 +26,7 @@ import qualified Data.Vector as V
 -- Distributed Data Sets (DDS's)  similar to spark Resilient Data Sets
 main= do
      let numNodes = 3
-     r<- keep' . runCloud $ do
+     r<- keep' . unCloud $ do
               runTestNodes [2000 .. 2000 + numNodes - 1]
 
 

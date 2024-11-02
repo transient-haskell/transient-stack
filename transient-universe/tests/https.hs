@@ -36,11 +36,11 @@ main=do
   initTLS
 
   keep'  $ do
-    Raw r <-runCloud $ callService getGoogleService ()
+    Raw r <-unCloud $ callService getGoogleService ()
 
     liftIO $ do putStr "100 chars of web page: "; print $ BS.take 100 r
     empty
-    Pack packages <- runCloud $ callService getGoogleSearchService ("Control.Monad.State" :: BS.ByteString) 
+    Pack packages <- unCloud $ callService getGoogleSearchService ("Control.Monad.State" :: BS.ByteString) 
 
     liftIO $ do putStr "Search results: " ; print packages
 

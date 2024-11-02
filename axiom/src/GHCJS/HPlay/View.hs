@@ -1855,7 +1855,7 @@ at' id method w= setAt id method `insert` w
     insert v comp=   Cloud . Transient $ do
           rest <- getData `onNothing` return noHtml
           delData rest
-          mx <-  runTrans  $ runCloud comp
+          mx <-  runTrans  $ unCloud comp
           f <- getData `onNothing` return noHtml
           setData $ rest <> v f
           return mx

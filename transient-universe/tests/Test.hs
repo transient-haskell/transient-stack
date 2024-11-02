@@ -20,7 +20,7 @@ import System.IO.Unsafe
 import Data.Typeable
 import Data.Map as M hiding (empty)
 import Control.Monad.State
--- main= keep $ runCloud $do
+-- main= keep $ unCloud $do
 --      n <- localIO $ createNode "localhost" 8000
 --      listen n <|> onAll abduce
      
@@ -408,7 +408,7 @@ service= Service $ M.fromList
          ,("executable", "test-transient1")
          ,("package","https://github.com/agocorona/transient-universe")]
      
-liftA1 tcomp ccomp= local $ tcomp $ runCloud ccomp
+liftA1 tcomp ccomp= local $ tcomp $ unCloud ccomp
 
 main= keep $ initNode $ inputNodes <|> do
            local $ option ("go" :: String) "go"

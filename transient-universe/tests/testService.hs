@@ -164,7 +164,7 @@ fail3requestNew=  do
          liftIO $ print ("NUMBER OF RETRIES",n)
          continue
          
-    retry6 retries (e@(CloudException node _ _))= runCloud $ do  -- this handlers run the cloud monad
+    retry6 retries (e@(CloudException node _ _))= unCloud $ do  -- this handlers run the cloud monad
          -- localIO $ print ("tried to execute in", node, "exception",e)
 
          n <- onAll $ liftIO $ atomicModifyIORef retries $ \n -> (n+1,n+1)

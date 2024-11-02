@@ -11,8 +11,11 @@ import           Transient.Base
 import           Transient.Internals
 import           Transient.Console
 import           Transient.Indeterminism
+import           Transient.Loggable
 import           Transient.Move.Internals
+import           Transient.Loggable
 import           Transient.Move.Utils
+import           Transient.Move.Defs
 import           Transient.Move.Services
 -- import           Transient.MapReduce
 import           Data.List
@@ -54,7 +57,7 @@ main= do
 
 portnumber= 8081
 
-liftA1 tcomp ccomp= local $ tcomp $ runCloud ccomp
+liftA1 tcomp ccomp= local $ tcomp $ unCloud ccomp
 
 test=  initNodeServ service  "localhost" portnumber $ do
 
@@ -77,10 +80,9 @@ interactive= do
 exitIt= onAll $ exit (Nothing  :: Maybe SomeException)
 
 batchTest= do
-          localIO $ print "batchtest"
           node0 <- local getMyNode
           local $ guard (nodePort node0== portnumber)       -- only executes locally in node "portnumber"
-          localIO $ print "REQEST"
+
           requestInstance service 3
 
 
@@ -103,16 +105,17 @@ testIt nodes = do
 
           localIO $ putStrLn "------checking  empty in remote node when the remote call back to the caller #46 --------"
 
-          -- node0 <- local getMyNode
-          -- r <- runAt' n3002 $ do
-          --       runAt' node0 $ do
-          --           localIO $ print HELLO 
-          --           return WORLD
-          -- localIO $ print r
-  
+        --   r <- runAt n3002 $ do
+        --         runAt node0 $ do
+        --             localIO $ print HELLO 
+        --             return WORLD
+        --   localIO $ print r
+        --   empty
 
           r <-  runAt n3002 $ do
+                  onAll $ tr ("node",n3002)
                   SHOULDRUNIN(n3002) 
+                  return "HELLO"
                   r <- runAt n3003 $ do
                           SHOULDRUNIN(n3003)  
                           runAt n3004 $ do 

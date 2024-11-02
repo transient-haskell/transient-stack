@@ -209,7 +209,7 @@ alternativamente, que ensaye parse de post
 -}
 
 mainsimplw= keep $ initNode $ Cloud $ restore1 <|> do
-      -- onAll $ ttr "MINPUT"
+      -- onAll $ tr "MINPUT"
       -- r <- minput "go" "go"
       -- localIO $ putStrLn r
       -- log <- getLog
@@ -308,7 +308,7 @@ maingame= keep $ initNode $ do
   myGameSequence id= do
     
     number ::String <- minput "lock" "enter a lock number"
-    local $ ttr (id :: String,"locked",number)
+    local $ tr (id :: String,"locked",number)
     number' <- minput ("guess"++ id) ("guess a number for user " ++ id)  <|> addToOptions
     id' <- local $ getSessionState <|>  return "no caller state"
     localIO $ print (number, number')

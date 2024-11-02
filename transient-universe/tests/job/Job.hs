@@ -79,7 +79,7 @@ restartable  jobname job= do
        Right r -> return $ Right r
    
 catchc :: (Loggable a,Exception e) => Cloud a -> (e -> Cloud a) -> Cloud a
-catchc (Cloud c) ex= Cloud $ logged $ c `catcht` \e ->  runCloud' $ ex e 
+catchc (Cloud c) ex= Cloud $ logged $ c `catcht` \e ->  unCloud' $ ex e 
 
 
 
@@ -96,7 +96,7 @@ restore' proc = Cloud $ do
      liftIO $ createDirectory logs  `catch` (\(e :: SomeException) -> return ())
      list <- liftIO $ getDirectoryContents logs
                  `catch` (\(e::SomeException) -> return [])
-     if null list || length list== 2 then runCloud' proc else do
+     if null list || length list== 2 then unCloud' proc else do
 
          let list'= filter ((/=) '.' . head) list
          file <- choose  list'
@@ -110,7 +110,7 @@ restore' proc = Cloud $ do
          setParseString log
          liftIO $ remove $ logs ++ file
 
-         runCloud' proc
+         unCloud' proc
 
      where
      remove f=  removeFile f `catch` (\(_::SomeException) -> remove f)
@@ -155,7 +155,7 @@ atConsole todo= do
 (!!>) x y = (flip trace) x (show y)   
 
 
-main1 = keep $ runCloud'  proc
+main1 = keep $ unCloud'  proc
   where
   proc= restore' $ do
       localIO $ print "main"
@@ -172,7 +172,7 @@ main1 = keep $ runCloud'  proc
      return ()
 
 
-main3=  keep $  runCloud' $ do
+main3=  keep $  unCloud' $ do
  local $ return "hello"
 
  restore' $  do 
