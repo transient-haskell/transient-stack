@@ -8,6 +8,8 @@
 {-# LANGUAGE UndecidableInstances #-}
 {-# LANGUAGE CPP, LambdaCase #-}
 
+-- All of this for the glory of God and His mother Mary
+
 #ifndef ghcjs_HOST_OS
 
 module Transient.Move.Web  (minput,moutput,public,published,showURL,ToHTTPReq(..),POSTData(..),HTTPReq(..),
@@ -38,10 +40,12 @@ import System.Random
 import System.Time
 import Transient.Console
 import Transient.Internals
-import Transient.Logged
+import Transient.Move.Logged
+import Transient.Loggable(Raw(..))
+import Transient.Move.Defs
 import Transient.Move.Internals
 import Transient.Parse
-import Transient.JSON
+import Transient.Move.JSON
 import Unsafe.Coerce
 import Data.List
 
@@ -114,7 +118,7 @@ minput ident msg' = response
           case mc of
             Nothing -> return $ Context 0 (M.empty)
             Just (Context 0 x) ->  do
-              ctx <- Context <$>  logged genSessionId <*> return x
+              ctx <- Context <$>  (unCloud $ logged genSessionId) <*> return x
               tr("CONTEXR from 0",ctx)
               setState ctx
               return ctx
@@ -177,7 +181,7 @@ minput ident msg' = response
 
                 return r
               else return $ unsafeCoerce () 
-          (_,r') <- logged $ return(idc,r)
+          (_,r') <- unCloud $ logged $ return(idc,r)
           return r'
 
     connected log ctx@(Context idcontext _) idSession conn closLocal  httpreq = do
@@ -222,7 +226,7 @@ minput ident msg' = response
                 
                 -- setData log{recover=True}
                 (string "e/" >> string "e/") <|> return "e/"
-                logged $  liftIO $ do error "insuficient parameters 1"; empty -- read the response
+                unCloud $ logged $  liftIO $ do error "insuficient parameters 1"; empty -- read the response
 
               _ -> do
                 checkComposeJSON conn
@@ -244,12 +248,12 @@ minput ident msg' = response
                 tr "after receive"
                 delState IsCommand
                 delRState InitSendSequence
-                logged $ error "not enough parameters 2" -- read the response, error if response not logged
+                unCloud $ logged $ error "not enough parameters 2" -- read the response, error if response not logged
           else do
             receive conn (Just $ BC.pack ident) idSession
             delState IsCommand
             tr ("else",ident)
-            logged $ error "insuficient parameters 3" -- read the response
+            unCloud $ logged $ error "insuficient parameters 3" -- read the response
             -- maybe another user from other context continues the program
       tr ("MINPUT RESULT",idcontext',result)
       mncontext <- recoverContext idcontext'
@@ -349,11 +353,15 @@ getEndpoints= getRState <|> return (Endpoints M.empty)
 
 -- | show the URL that may be called to access that functionality within a program 
 showURL= do 
-      --  idConn <- (idConn <$> getState) <|> return 0
-      --  log <- getLog
-      --  (Closure closRemote,_) <- getIndexData idConn `onNothing` return (Closure 0,[0]::[Int])
-       let closRemote= 0
-       --get remoteclosure
+       mprev <- getState 
+       (sess,clos) <- case mprev of
+                         Nothing -> return (0,"0")
+                         Just prev -> liftIO $ do
+                           mprevClos <- atomically $ readDBRef prev 
+                           case mprevClos of
+                            Just prevClos -> return $ (localSession prevClos,localClos prevClos)
+                            Nothing -> return (0,"0")
+
        log <- getLog --get path 
        n <- getMyNode
        liftIO $ do
@@ -362,15 +370,11 @@ showURL= do
            putStr ":"
            putStr $show $ nodePort n
            putStr "/"
-           putStr $ show 0 
+           putStr $ show clos
+           putStr "/S"
+           putStr $ show sess
            putStr "/"
-           putStr $ show 0 -- $ hashClosure log
-           putStr "/"
-           putStr $ show 0 
-           putStr "/"
-           putStr $ show  closRemote
-           putStr "/"
-           BS.putStr $ toLazyByteString $ toPath $ partLog log
+           BS.putStr $  toLazyByteString $ partLog log
            putStrLn "'"    
 
 {-
@@ -379,15 +383,16 @@ give URL for a new session or the current session?
 -}
 -- | menu to show info about the endpoints available
 optionEndpoints = do
+  Endpoints endpts <- getEndpoints
+  guard(not $ null endpts)
   newRState $ Endpoints M.empty
   option ("endpt" :: String) "info about a endpoint"
-  Endpoints endpts <- getEndpoints
   liftIO $ do putStr "endpoints available: "; print $ M.keys endpts
   ident:: BS.ByteString <- input (const True) "enter the endpoint for which you want to know the interface > "
   
   let murl = M.lookup ident  endpts
   case murl of
-    Nothing ->  liftIO $ do putStr $ "No endpoint available" ; print ident
+    Nothing ->  liftIO $ do putStr $ "No such endpoint: " ; print ident
     Just req -> printURL req
   empty
   where
@@ -782,7 +787,7 @@ rawHTTP node restmsg =res
   let hdrs = HTTPHeaders first headers
   setState hdrs
 
-  --tr ("HEADERS", first, headers)
+  -- tr ("HEADERS", first, headers)
 
   guard (BC.head code == '2')
     <|> do
@@ -795,7 +800,7 @@ rawHTTP node restmsg =res
   -- let mresult = decode r 
   --     result= fromMaybe (error $ "can not decode JSON string:" <> show(BS.unpack r) <> " to type: " <> show(typeOf (type1 res))) mresult
   
-  -- tr ("RESULT BODY",result)
+  tr ("RESULT BODY",result)
   endthings c mcon vers blocked headers
   return result
   where

@@ -50,9 +50,10 @@ runService,callService, callService',callServiceFail,serve,ping
 where 
 
 import Transient.Internals
-import Transient.Logged
+import Transient.Move.Logged
 import Transient.Parse
 import Transient.Move.Internals
+import Transient.Move.Defs
 import Transient.Move.Utils
 import Transient.Console
 import Transient.Move.Web
@@ -79,6 +80,7 @@ import Data.String
 import Data.Char
 import qualified Data.ByteString.Char8 as BSS
 import qualified Data.ByteString.Lazy.Char8 as BS
+import Data.ByteString.Builder
 import Data.Aeson
 
 #ifndef ghcjs_HOST_OS
@@ -122,7 +124,7 @@ monitorPort= 3000
 
 -- requestInstances = monitorHeader "GET /api/v0/cat?arg=$1" ""
 
--- callService  p= runCloud $ Services.callService monitorHeader p
+-- callService  p= unCloud $ Services.callService monitorHeader p
 
 #ifndef ghcjs_HOST_OS
 
@@ -185,7 +187,7 @@ requestInstance service num=  loggedc $ do
        tr ("ENCODE",encode ("",service, num ))
 
        AsJSON nodes <- callService  monitorService $ encode ("",service, num )
-      --  onAll $ ttr ("RESP",nodes)
+      --  onAll $ tr ("RESP",nodes)
        local $ addNodes nodes                                                       -- !> ("ADDNODES",service)
        return nodes
        
@@ -217,22 +219,23 @@ requestInstanceFail node num=  loggedc $ do
 
 rmonitor= unsafePerformIO $ newMVar ()  -- to avoid races starting the monitor
 startMonitor :: TransIO () 
-startMonitor = ( liftIO $ do
+startMonitor = liftIO $ do
     -- return () !> "START MONITOR"
     b <- tryTakeMVar rmonitor
     when (b== Just()) $ do
 
         r <- findExecutable "monitorService"
-        when ( r == Nothing) $ error "monitor not found"
-        (_,_,_,h) <- createProcess $ (shell $ "monitorService -p start/localhost/"++ show monitorPort ++ " > monitor.log 2>&1"){std_in=NoStream}
+        if ( r == Nothing) 
+          then do
+                  liftIO $ putStrLn "'monitorService' binary should be in some folder included in the $PATH variable. Computation aborted"
+                  empty
+          else do
+                  (_,_,_,h) <- createProcess $ (shell $ "monitorService -p start/localhost/"++ show monitorPort ++ " > monitor.log 2>&1"){std_in=NoStream}
 
-        writeIORef monitorHandle $ Just h
-        putMVar rmonitor ()
+                  writeIORef monitorHandle $ Just h
+                  putMVar rmonitor ()
 
-    threadDelay 2000000) 
-  `catcht` \(e :: SomeException) -> do
-        liftIO $ putStrLn "'monitorService' binary should be in some folder included in the $PATH variable. Computation aborted"
-        empty
+
         
 monitorHandle= unsafePerformIO $ newIORef Nothing
 
@@ -345,7 +348,7 @@ runEmbeddedService servname serv =  do
    listen node
    wormhole' (notused 4) $ loggedc $ do
       x <- local $ return (notused 0)
-      r <- onAll $ runCloud (serv x) <** modify (\s -> s{execMode= Remote}) --setData Remote
+      r <- onAll $ unCloud (serv x) <** modify (\s -> s{execMode= Remote}) --setData Remote
       local $ return r
       teleport
       return r
@@ -438,17 +441,17 @@ callService' node params =  loggedc $ do
           svs <- liftIO $ readIORef selfServices
           
           modifyData' (\log -> log{recover=True}) $ error "No log????"
-          withParseString (toLazyByteString $ serialize params <> byteString (BSS.pack "/")) $ runCloud svs
+          withParseString (toLazyByteString $ serialize params <> byteString (BSS.pack "/")) $ unCloud svs
           modifyData' (\log -> log{recover=True}) $ error "No log????"
           -- log <- getState
           -- setParseString $ toLazyByteString $ buildLog log -- ??? to test
-          r <- logged empty
+          r <- unCloud $ logged empty
           
           return r   
 
       else do
 
-          log <- Transient.Logged.getLog    -- test
+          log <- Transient.Internals.getLog    -- test
           setData emptyLog
           local $ return ()       
 
@@ -506,7 +509,7 @@ inputAuthorizations= empty
 
 
 catchc :: Exception e => Cloud a -> (e -> Cloud a) -> Cloud a
-catchc a b= Cloud $ catcht (runCloud a) (\e -> runCloud $ b e)
+catchc a b= Cloud $ catcht (unCloud a) (\e -> unCloud $ b e)
 
 
 selfServices= unsafePerformIO $ newIORef empty
@@ -523,7 +526,7 @@ notused n= error $  "runService: "  ++ show (n :: Int) ++ " variable should not 
 -- every service incorporates a ping service and a error service. The later invoqued when the parameter received
 -- do not match with any of the endpoints implemented.
 runService :: Loggable a => Service -> Int -> [Cloud ()] -> Cloud a  -> TransIO ()
-runService servDesc defPort servs proc= runCloud $
+runService servDesc defPort servs proc= unCloud $
    runService' servDesc defPort servAll  proc
    where 
    servAll :: Cloud ()
@@ -680,7 +683,6 @@ serve  serv= do
 
 -- callHTTPService :: (Subst1 a String, fromJSON b) =>  Node -> String -> a -> Cloud ( BS.ByteString)
 callHTTPService node service vars=  onAll $ do
-  tr ("callHTTPService",vars)
   newVar "hostnode"  $ nodeHost node
   newVar "hostport"  $ nodePort node
 

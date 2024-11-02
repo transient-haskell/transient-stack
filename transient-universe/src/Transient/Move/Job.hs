@@ -14,8 +14,9 @@
 module Transient.Move.Job(job, config, runJobs) where
 import Transient.Internals
 import Transient.Move.Internals
+import Transient.Move.Defs
 import Transient.Indeterminism
-import Transient.Logged
+import Transient.Move.Logged
 import qualified Data.ByteString.Char8 as BC
 import Control.Monad.IO.Class
 import Data.TCache hiding (onNothing)
@@ -85,7 +86,7 @@ job mx = do
        onFinish  $ \_ -> remove this 
        -- alabado sea Jesucristo
        abduce
-       runCloud mx
+       unCloud mx
   
   return rs
 
@@ -155,12 +156,12 @@ config name mx = do
        remove this 
        -- alabado sea Jesucristo
        liftIO $ syncCache
-       runCloud mx
+       unCloud mx
   
   return rs
 
 runJobs= local $ fork $ do
     Jobs  pending <-liftIO $ atomically $ readDBRef rjobs `onNothing` return (Jobs  [])
-    liftIO $ print ("runJobs",pending )
+    -- tr ("runJobs",pending )
     (id,clos) <- choose pending
-    noTrans $  restoreClosure id clos
+    noTrans $  restoreClosure id $ BC.unpack clos

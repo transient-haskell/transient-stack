@@ -70,8 +70,11 @@ library
     exposed-modules:
         Transient.Move
         Transient.MapReduce
+        Transient.Move.Defs
         Transient.Move.Internals
+        Transient.Move.Logged
         Transient.Move.Utils
+        Transient.Move.JSON
         Transient.Move.Web
         Transient.Move.Services
         Transient.Move.IPFS

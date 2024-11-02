@@ -14,7 +14,7 @@ synopsis: composing programs with multithreading, events and distributed computi
 description: See <http://github.com/agocorona/transient>
              Distributed primitives are in the transient-universe package. Web primitives are in the axiom package.
 category: Control, Concurrency
-data-dir: ""
+
 
 flag debug
   description:  Enable debugging outputs
@@ -42,6 +42,7 @@ library
                      , aeson
                      , vector
                      , TCache
+                     , aeson 
 
 
     exposed-modules: Transient.Backtrack
@@ -50,11 +51,9 @@ library
                      Transient.Mailboxes
                      Transient.Indeterminism
                      Transient.Internals
-                     Transient.Logged
                      Transient.Parse
                      Transient.Console
                      Transient.Loggable
-                     Transient.JSON
 
 
 
@@ -98,27 +97,3 @@ test-suite test-transient
     hs-source-dirs: tests src .
     ghc-options: -O0 
 
-
-executable Test
-        build-depends:
-            containers,
-            transformers -any,
-            transient >= 0.8.0.0,
-            process >= 1.6.4.0,
-            directory,
-            bytestring, 
-            aeson,
-            time,
-            mtl,
-            vector,
-            random,
-            old-time,
-            hspec-core,
-            data-default
-
-            
-        hs-source-dirs: tests
-        main-is: Test.hs
-    
-        build-depends:
-            base >4 && <5

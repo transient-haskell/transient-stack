@@ -8,7 +8,7 @@
 {-# LANGUAGE UndecidableInstances #-}
 {-# LANGUAGE CPP, LambdaCase #-}
 
-module Transient.JSON where
+module Transient.Move.JSON where
 
 import Transient.Internals
 import Transient.Loggable
@@ -71,14 +71,14 @@ instance {-# OVERLAPPABLE #-} ToJSON a => Show a where
   show = BS.unpack . toLazyByteString . serializeToJSON . toJSON
 
 instance FromJSON a => Read a where
-  readsPrec _ ss = 
-     let (s,rest)= fragment $ BS.pack ss
-         mr = decode s
-     in if isJust mr then [(fromJust mr, BS.unpack rest)] else []
+  readsPrec _ ss = error "Read FromJSON: not implemented"
+    --  let (s,rest)= fragment $ BS.pack ss
+    --      mr = decode s
+    --  in if isJust mr then [(fromJust mr, BS.unpack rest)] else []
 
-instance {-# OVERLAPPABLE #-} (Typeable a, ToJSON a, FromJSON a) => Loggable a where
-  serialize = serializeToJSON
-  deserialize = deserializeJSON
+instance {-# OVERLAPPABLE #-} (Typeable a, ToJSON a, FromJSON a) => Loggable (AsJSON a) where
+  serialize (AsJSON a)= serializeToJSON a
+  deserialize = AsJSON <$> deserializeJSON
 
 newtype AsJSON a= AsJSON a 
 

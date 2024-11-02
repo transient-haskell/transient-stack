@@ -18,9 +18,10 @@ module Transient.Move.Utils (initNode,initNodeDef, initNodeServ, addService, inp
 
 --import Transient.Base
 import Transient.Internals
-import Transient.Logged
+import Transient.Move.Logged
 import Transient.Console
 import Transient.Move.Internals
+import Transient.Move.Defs
 import Transient.Move.Web
 import Control.Applicative
 import Control.Monad.State
@@ -89,8 +90,8 @@ getNodeParams  =
          --  oneThread $ 
           option "start" "re/start node"
 
-          host <- input' (Just "localhost") (const True) "hostname of this node. (Must be reachable, default:localhost)? "
-          retry <-input' (Just "n") (== "retry") "if you want to retry with higher port numbers when the port is busy, write 'retry': "
+          host  <-input' (Just "localhost") (const True) "hostname of this node. (Must be reachable, default:localhost)? "
+          retry <-input1 (Just "n") (== "retry") "if you want to retry with higher port numbers when the port is busy, write 'retry'"
           when (retry == "retry") $ liftIO $ writeIORef rretry True
           port <- input  (const True) "port to listen? "
           liftIO $ createNode host port
@@ -157,9 +158,7 @@ inputNodes= onServer $ do
   
   where
   addNew= do
-          local $ do
-                 option "add"  "add a new node"
-                 return ()
+          local $ option "add"  "add a new node"
           host      <- local $ do
                           r <- input (const True) "Hostname of the node (none): "
                           if r ==  "" then stop else return r
@@ -229,7 +228,7 @@ initWebApp node app=  do
                         return node
                     else return serverNode
     
-    runCloud $ do
+    unCloud $ do
         listen mynode <|> listenContsFromNodes <|> return()
       --   onAll $ topState >>= showThreads
 

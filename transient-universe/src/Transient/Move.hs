@@ -66,7 +66,7 @@ getMyNode, getWebServerNode, getNodes, getEqualNodes, nodeList, isBrowserInstanc
 
 
 -- * Running Local Computations
-local, onAll, lazy, loggedc, lliftIO, localIO, 
+local, onAll, lazy, logged,loggedc, localIO, 
 
 -- * Moving Computations
 wormhole, teleport, copyData,
@@ -93,22 +93,8 @@ setBuffSize, getBuffSize,
 api, HTTPMethod(..), HTTPHeaders(..), PostParams, noHTTP
 #endif
 ) where
-
+import Transient.Move.Defs
 import Transient.Move.Internals
+import Transient.Move.Logged
 import Transient.Mailboxes
 
--- $cluster
---
--- To join the cluster a node 'connect's to a well known node already part of
--- the cluster.
---
--- @
--- import Transient.Move (runCloudIO, lliftIO, createNode, connect, getNodes, onAll)
---
--- main = runCloudIO $ do
---     this   <- lliftIO (createNode "192.168.1.2" 8000)
---     master <- lliftIO (createNode "192.168.1.1" 8000)
---     connect this master
---     onAll getNodes >>= lliftIO . putStrLn . show
--- @
---
