@@ -32,24 +32,28 @@ instance Show MailboxId where
     show ( MailboxId _ t) = show t
 
 -- | write to the mailbox
--- Mailboxes are node-wide, for all processes that share the same connection data, that is, are under the
--- same `listen`  or `connect`
--- while EVars are only visible by the process that initialized  it and his children.
--- Internally, the mailbox is in a well known EVar stored by `listen` in the `Connection` state.
+-- Mailboxes are application-wide, for all processes 
+-- Internally, the mailbox is in a EVar stored in a global container,
+-- indexed by the type of the data.
 putMailbox :: Typeable val => val -> TransIO ()
 putMailbox = putMailbox' (0::Int)
 
 -- | write to a mailbox identified by an identifier besides the type
+-- Internally the mailboxes use EVar wich use bufferend channels.
 putMailbox' :: (Typeable key, Ord key, Typeable val) =>  key -> val -> TransIO ()
-putMailbox'  idbox dat= do
-   let name= MailboxId idbox $ typeOf dat
+putMailbox' idbox dat= do
    mbs <- liftIO $ readIORef mailboxes
+   let name= MailboxId idbox $ typeOf dat
    let mev =  M.lookup name mbs
    case mev of
      Nothing -> newMailbox name >> putMailbox' idbox dat
      Just ev -> writeEVar ev $ unsafeCoerce dat
 
 
+-- | Create a new mailbox with the given 'MailboxId'.
+-- Mailboxes are application-wide, for all processes.
+-- Internally, the mailbox is stored in a global container,
+-- indexed by the 'MailboxId' and the type of the data stored in the mailbox.
 newMailbox :: MailboxId -> TransIO ()
 newMailbox name= do
 --   return ()  -- !> "newMailBox"
@@ -61,7 +65,8 @@ newMailbox name= do
 -- | get messages from the mailbox that matches with the type expected.
 -- The order of reading is defined by `readTChan`
 -- This is reactive. it means that each new message trigger the execution of the continuation
--- each message wake up all the `getMailbox` computations waiting for it.
+-- each message wake up all the `getMailbox` computations waiting for it if there are enough
+-- threads. In other case, the message will be kepts in the queue until a thread is available.
 getMailbox :: Typeable val => TransIO val
 getMailbox =  getMailbox' (0 :: Int)
 

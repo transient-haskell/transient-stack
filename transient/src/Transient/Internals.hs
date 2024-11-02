@@ -28,20 +28,16 @@ module Transient.Internals where
 
 import           Control.Applicative
 import           Control.Monad.State
---import           Data.Dynamic
 import qualified Data.Map               as M
 import           System.IO.Unsafe
 import           Unsafe.Coerce
 import           Control.Exception hiding (try,onException)
 import qualified Control.Exception  (try)
 import           Control.Concurrent
--- import           GHC.Real
--- import           GHC.Conc(unsafeIOToSTM)
--- import           Control.Concurrent.STM hiding (retry)
--- import qualified Control.Concurrent.STM  as STM (retry)
 import           Data.Maybe
 import           Data.List
 import           Data.IORef
+import qualified Debug.Trace as Debug
 
 
 import           Data.String
@@ -49,15 +45,15 @@ import qualified Data.ByteString.Char8 as BS
 import qualified Data.ByteString.Lazy.Char8             as BSL
 import Data.ByteString.Builder
 import           Data.Typeable
-import           Control.Monad.Fail
-import           System.Directory
-import qualified Debug.Trace as Debug
+import Control.Monad
 
 #ifdef DEBUG
 trace= Debug.trace 
+trace1= Debug.trace
 #else
 
 trace _ x=  x
+trace1= Debug.trace
 #endif
 
 -- tshow ::  a -> x -> x
@@ -74,15 +70,15 @@ outdent=  liftIO $ modifyIORef rindent $ \n -> n-2
 
 {-# NOINLINE rindent #-}
 rindent= unsafePerformIO $ newIORef 0
--- tr x= return () !>   unsafePerformIO (printColor x)
--- tr x= trace (show(unsafePerformIO myThreadId, unsafePerformIO $ printColor x))  $ return()
+-- tr x= return () !>   unsafePerformIO (color x)
+-- tr x= trace (show(unsafePerformIO myThreadId, unsafePerformIO $ color x))  $ return()
 
 -- {-# NOINLINE tr #-}
-tr x=  trace (printColor x) $ return ()
+tr x=  trace (color x) $ return ()
 
--- {-# NOINLINE printColor #-}
-printColor :: Show a => a -> String
-printColor x= unsafePerformIO $ do
+-- {-# NOINLINE color #-}
+color :: Show a => a -> String
+color x= unsafePerformIO $ do
     th <- myThreadId
     sps <- readIORef rindent >>= \n -> return $ take n $ repeat ' '
     let col=  (read (drop 9 (show th)) `mod` (36-31))+31
@@ -98,8 +94,10 @@ printColor x= unsafePerformIO $ do
   --     let (q,r)= quotRem l 16
   --     in toHex q ++ (show $ (if r < 9  then toEnum( fromEnum '0' + r) else  toEnum(fromEnum  'A'+ r -10):: Int))
 
-ttr ::(Show a, MonadIO m) => a -> m()
-ttr x= liftIO $ do putStr "=======>" ; putStrLn $ printColor   x
+-- ttr ::(Show a,MonadIO m) => a -> m()
+-- ttr x= liftIO $ do putStr "=======>" ; putStrLn $ color   x
+ttr x=  trace1 ( "=======>" <> color x) $ return ()
+
 
 type StateIO = StateT EventF IO
 
@@ -481,14 +479,28 @@ instance (Monoid a) => Semigroup (TransIO a) where
   (<>)=  mappendt
 
 
-
+instance (Monoid a,Monad m) => Semigroup (StateT s m a) where
+  (<>)=  mappendt
 
 mappendt x y = mappend <$> x <*> y
 
 
 instance Alternative TransIO where
     empty = Transient $ return  Nothing
-    (<|>) = mplus
+    (<|>) x y = Transient $ do
+                mx <- runTrans x
+                was <- gets execMode
+                if was == Remote
+                  then return Nothing
+                  else case mx of
+                        Nothing ->  runTrans y
+                        _ -> return mx
+
+-- | executes both arguments in parallel
+--  see https://matrix.to/#/!kThWcanpHQZJuFHvcB:gitter.im/$t-sWyugGvcfn0wxBWC8aDTBJpzLTW5P5wZb0QoSY3B0?via=gitter.im&via=matrix.org&via=matrix.freyachat.eu
+(<||>) :: TransIO a -> TransIO a -> TransIO a
+x <||> y= (abduce >> x) <|> y
+infixr 3 <||>
 
 -- data Alter= Alter  -- when alternative has been executed
 
@@ -497,23 +509,10 @@ instance Alternative TransIO where
 --
 
 
-instance MonadPlus TransIO where
-  mzero     = empty
-  mplus x y = Transient $ do
-    mx <- runTrans x
 
-    was <- gets execMode
-
-    if was == Remote
-
-      then return Nothing
-      else case mx of
-            Nothing -> runTrans y
-
-            _ -> return mx
 
 instance MonadFail TransIO where
-  fail _ = mzero
+  fail _ = empty
 
 readWithErr :: (Typeable a, Read a) => Int -> String -> IO [(a, String)]
 readWithErr n line =
@@ -657,8 +656,7 @@ tailsafe (_:xs) = xs
 
 
 
---instance MonadTrans (Transient ) where
---  lift mx = Transient $ mx >>= return . Just
+
 
 -- * Threads
 
@@ -1233,7 +1231,10 @@ delData x = modify $ \st -> st { mfData = M.delete (typeOf x) (mfData st) }
 delState :: (TransMonad m, Typeable a) => a -> m ()
 delState = delData
 
+
 -- | get a pure state identified by his type and an index
+getIndexData :: (MonadState EventF m, Typeable k, Typeable a, Ord k) =>
+     k -> m (Maybe a)
 getIndexData n= do
   clsmap <- getData `onNothing` return M.empty
   return $ M.lookup n clsmap
@@ -1340,7 +1341,7 @@ sandbox' mx = do
 
 sandboxData :: Typeable a => a -> TransIO b -> TransIO b
 sandboxData def w= do
-   d <- getState <|> return  def
+   d <- getData `onNothing` return  def
    w  <***  setState  d
 
 
@@ -1383,6 +1384,7 @@ instance Functor StreamData where
     fmap f (SMore a)= SMore (f a)
     fmap f (SLast a)= SLast (f a)
     fmap _ SDone= SDone
+    fmap _ (SError e)= SError e
 
 -- | A task stream generator that produces an infinite stream of results by
 -- running an IO computation in a loop, each  result may be processed in different threads (tasks)
@@ -1953,22 +1955,24 @@ backCut reason= Transient $ do
 undoCut ::  TransientIO ()
 undoCut = backCut ()
 
-data Log  = Log{ recover :: Bool , partLog :: LogData,  hashClosure :: Int} deriving (Show)
+-- | The 'Log' data type represents the current log data, which includes information about whether recovery is enabled, the partial log builder, and the hash closure.
+data Log  = Log{ recover :: Bool , partLog :: Builder,  hashClosure :: Int} deriving (Show)
 
-data LogDataElem= LE  Builder  | LX LogData deriving (Read,Show, Typeable)
+-- data LogDataElem= LE  Builder  | LX LogData deriving (Read,Show, Typeable)
 
-getLog :: TransMonad m =>  m Log
+-- | Get the current log data.
+getLog :: TransMonad m => m Log
 getLog= getData `onNothing` return emptyLog
 
-emptyLog= Log False  (LD [])  0
+emptyLog= Log False  mempty  0
 
--- contains a log tree which includes intermediate results caputured with `logged` `local` and `loggedc`.
--- these primitives can invoque code that call recursively further `logged` etc primitives at arbitrary deeep
--- Each LogDataElem may be a LE, single result serialized in a builder or a LX block that means a `logged` statement
--- that is being executed and has not yet finised whith the corresponding internal `logged`results. 
--- At the end of a LX block, if any, there is even the final result of finalized `logged`statement that initiated
--- the LX block. Furter elements after the LX block are further serialized results.
-newtype LogData=  LD [LogDataElem]  deriving (Read,Show, Typeable)
+-- -- contains a log tree which includes intermediate results caputured with `logged` `local` and `loggedc`.
+-- -- these primitives can invoque code that call recursively further `logged` etc primitives at arbitrary deeep
+-- -- Each LogDataElem may be a LE, single result serialized in a builder or a LX block that means a `logged` statement
+-- -- that is being executed and has not yet finised whith the corresponding internal `logged`results. 
+-- -- At the end of a LX block, if any, there is even the final result of finalized `logged`statement that initiated
+-- -- the LX block. Furter elements after the LX block are further serialized results.
+-- newtype LogData=  LD [LogDataElem]  deriving (Read,Show, Typeable)
 
 instance Read Builder where
    readsPrec n str= -- [(lazyByteString $ read str,"")]
@@ -1985,7 +1989,7 @@ onBack ac bac = do
   registerBack  (typeof bac) $  do
     --  tr "onBack"
      Backtrack mreason stack <- getData `onNothing` (return $ backStateOf (typeof bac))
-    --  ttr ("onBackstack",mreason, length stack)
+    --  tr ("onBackstack",mreason, length stack)
      case mreason of
                   Nothing     -> do -- tr "ONBACK NOTHING" 
                                     ac                 
@@ -2049,7 +2053,7 @@ forward :: (Typeable b, Show b) => b -> TransIO ()
 forward reason= noTrans $ do
     Backtrack _ stack <- getData `onNothing`  ( return $ backStateOf reason)
     setData $ Backtrack (Nothing `asTypeOf` Just reason)  stack
-    -- ttr "set backtrack to Nothing"
+    -- tr "set backtrack to Nothing"
     
 
 -- | put at the end of an backtrack handler intended to backtrack to other previous handlers.
@@ -2085,7 +2089,7 @@ back reason =  do
         x <-  runClosure first -- <|> tr "EMPTY" <|> empty                              --     !> ("RUNCLOSURE",length stack)
         Backtrack back bs' <- getData `onNothing`  return (backStateOf  reason)
         -- tr ("goBackt",back, length bs')
-        -- ttr ("back=", back)
+        -- tr ("back=", back)
 
         case back of
                  Nothing    -> do
@@ -2373,9 +2377,7 @@ exceptBack st e =   exceptBackg st e `catch` \e' -> exceptBack  st e'
 
 -- perform general backtracking in the IO monad
 exceptBackg :: (Typeable e, Show e) => EventF -> e -> IO (Maybe a, EventF)
-exceptBackg st e= do
-                      tr ("back",e)
-                      runStateT ( runTrans $  back e ) st                 -- !> "EXCEPTBACK"
+exceptBackg st e= runStateT ( runTrans $  back e ) st                 -- !> "EXCEPTBACK"
 
 -- re execute the first argument as long as the exception is produced within the argument. 
 -- The second argument is executed before every re-execution

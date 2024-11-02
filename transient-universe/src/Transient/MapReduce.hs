@@ -36,8 +36,9 @@ data PartRef a=PartRef a
 import Transient.Internals hiding (Ref)
 import Transient.Mailboxes
 import Transient.Parse
-import Transient.Logged
+import Transient.Move.Logged
 import Transient.Move.Internals hiding (pack)
+import Transient.Move.Defs
 import Transient.Indeterminism
 import Control.Applicative
 import System.Random
@@ -265,7 +266,7 @@ reduce red  (dds@(DDS mx))= loggedc $ do
           ref@(Ref node path sav) <- mx     -- return the resulting blocks of the map
 
           runAt node $ do
-              localIO $ return () !> ("FOLDANDSEND","REF",ref, "runAt", node)
+              tr ("FOLDANDSEND","REF",ref, "runAt", node)
               foldAndSend node nodes ref
 
           stop
@@ -494,12 +495,13 @@ getText part str= DDS $ loggedc $ do
 
    process lnodes (node,i)= 
       runAt node $ local $ do
+            tr "GETTEXT PROCESS"
             let xs = part str
                 size= case length xs `div` lnodes of 0 ->1 ; n -> n
                 xss= Transient.MapReduce.fromList $
                        if i== lnodes-1 then drop (i* size) xs else  take size $ drop  (i *  size) xs
             generateRef  xss  
-        !> "GETTEXT PROCESS"
+        
 
 -- | get the worlds of an URL
 textUrl :: String -> DDS (DV.Vector Text.Text)

@@ -20,10 +20,11 @@ module Main where
 
 import Transient.Internals
 import Transient.Mailboxes
-import Transient.Logged
+import Transient.Move.Logged
 import Transient.Console
 import Transient.Move.Web
 import Transient.Indeterminism(choose)
+import Transient.Move.Defs
 import Transient.Move.Internals
 import Transient.Move.Utils
 import Transient.Move.Services
@@ -67,7 +68,7 @@ pings =  do
             
   localIO $ threadDelay 10000000       
 
-  local $ threads 1 $ runCloud $ mapM ping $  tail nodes
+  local $ threads 1 $ unCloud $ mapM ping $  tail nodes
   empty
 -}
   
@@ -113,7 +114,7 @@ withBlockingService serv proc= do
 returnInstances ::  Cloud ()
 returnInstances = do
     POSTData(ident :: String,service :: Service, num :: Int) <-  minput "returnInstances" "enter user ident,service and number of instances:"
-    r <- withBlockingService service $ do
+    r <-  withBlockingService service $  do
                 nodes :: [Node] <- local $ findInNodes service >>= return . take num
 
                 let n= num - length nodes
@@ -128,7 +129,7 @@ returnInstances = do
        
         tr ("monitors: ",map nodeHost ns)    
         auth <- callNodes' ns (<>) mempty  $  localIO $ authorizeService ident service >>=  \x -> return [x]
-        return () !> ("authotorized: ",auth)
+        tr ("authotorized: ",auth)
         let nodes = map fst $ filter  snd  $ zip ns auth 
             nnodes= length nodes
             pernode= num `div` nnodes
@@ -177,6 +178,7 @@ install  service port= do
                                   -- <|> do tryInstall service  ; tryExec program host port
 
 
+-- | Attempts to install the given service. If the service's package is a Git repository, it will be cloned and installed using Cabal. If the package is not a Git repository, an error is thrown indicating that the package/image cannot be installed.
 tryInstall :: Service -> TransIO ()
 tryInstall service = do 
     package <- emptyIfNothing (lookupService "package" service) 
@@ -188,6 +190,8 @@ tryInstall service = do
         | "http://github.com"  `isPrefixOf` package =  installGit package  
         | otherwise= error "can not install the package/image for the program requested"
 
+-- | Attempts to run the given service using the Docker image specified in the service. If the Docker image is not found or the executable cannot be run, this function will fail.
+tryDocker :: Service -> String -> Int -> String -> TransIO ()
 tryDocker service host port program= do
     image <- emptyIfNothing $ lookupService "image" service
     path <- Transient $ liftIO $ findExecutable "docker"    -- return empty if not found

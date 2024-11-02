@@ -612,7 +612,9 @@ This program uses `option` and input to read the command line. Since these primi
 
 Programmer defined State
 ------------------------
-You can define your own data types, store them  using `setData` (or the synonym `setState`) and read them later using `getSData` (or `getState`). 
+A real program could have dozens if not hundred of states, created by different programmers for different layers, functionalities or modules within the program. It is not good to force each programmer to know the low level details about how to program to create the states that he need.
+
+In Transient you just define your own data types, store them  using `setData` (or the synonym `setState`) and read them later using `getData` (or `getState`), modify them with modifyData(modifyState), modifyData'(modifyState'). That's all.
 
 Session state is handled like the state in a state monad (so state is **pure**), but you can store and retrieve as many kinds of data as you like. The session data management uses the type of the data to discriminate among them. But the semantic is the same. This means that if you add or update some session data, the change is available for the next sentences in the execution, but not in the previous ones. state in transient is pure. *There is no global state at all*.
 
@@ -626,17 +628,17 @@ import Data.Typeable
 data Person = Person{name :: String, age :: Int} deriving Typeable
 
 main= keep $ do
-     setData $ Person "Alberto"  55
+     setState $ Person "Alberto"  55
      processPerson
 
 processPerson= do
-     Person name age <- getSData
+     Person name age <- getState
      liftIO $ print (name, age)
 ```
 
-I like how `getSData` return the data, apparently out of thin air! It uses the type of the result to locate the data in the global state of the Transient monad. For this reason it needs to be `Typeable`.
+I like how `getState` return the data, apparently out of thin air! It uses the type of the result to locate the data in the global state of the Transient monad. For this reason it needs to be `Typeable`.
 
-getSData :: Typeable a => TransIO a
+getState :: Typeable a => TransIO a
 
 What happens if there is no such data? The computation simply stops. If `doSomething` finds no Person data it stops the current branch.
 
@@ -651,7 +653,7 @@ This runs processOther if there is no Person data.
 If the type system can't deduce the type of the data that you want to recover, you can annotate the type:
 
 ```haskell
-getSData :: TransIO Person
+p <- getState :: TransIO Person
 ```
 
 Sometimes you need to be sure that there is data available. 
@@ -659,31 +661,31 @@ Sometimes you need to be sure that there is data available.
 The line below returns `p` if there is not data stored for the type of `p`:
 
 ```haskell
-getSData <|>  return p
+getState <|>  return p
 ```
 This other does the same than above, but sets the session data for that type:
 
 ```haskell
-getSData <|> (setData p >> return p)
+getState <|> (setState p >> return p)
 ```
 This one produces an error if the data is not available:
 
 ```haskell
-getSData <|> error "Person data not avilable"  :: TransIO Person
+getState <|> error "Person data not avilable"  :: TransIO Person
 ```
 This one produces a message, but continues execution if an alternative branch is available:
 
 ```haskell
-getSData <|> (liftIO (putStrLn "Person data not avilable") >> stop) :: TransIO Person
+getState <|> (liftIO (putStrLn "Person data not avilable") >> stop) :: TransIO Person
 ```
 
-Finally, if we are insecure, this is the strongly typed, manly state primitive [`get`](https://hackage.haskell.org/package/mtl-2.2.1/docs/Control-Monad-State-Lazy.html) defined in terms of `getSData`. This is for an `Int` state, but it can be used for any kind of data:
+Finally, if we are insecure, this is the strongly typed, manly state primitive [`get`](https://hackage.haskell.org/package/mtl-2.2.1/docs/Control-Monad-State-Lazy.html) defined in terms of `getState`. This is for an `Int` state, but it can be used for any kind of data:
 
 
 ```haskel
  -- defined one time
  get :: TransIO Int
- get= getSData <|> return 0  -- 0 equivalent to the seed value in the state monad, 
+ get= getState <|> return 0  -- 0 equivalent to the seed value in the state monad, 
                              -- when runStateT is called.
  
 ```
@@ -694,7 +696,7 @@ State data does not pass trough node boundaries unless you use normal variables,
 ```haskell
 
 do
-    dat <- local $ getSData <|> myUserDataDefault
+    dat <- local $ getState <|> myUserDataDefault
     r <- runAt node do
               use dat
           ...
@@ -706,8 +708,8 @@ do
 do 
     copyData $ myUserDataDefault
     r <- runAt node $ do
-          dat <- getSData
-    continuelocally r
+            dat <- getState
+            ...
     .....
 ```
 
@@ -715,22 +717,21 @@ This assures that the remote code has the user data. In the first case, it is a 
 
 De-inverting callbacks
 ----------------------
-
-With the `react` primitive:
+callbacks do not compose. It breaks the flow of the program. With the `react` primitive we turn callbacks into normal code that may be composed.
 
 
 ```haskell
     do
        ....
-       x <- react  addCallback  (return ())
+       x <- react  yourCallbackInstaller  (return ())
        continue x
        more continue
        etc
 ```
 
-Will set the continuation of react as handler, using  the `addCallback`  provided by the library (substitute it by your real primitive name). `x` is the parameter passed to the callback and becomes what `react`return to the continuation.
+Will install the continuation after react as the handler of the callback, using  the `yourCallbackInstaller`  provided by the external library of framework that implement the callback system (substitute it by your real primitive name). `x` is the parameter passed to the callback and becomes what `react`return to the continuation.
 
-The second parameter `return ()`  is just in case addCallback need some return value. That happens with HTML DOM events, which need  `true` of `false` to either stop propagating the event or not.
+The second parameter `return ()`  is just in case yourCallbackInstaller need some return value. That happens, for example, with old HTML DOM events, which need  `true` of `false` to either stop propagating the event or not.
 
 This is real code used by transient-universe to process incoming messages to the browser from the server. It uses the [GHCJS callback framework](https://github.com/ghcjs/ghcjs-base/blob/master/GHCJS/Foreign/Callback.hs) and the websocket API for javascript, which, as always, is callback-based:
 
@@ -758,7 +759,7 @@ Using backtracking for undoing actions was one of the first effects that I progr
 
 Imagine that you do make a reservation, open a file, update a database or whatever you need to do before doing another action, but this action either fails or it is not finally performed. Imagine that there is not one but n actions of this kind that you must undo, since step n+1 is aborted by whatever reason internal or external to the program. Then is when the powerful mechanism of transient backtracking can be used.
 
-Backtracking in Transient is within monadic code.  The example below illustrate a typical problem: a product is reserved, then a second database is updated, and then, the payment is performed. But the payment fail. Then it executes `undo`. This initiates backtracking. This execute the `onUndo` sections of the previous sentences in reverse order. first, the database update is undone, and second, the product is un-reserved.
+Backtracking in Transient is within monadic code.  The example below illustrate a typical problem: a product is reserved, then a second database is updated, and then, the payment is performed. But the payment fail. To restore the original state,  it executes `undo`. This initiates backtracking. This execute the `onUndo` sections of the previous sentences in reverse order. first, the database update is undone, and second, the product is un-reserved.
 
 ```haskell
 #!/usr/bin/env stack
@@ -793,7 +794,7 @@ payment = do
 
 The execution of further undoing actions can be stopped in any undoing action if it calls `backCut`. This would stop backtracking and would finish execution.  `retry` would stop backtracking and would resume execution forward from that backtracking point on.
 
-This has application not only for undoing IO actions it can be considered as a generalized, more functional and composable form of exception management. 
+This has application not only for undoing IO actions; It can be considered as a generalized, more functional and composable form of exception management. Since normal exception handling, once the exception is raised, do not compose. exception code is a wicked situation that impliles the end of the program or the complete restarting of this part of the program. It becomes a break of the flow, while this mechanism treat exceptions as first class.
 
 In the last version `undo`, `onUndo`, `retry` and `undoCut` have a generalized form which receive and additional parameter of a programmer-defined type: these generalizations are called `onBack`, `back`, `forward`, `backCut` respectively.  
 
@@ -887,15 +888,15 @@ If the exception is triggered outside of the Transient monad, for example in pur
 Finalizations
 =============
 
-There is an special type of backtracking  triggered with `finish` (for lack of better name) that is used for finalization purposes.  `onFinish` will subscribe a programmer-defined computation that will be called when there are no more thread activity under it. It may be used to close resources after a process. Finalizations are called automatically when all the exceptions and backtrackings have been already executed and all the threads under it consumed.
+There is an special type of backtracking  triggered with `finish` (for lack of better name) that is used for finalization purposes.  `onFinish` will subscribe a programmer-defined computation that will be called when there are no more thread activity under it. It may be used to close resources after a process. Finalizations are called automatically when all the exceptions and backtrackings have been already executed and all the threads under it are consumed.
 
 finalizations use the backtracking mechanism described above, but they are only triggered when there are no more threads running. Previously finalizations were an special kind of exceptions, but in the new version they are a completely new mechanism. To understand the reason for the introduction on finalizations as a different mechanism it is necessary to recap some design assumptions of Transient in a long paragraph that you may obviate if you don´t want to know the details:
 
 ______BEGIN RECAP
 
-In Transient, multithreading has no master-slave relationship. That also happens in the distributed computing model of transient too. That means that there are no master thread which launch other threads for auxiliary work and then they get back to him. In fact the thread which continues after an operation may not be the one which launched it. In concurrent primitives like `collect` or expressions thata are combinations of the <*> operator, the thread which continues is the last one which finalized his work the latest. This is unlike any other library know by me in any langauge.
+In Transient, multithreading has no master-slave relationship. That also happens in the distributed computing model of transient too. That means that there are no master thread which launch other threads for auxiliary work and then they get back to him. In fact the thread which continues after an operation may not be the one which launched it. In concurrent primitives like `collect` or expressions that are combinations of the <*> operator, the thread which continues is the last one taht finalized his work the latest. This is unlike any other library know by me in any langauge.
 
-Moreover, there are primitives like `parallel` or `choose`, which may launch a number of threads which will continue the execution in parallel. This one-to-many spawning is also unseen in computing as far as I know.
+Moreover, there are primitives like `parallel` or `choose`, which may launch a number of threads which will continue the execution in parallel trough the do.. computation (The monad). This one-to-many spawning is also unseen in computing as far as I know.
 
 This is as it is because it is very useful: This allows to express concurrence (the first) without resorting to uncomposable forks and joins. The second allows streaming and server-side code with many clients while maintaining composability, which is a superior kind of modularity. Also avoids explicit loops in the code, which are a source of problems.
 
@@ -912,7 +913,7 @@ Also, if I close the resource when some thread finishes, There may be other thre
 
 What is the solution? Finalizations. but Well-done finalizations. A finalization should be called once, when the last thread which has passed trough it have finished, including the execution of all their exceptions and backtrackings.
 
-finalizations are also backtracking stacks. Each one of them are for a type of value. Exception stacks are for SomeException. Finalization stacks are for Finish reason where reason is a string which describes the cause of the finalization. While the exception handler only triggers when the "subtype" of the exception match with the argument expected, the finalization handlers only triggers if the thread has zero siblings. This means that it is the last one.
+finalizations are also backtracking stacks. Each one of them are for a type of value. Exception stacks are for SomeException. Finalization stacks are for `Finish reason` where reason is a string which describes the cause of the finalization. While the exception handler only triggers when the "subtype" of the exception match with the argument expected, the finalization handlers only triggers if the thread which run the `onFinish` handler runs has zero siblings. This means that it is the last one.
 
 If the thread has more siblings then the handler will not be called and obviously, the other finalizations that are above it will not be needed to be checked. If the thread is the last, then it is executed and further finalizations in the stack are checked recursively.
 
@@ -1271,14 +1272,14 @@ In whatever order.
 It can be used to implement resilience: we can stack alternative computations and get the first response:
 
 ```haskell
-resilientWorld= collect 1 $ runCloud helloWorld
+resilientWorld= collect 1 $ unCloud helloWorld
 ```
 It takes the first response whatever node it comes from, and discards the second.
 
 To make also the first call resilient, simply add another alternative node that returns "hello".
 
 ```haskell
-runCloud :: Cloud a -> TransIO a
+unCloud :: Cloud a -> TransIO a
 ```
 
 Is the opposite type of `local` . Actually, a Cloud computation is a transient one, with a thin layer that makes the type system force either logging each action with `local`, or being aware that the action will be executed in the other node with `onAll`.
@@ -1311,7 +1312,7 @@ import Transient.Move.Utils
 
 main= do
      let numNodes = 2
-     keep . runCloud $ do
+     keep . unCloud $ do
         runTestNodes [2000 .. 2000 + numNodes - 1]
         nodes <- local getNodes
         result <- (,) <$> (runAt (nodes !! 0) $ local getMyNode) <*>  (runAt (nodes !! 1) $ local getMyNode) 
@@ -1353,7 +1354,7 @@ Simple, but is not as simple as it seems, since `connect` return the list of nod
 After `connect` is executed the list of nodes is received. To get the list of nodes, use `getNodes`. It includes at least the local node and the remote node that we connected to.
 
 ```haskell
-main= keep . runCloud $ do
+main= keep . unCloud $ do
     connect  (createNode "myhost.organization.com" 8000)  
              (createNode "cloudMaster.organization.com" 8000)
     
@@ -1581,7 +1582,7 @@ Transformations of the data are done in memory. They can swapped to disk and can
 Like in the case of spark, reduce is the operation that runs everything, while map is declarative. Let's see an example:
 
 ```haskell
-   runCloud $ initNode $ inputNodes <|> do
+   unCloud $ initNode $ inputNodes <|> do
         r <- reduce  (+) . mapKeyB (\w -> (w, 1 :: Int))  $ getText  words text
         lliftIO $ putStrLn r
 ```
@@ -1704,7 +1705,7 @@ initWebApp node app=  do
                     then liftIO $ createWebNode
                     else return serverNode
 
-    runCloud $ do
+    unCloud $ do
         listen mynode <|> return()
         wormhole serverNode app 
         return ()
@@ -2132,7 +2133,7 @@ The three monadd: `TransIO`, `Cloud` and `Widget` are basically the same. The on
 Widget monad --> `render/norender` -->  TransIO monad --> `local/onAll`  -->  Cloud monad
 
 
-Widget monad <-- `   Widget      ` <--  TransIO monad <-- ` runCloud  `  <--  Cloud monad
+Widget monad <-- `   Widget      ` <--  TransIO monad <-- ` unCloud  `  <--  Cloud monad
 
 
 The only difference is how Applicative is executed in the Widget monad, which has a separate definition.
