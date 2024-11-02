@@ -24,3 +24,6 @@ repeat:
 for each library that does not find
 
 https://discourse.haskell.org/t/could-not-find-module-in-ghci/4385/9
+
+packages to install:
+random directory bytestring containers mtl stm bytestring aeson case-insensitive network websockets network-uri old-time base64-bytestring  network-uri network-bsd
