@@ -263,7 +263,6 @@ TransIO, TransientIO
 
 -- * Utilities
 ,genId
-,module Transient.Logged 
 )
 
 where
@@ -271,4 +270,3 @@ where
 
 import    Transient.Internals
 import    Transient.Console
-import    Transient.Logged hiding (exec, wait)

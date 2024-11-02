@@ -58,7 +58,7 @@ fragment s
        |BS.null s= (mempty,mempty)
        |otherwise=
         let (r,rest)=  BS.span (\c->c /='/' && c /='\"') s -- to avoid packing/unpacking the entire string
-        in trace (show("FRAGMENT",r,rest)) $ if not (BS.null rest) && BS.head rest== '\"'
+        in  if not (BS.null rest) && BS.head rest== '\"'
             then
                      let (r',rest') = BS.span ( /='\"') $ BS.tail rest
                          (r'',rest'')= fragment $ BS.tail rest'
