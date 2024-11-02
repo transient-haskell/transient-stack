@@ -4,7 +4,7 @@
 
 
 
-module Transient.Console(keep, keep',keepCollect,option, option1, input, input', inputf, inputNav,Navigation(..), inputfm, inputParse, processLine,delConsoleAction,rprompt,rcb,thereIsArgPath) where
+module Transient.Console(keep, keep',keepCollect,option, option1, input, input', input1, inputf, inputNav,Navigation(..), inputfm, inputParse, processLine,delConsoleAction,rprompt,rcb,thereIsArgPath) where
 
 import Control.Applicative
 import Control.Concurrent
@@ -24,7 +24,6 @@ import System.IO
 import Transient.Internals
 import Transient.Parse
 import Transient.Loggable
-import Transient.JSON
 import System.IO.Error
 import System.IO.Unsafe
 import Data.String
@@ -35,8 +34,8 @@ import qualified Data.TCache.DefaultPersistence as TC
 import qualified Data.TCache.Defs  as TC
 import Data.TCache  hiding (onNothing)
 
-import Data.Aeson
-import GHC.Generics
+-- import Data.Aeson
+-- import GHC.Generics
 import Control.Monad.State
 import System.Directory
 import Unsafe.Coerce
@@ -161,7 +160,9 @@ inputfm remove ident message mv cond = do
                     case mv of
                       Nothing -> do
                          when (ident == "input") $ do
-                            liftIO $ do putStr message; hFlush stdout
+                            liftIO $ do 
+                              putStrLn $ "Must be of type " ++ show (typeOf (fromJust mv))
+                              putStr message; hFlush stdout
                             liftIO $ writeIORef rconsumed  $ Just ""
                             
                          empty
@@ -191,8 +192,21 @@ inputfm remove ident message mv cond = do
                   -- hFlush stdout
                   return $ Right x
                 else do
-                  liftIO $ when (isJust mv) $  putStrLn ""
-                  returnm mv
+                  if (ident == "input") 
+                    then
+                      liftIO $ do
+                         echo <- readIORef recho
+                         when echo $ do putStr " : "; BSL.putStrLn $ toLazyByteString $ serialize x
+                         putStrLn $"value of type " ++ show(typeOf $ fromJust mv) ++ " failed validation"
+                         
+
+                         putStr message; 
+                         hFlush stdout
+                         writeIORef rconsumed  $ Just ""
+                         return $ Left ""
+                    else do
+                      liftIO $ when (isJust mv) $  putStrLn ""
+                      returnm mv
   
 separators = "/:\t\n; "
 dropspaces s = dropWhile (\x -> elem x separators) s
@@ -206,16 +220,16 @@ input :: (Typeable a, Loggable a) => (a -> Bool) -> String -> TransIO a
 input = input' Nothing
 
 -- | `input` with a default value
--- if there is a default value and the input do not match, the default value is returned and the input is processed by the active  options . if there is no default value (Nothing) the input string is deleted and prompts for a new input. There is at most one single active input. The next active input in an alternative composition disables the previous.
+--    if the input do not match, the input string is deleted and prompts for a new input. There is at most one single active input. The next active input in an alternative composition disables the previous.
 input' :: (Typeable a, Loggable a) => Maybe a -> (a -> Bool) -> String -> TransIO a
-input' mv cond prompt = do
-  --liftIO $ putStr prompt >> hFlush stdout
-  inputf True "input" prompt mv cond
+input' mv cond prompt = inputf True "input" prompt mv cond
 
+-- | `input` with a default value which waits once for a value. if it is not valid, the default value is returned. There is at most one single active input. The next active input in an alternative composition disables the previous.
+input1  mv cond prompt = inputf True "input1" prompt mv cond
 
 newtype NavBack= NavBack Bool
 
-newtype NavResps  =  NavResps  (M.Map String String) deriving (Generic,ToJSON,FromJSON,Typeable)
+newtype NavResps  =  NavResps  (M.Map String String) deriving (Read,Show, Typeable) --(Generic,ToJSON,FromJSON,Typeable)
 
 instance TC.Indexable NavResps where
   key _= "NavResps"
@@ -237,7 +251,7 @@ inputNav mv cond prompt= do
 
   def <- default' prompt `onBack` \Navigation ->  do
           NavBack doit <- getState <|> return (NavBack False)
-          -- ttr  $ ("doit",doit)
+          -- tr  $ ("doit",doit)
           if(doit == False)  
             then do
               setState $ NavBack True
@@ -303,7 +317,6 @@ inputLoop =
     when (not $ null prompt) $ do putStr prompt; hFlush stdout
     line' <- getLineNoBuffering
     let line =if null line' then " " else line' -- to trigger react with something
-    --threadDelay 1000000
 
     processLine  line
 
@@ -412,16 +425,17 @@ rconsumed = unsafePerformIO $ newIORef Nothing
 -- | execute a set of console commands separated by '/', ':' or space that are consumed by the console input primitives
 processLine line' = liftIO $ do
   let line= subst line'
-  tr ("subst",line)
+  -- tr ("subst",line)
   
   mbs <- readIORef rcb
   process  mbs line
+  writeIORef recho False
   where
     process ::  [(String, String, String -> IO ())] -> String -> IO ()
     process  _ [] = writeIORef rconsumed Nothing >> return ()
 
     process  [] line = do
-      --threadDelay 100000
+      threadDelay 100000
       r <- readIORef newInput
       if r then do
               writeIORef newInput False
@@ -429,7 +443,7 @@ processLine line' = liftIO $ do
               process  mbs line
            else do
               let (r, rest) = span (\x -> (not $ elem x "/:; ")) line
-              when ( not $ rest == " ") $ hPutStr stderr r >> hPutStrLn stderr ": can't read, skip"
+              when ( rest /= " " && not (null r)) $ hPutStr stderr  r >> hPutStrLn stderr ": can't read, skip"
               mbs <- readIORef rcb
               writeIORef rconsumed Nothing
               process  mbs $ dropspaces rest
@@ -569,7 +583,7 @@ keep mx = do
               option "save" "commit now the current execution state to permanent storage"
               abduce
               liftIO $ syncCache
-              liftIO $ print "saved the execution state"
+              liftIO $ putStrLn "saved the execution state"
               empty
             {-
             <|> do
@@ -592,6 +606,7 @@ keep mx = do
               top <- topState
               liftIO $ killChildren $ children top
               liftIO $ killThread $ threadId top
+              liftIO $ threadDelay 10000000
               empty
             <|> do
               abduce
@@ -662,16 +677,15 @@ keepCollect n time mx = do
   takeMVar rexit `catch` \(e :: BlockedIndefinitelyOnMVar) -> return []
 
 -- echo of the input when processing a command line
+{-# NOINLINE recho #-}
 recho= unsafePerformIO $ newIORef False
 execCommandLine :: IO ()
 execCommandLine = do
       path <- thereIsArgPath
       --print $ drop (i-1) args
       --putStr "Executing: " >> print  path
-      threadDelay 100000
-      writeIORef recho True
+      threadDelay 10000
       processLine    path
-      writeIORef recho False
 
 -- substitute one of more separators by a single '/'
 subst   s= subst1 s
@@ -684,8 +698,11 @@ subst   s= subst1 s
             subst1 []=[]
             subst1  (h:t)
                   | h== '\"' = let (s,r)= span (/= '\"') t in h : s ++  h: subst1 (tail r)
-                  | elem h separators = '/':subst2 t
+                  | elem h separators = (whyNot $ recho =: True) `seq` '/':subst2 t
                   | otherwise= h: subst1 t
+
+(=:) ioref val= writeIORef ioref val
+whyNot= unsafePerformIO
 
 thereIsArgPath=  do
   args <- getArgs
