@@ -149,8 +149,12 @@ integer= do
 
 -- | read an Int
 int :: TransIO Int
-int= withGetParseString $ \str ->
-           maybe empty return (BS.readInt str)
+int= withGetParseString $ \str -> 
+           let i=BS.readInt str 
+            in if BS.null str then tr "int: null str"  >> empty 
+                              else  maybe empty return i 
+          --  maybe empty return (BS.readInt str)
+    
 {-
 int= do 
     s <- tTakeWhile isNumber
@@ -378,7 +382,6 @@ withGetParseString3 parser=  do
 {-#INLINE withGetParseString#-}
 withGetParseString ::   (BS.ByteString -> TransIO (a,BS.ByteString)) -> TransIO a
 withGetParseString parser=  Transient $ do
-
     ParseContext readMore s done <- gets parseContext
     
     let loop = unsafeInterleaveIO $ do
@@ -399,7 +402,9 @@ withGetParseString parser=  Transient $ do
 
     -- str <-  liftIO $ (s <> ) `liftM`  loop
     str <- liftIO $ return s <> loop
+    -- tr ("gparseString",if BS.null str then "null str" else BS.take 3 str)
 
+    -- when (BS.null str) $ error $ "withGetParseString: null parse string" 
 
     mr <- runTrans $ parser str
     case mr of
@@ -424,7 +429,9 @@ withGetParseString parser=  Transient $ do
 
 
 
--- | bring the data of the parse context as a lazy byteString
+-- | bring the data of the parse context as a lazy byteString.
+-- When the parse context is a stream. once the buffer is consumed, this will wait until the readMore return something. That would
+-- hang the computation. Use instead `getParseBuffer` in that case.
 giveParseString :: TransIO BS.ByteString
 giveParseString= (noTrans $ do
    ParseContext readMore s done<- gets parseContext -- getData `onNothing` error "parser: no context"
@@ -536,8 +543,9 @@ producer |- qonsumer =  sandbox $ do
     --abduce
     
     setParseStream (liftIO $ takeMVar v)--  `catch`  \(_:: SomeException) -> return SDone ) 
-    -- tr "CONSUMER"
+    tr "CONSUMER"
     r <- qonsumer
+    tr "consumer end"
     dropUntilDone
     Just p <- liftIO $ readIORef pcontext
     liftIO $ writeIORef pcontext Nothing -- !> "WRITENOTHING"
