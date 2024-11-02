@@ -13,13 +13,14 @@ import           Control.Monad.IO.Class
 import           System.Environment
 import           System.IO
 import           Transient.Internals
-import           Transient.Logged
+import           Transient.Move.Defs
+import           Transient.Move.Logged
 import           Transient.EVars
 import           Transient.Parse
 import           Transient.Console
 import           Transient.Indeterminism
-import           Transient.Logged
 import           Transient.EVars
+import           Transient.Mailboxes
 import           Transient.Move.Internals
 import           Transient.Move.Utils
 import           Transient.Move.Web  
@@ -60,7 +61,7 @@ import Data.Char
 -- import System.IO.Streams
 -- import System.IO.Streams.Handle
 import qualified Data.Vector as V
-import Debug.Trace
+-- import Debug.Trace
 
 -- mainrerun = keep $ rerun "config" $ do
 --   logged $ liftIO $ do
@@ -369,7 +370,7 @@ instance Loggable THAT1
     --             let end= getEnd $ partLog log
 
     --             let lc= LocalClosure{
-    --                     localCon= idSession,
+    --                     localSession= idSession,
     --                     prevClos= prev, 
     --                     localLog= LD $ dropFromIndex ns $ partLog log,  
     --                     localClos=closLocal,
@@ -432,18 +433,18 @@ mainexp= keep' $ do
 setEventCont2 :: TransIO a -> (a -> TransIO b) -> StateIO ()
 setEventCont2 x f  = modify $ \EventF { fcomp = fs, .. }
                            -> EventF { xcomp = x
-                                     , fcomp =  unsafeCoerce (\x -> ttr "here2" >> f x) :  fs
+                                     , fcomp =  unsafeCoerce (\x -> tr "here2" >> f x) :  fs
                                      , .. }
 
 bind :: (Show a) => TransIO a -> MVar (Maybe a) -> (a -> TransIO b) -> TransIO b
 bind x mv f = Transient $ do
-    setEventCont2 x  (\r -> do ttr r; liftIO (tryPutMVar mv $ Just r); f r)
+    setEventCont2 x  (\r -> do tr r; liftIO (tryPutMVar mv $ Just r); f r)
     mk <- runTrans x
     resetEventCont mk
-    ttr "here"
+    tr "here"
     case mk of
-      Just k  ->  runTrans (ttr "JUST" >> liftIO (tryPutMVar mv $ Just k) >> f k)
-      Nothing ->  runTrans (ttr "NOTHING"  >> empty)
+      Just k  ->  runTrans (tr "JUST" >> liftIO (tryPutMVar mv $ Just k) >> f k)
+      Nothing ->  runTrans (tr "NOTHING"  >> empty)
 
 synca :: Show a => TransIO a -> TransIO a
 synca pr= do
@@ -456,9 +457,9 @@ synca pr= do
              Nothing -> empty
 
 
-main= keep $ do
+mainsync= keep $ do
    r <-  sync (option1 "p" "p") <|> return ["ho"]
-   ttr ("RESP",r)
+   tr ("RESP",r)
 
 
 
@@ -484,12 +485,12 @@ mainback1= keep $  do
     
 
 
-mainalter= keep $ do
+mainalter= keep $ unCloud $ do
   proc <|> restore1 <|> save
 
   where 
   proc= do
-    sal "HELLO" <|> (abduce >> sal "WORLD")
+    sal "HELLO" <|> (local abduce >> sal "WORLD")
     showLog
   
   sal x= do 
@@ -510,7 +511,7 @@ mainalter= keep $ do
             _ -> return mx
 
 
-mainsimple= keep $  initNode $ Cloud $ do
+mainsimple= keep $  initNode $ do
   -- firstCont
   -- logged $ logged $ do
   proc2 <|> restore1 <|> save
@@ -519,15 +520,15 @@ mainsimple= keep $  initNode $ Cloud $ do
   where
   proc2= do
     logged $ option "p" "process"
-    r <-logged $ logged $ do
-        setc
-        logged $ return HELLO -- liftIO $ print "PARSE ERROR"; error "PARSE ERROR" :: TransIO HELLO 
-    liftIO $ print r
+    r <-loggedc $ loggedc $ do
+          logged setc
+          logged $ return HELLO -- liftIO $ print "PARSE ERROR"; error "PARSE ERROR" :: TransIO HELLO 
+    localIO $ print r
 
-    r <- logged $ logged $ do
-       setc
-       logged $ return (HI ,THAT)
-    liftIO $ print r
+    r <- loggedc $ loggedc $ do
+            logged setc
+            logged $ return (HI ,THAT)
+    localIO $ print r
 
     showLog
 
@@ -536,7 +537,7 @@ mainexcept= keep $ initNode $ do
                 liftIO (print "PASA")
                 continue
                 return "HELLO"
-  local showLog
+  showLog
   local $ return "HI"
   error "err"
   return()
@@ -645,13 +646,13 @@ maingold= keep' $ do
 mainexcepterr= keep  $ do
 
     -- abduce
-    -- onFinish $ const $ ttr "==============================FINISH"
+    -- onFinish $ const $ tr "==============================FINISH"
     r <- return "WORLD" `onException'`  \(SomeException e) -> do 
           continue
           
           option1 "c" "continue"
           return "PASA"
-    ttr r
+    tr r
     error "---------------------err"
     return()
 
@@ -672,35 +673,52 @@ maincollect0= keep $ do
 
      liftIO $ print ("r=",r)
 
+mainenter= keep $ do
+  option "go" "go"
+  i <- input (< 10) "enter"
+  liftIO $ print (i:: Int)
+
+a <|||> b= (pr "abduce (" >>  a >> pr ")" >> empty) <|> b
+infixr 3 <|||>
 
 
-mainbug= keep $ initNode $ inputNodes <|> go <|> onAll restoren
+mainprior= keep' $ do
+   term  "hello" <|||> term  "world" <|||> term  "hi"
+  where
+  term ::  String -> TransIO ()
+  term  x= pr x
+
+pr x= liftIO $ putStr x
+  
+  
+
+mainbug= keep $ initNode $  go <|> restore1
   where
   go=  do
     local $ option "go" "go"
-    local $ setcn  "one"
 
-    r <-   local $ return HELLO
-
-    local $ setcn "two"
-    w <- local $ return WORLD
-    local $ setcn "three"
-    w' <- local $ return THAT
+    r <-loggedc $  do
+          loggedc $ do
+                  loggedc $ do
+                    onAll $ tr "===================> two" 
+                    local $ setcn "two"
+                    return HELLO
+          local $ return WORLD
     local $ setcn "four"
-    w'' <- local $ return THAT1
-    localIO $ print (r,w,w', w'')
- 
+    local $ tr r
+
+
+
 
 maincomplex = keep $ initNode $ inputNodes <|> do
-  -- firstCont
-  r <- proc2 <|> onAll restore1 -- <|> onAll save
+  r <- proc2 <|> (restore1 >> empty) 
   localIO $ print ("res",r)
 
   where
-  proc2= 
-     (,) <$> proc3 HELLO <*> proc3 WORLD
+  proc2= (,) <$> proc3 HELLO <*> proc3 WORLD
+
   proc3 x =  do
-    local $ ttr "executing proc3"
+    local $ tr "executing proc3"
     local $ option x $ "process " <> show x
     local $ setc
     
@@ -712,13 +730,13 @@ maincomplex = keep $ initNode $ inputNodes <|> do
     r <- logged $ return HELLO
     
     logged $ liftIO $ putStrLn $ show r ++ op
-    r <- logged $  logged $ logged $ return WORLD
+    r <- loggedc $  loggedc $ logged $ return WORLD
     logged $ liftIO $ putStrLn $ show r ++ op
-    logged $ do
+    loggedc $ do
         logged $ return PRE
-        logged $ do
+        loggedc $ do
             logged $ return  PRE1
-            setc
+            logged setc
             logged $ return POST1
         logged $ return POSTT
         
@@ -726,12 +744,12 @@ maincomplex = keep $ initNode $ inputNodes <|> do
 
     logged $ return THAT
 
-    r <- logged $  logged $ logged $ return WORLD
+    r <- loggedc $  loggedc $ logged $ return WORLD
 
     logged $ liftIO $ putStrLn $ show r ++ op
 
 
-    setc
+    logged setc
 
     r <- logged $ return HI
     logged $ liftIO $ putStrLn $ show r ++ op
@@ -739,23 +757,23 @@ maincomplex = keep $ initNode $ inputNodes <|> do
     showLog
     return op
     
-save= do
+save= logged $ do
     option "save" "save execution state"
     liftIO  syncCache
     empty
 
 restoren= do
         option "res" "restore1" 
-        clos <- input (const True) "closure >"
+        clos <- input (const True) "closure"
 
         noTrans $ restoreClosure 0 clos 
 
-restore1= do
+restore1= logged $ do
         restoren
         empty
       
-lprint :: Show a => a -> TransIO ()
-lprint= liftIO . print
+lprint :: Show a => a -> Cloud ()
+lprint= localIO . print
 
 setc =  do
     (lc,_) <-  setCont Nothing 0
@@ -771,8 +789,8 @@ setcc= do
 
 showLog=do
   log <- getLog
-  -- ttr $ ("SHOWLOG",partLog log," ",toPath $ partLog log,"  ",toPathLon $ partLog log)
-  ttr  ("SHOWLOG",toPath $ partLog log)
+  -- tr $ ("SHOWLOG",partLog log," ",toPath $ partLog log,"  ",toPathLon $ partLog log)
+  onAll $ tr  ("SHOWLOG", partLog log)
 
 
 {- 
@@ -787,22 +805,22 @@ showLog=do
   el setIndexData es equivalente a la DBRef pero sin log, solo con ends
 -}
 
-main22= keep $  save <|> restore1 <|> proc
+main22= keep $  initNode $ proc  <|> restore1
   
   where
-  proc= initNode $ Cloud $ do  
+  proc= do  
     logged $ option "go" "go" >> setc
     logged setc
 
-main1= keep $ do
-   firstCont
+main1= keep $ unCloud $ do
+   logged firstCont
    proc <|>  save <|>  restore1
  where
  proc= do
   logged $ option "go" "go"
-  r <- logged $ logged $ logged $ do
-    setc
-    logged $ return HELLO
+  r <- loggedc $ loggedc $ loggedc $ do
+              logged setc
+              logged $ return HELLO
 
   logged $ liftIO $ print r
   
@@ -856,7 +874,66 @@ mainshow= keep  $ initNode $ do
 str :: IsString a => String -> a
 str= fromString
 
-mainjob= keep  $ initNode $ do
+mainremote= keep $ do
+   (do d <- getState <|> return 0 :: TransIO Int
+       tr ("-------",d)
+       ((unCloud $ logged $ gets execMode >>= tr)  <***  setState  d ))  <** modify (\s -> s {execMode = Remote}) 
+   tr "END"
+
+{-
+NOTA, usar delimitadores para algunos tipos de mensajes:
+DELIM _____22323342340
+conteheasd
+asasda
+asdsa
+_____22323342340
+
+local:
+  en modo ejecucion, ejecuta el codigo y logea el resultado
+  em modo recuperacion:
+      si es en el log hay un resultado, lo devuelve
+      si en el log hay un e/ lo ejecuta
+      si hay un w/ devuelve empty
+hacer un local que sea mas rapido y
+      ejecute solo no esta en modo recuperacion
+      no añada nada al log
+
+wormhole                           wormhole
+  teleport                            teleport
+  logged mx                           logged mx
+  teleport                            teleport
+-}
+
+main= keep $ initNode $ inputNodes <|> do
+  local $ option "go" "go"
+  nodes <- local getNodes 
+  tr ("nodes",nodes)
+  r <- runAt (nodes !! 1) $ do
+           localIO $ print "RECEIVED"
+           h <- local $ return HELLO
+           runAt (nodes !! 2) $ do
+              localIO $ print "RECEIVED 2"
+              local $ return (h,WORLD)
+  ttr r
+
+mainlog= keep' $ unCloud $ do
+  proc
+  log <- getLog
+  onAll $ liftIO $ print $ partLog log
+  onAll $ setParseString $ toLazyByteString $ partLog log
+  modifyState' (\log -> log{recover=True,partLog=mempty}) (error "error")
+  proc
+  log <- getLog
+  onAll $ liftIO $ print $ partLog log
+
+  where
+  proc= do
+    logged (do ttr "empty"; empty) <|> logged (do ttr "HELLO";return HELLO)
+    logged $ return WORLD
+
+
+
+mainjob3 = keep $ initNode $ do
   runJobs
 
   str <-minput ("s" :: String) "start"
@@ -938,9 +1015,9 @@ autentificacion? investigar
 
 -- get all the options of a user
 -- allOptions user= do
---   ns <- allReg localCon .==. user
+--   ns <- allReg localSession .==. user
 --   let url n= str "http://" <> str (nodeHost n) <> str ":" <> intt (nodePort n) </>    
---                                     intt (localCon n) </> intt (localClos n) </> 
+--                                     intt (localSession n) </> intt (localClos n) </> 
 --                                     intt 0 </> intt 0 </>
 --                                     str "$" <> (str $ show $ typeOf $ type1 response)
 --   return map url ns
@@ -1056,193 +1133,6 @@ syncFlush= do
 
 
 
--- teleport1 :: Cloud ()
--- teleport1  =  do
-
---   modify $ \s -> s{execMode=if execMode s == Remote then Remote else Parallel}
---   local $ do
---     tr "TELEPORTTT"
---     conn@Connection{idConn= idConn,connData=contype, synchronous=synchronous} <- getData
---                              `onNothing` error "teleport: No connection defined: use wormhole"
-
-
---     Transient $ do
---     --  labelState  "teleport"
-
-    
---      log <- getLog
-
-
---      if not $ recover log  
-
---       then  do
-
---         -- when a node call itself, there is no need for socket communications
---         ty <- liftIO $ readIORef contype
---         case ty of
---          Just Self -> runTrans $ do
---                modify $ \s -> s{execMode= Parallel}  -- setData  Parallel
---                abduce    -- !> "SELF" -- call himself
---                liftIO $ do
---                   remote <- readIORef $ remoteNode conn
---                   writeIORef (myNode conn) $ fromMaybe (error "teleport: no connection?") remote
-
---          _ -> do
-
-
-                
---           (Closure sess closRemote,n) <- getIndexData idConn `onNothing` return (Closure 0 0,[0]::[Int])
-
-
---           let tosend= getLogFromIndex n $ partLog log
---           tr  ("idconn",idConn,"REMOTE CLOSURE",closRemote,"FULLLOG",partLog log,n,"CUT FULLOG",tosend)
-                 
-               
-
-
---           let closLocal= hashClosure log
-
-
-
---           runTrans $ do
---             msend conn $ toLazyByteString $ serialize $ SMore $ ClosureData sess closRemote idConn closLocal tosend 
---             receive  conn   closLocal 
-                  
-
---           -- return Nothing  
-
---       else return $ Just ()
-
--- newtype OpCounter= OpCounter Int
-
--- minput :: Loggable a => String -> Cloud a
--- minput msg= response 
---  where
---  response= do
-
---   modify $ \s -> s{execMode=if execMode s == Remote then Remote else Parallel}
---   local $ do
---       log <-getLog
---       connected log  <|> commandLine  log
-  
-
---   where 
---   type1:: Cloud a -> a
---   type1= undefined
-
-
---   commandLine log = do
-
---      guard (not $ recover log)
-
---      OpCounter n <- modifyData' (\(OpCounter n) -> OpCounter $ n+1) (OpCounter 1)
---      option n $ msg <> ": "
---      input (const True) msg
-
-
---   -- connected :: Loggable a => TransIO a
---   connected log = do
-
---     conn <- getState -- if connection not available, execute alternative computation
-
-
---     -- log  <- getLog
---     let closLocal= hashClosure log
-
---     pstring <- giveParseString
---     if (not $ recover log)  || BS.null pstring
-
---       then  do
---         tr "EN NOTRECOVER"
---         (Closure sess closRemote,ns) <- getIndexData (idConn conn) `onNothing` return (Closure 0 0,[0]::[Int])
-                 
---         n <- getMyNode
-
---         let url= str "http://" <> str (nodeHost n) <> str ":"<> intt (nodePort n) </>    
---                                     intt (idConn conn) </> intt closLocal </> 
---                                     intt sess </> intt closRemote </>
---                                     str "$" <> (str $ show $ typeOf $ type1 response)
-
---         ty <- liftIO $ readIORef $ connData conn
---         case ty of
---          Just Self -> do
---           liftIO $ print url
---           receive conn closLocal
---           tr "SELF"
-
---           logged $ error "insuficient parameters 1" -- read the response
-
-          
-          
-
-
---          _ -> sync $ do
-
---           -- insertar typeof response
---           let tosend= str "{ \"msg\"=\""  <> str msg  <> str "\", cont=\""  <> url <> str "\"}"
---           let l = BS.length tosend
-
-
-           
---           -- keep HTTP 1.0 no chunked encoding. HTTP 1.1 Does not render progressively well. It waits for end.
---           msend conn $ str "Content-Length: " <> str(show l) <> str "\r\n\r\n" <> tosend 
---           mclose conn
---           receive  conn closLocal    -- toHex (fromIntegral l) <> str "\r\n" <> tosend <> str "\r\n0\r\n\r\n"
---           tr "after msend"
-
-
---           logged $ error "insuficient parameters 2" -- read the response
-          
-
---       else do
-
-
-
---         receive conn closLocal
---         tr "else"
-
-   
-
-
---         logged $ error "insuficient parameters 3" -- read the response
-        
---       where 
---       (</>) x y= x <> str "/" <> y
---       str=   BS.pack
---       intt= str . show
---       -- toHex 0= mempty
---       -- toHex l= 
---       --     let (q,r)= quotRem l 16
---       --     in toHex q <> (BS.singleton $ if r < 9  then toEnum( fromEnum '0' + r) else  toEnum(fromEnum  'A'+ r -10))
-  
-
-
--- >>> toHex 17
--- "11"
---
-
-
-
-
-
-
-
-
-
-  
-{-
-imposible serializar la direccion del procedimiento
-imposible saber sin ejecutar la continuacion que procedimiento hay que escuchar
-hayq que hacer restoreClosure inmediatamente.
-
-jobs debe almacenar la lista de sesiones y closures que hay que ejecutar de inmediato
-
--}
-
-
-
-
-
 
 data Dat= Dat{field1:: Int,field2 :: Int} deriving (Typeable, Generic,Default)
 
@@ -1354,7 +1244,7 @@ mainsandb= keep $ do
 mainappl= keep $ initNode $ inputNodes <|> do
   local $ option "go" "go" -- ::Cloud ()
   nodes <- local getNodes 
-  r <- local (async(return "world local")) <> do onAll $ ttr "runAt" ; runAt (nodes !! 1) (proc ) -- <|> runAt (nodes !! 2) (proc )
+  r <- local (async(return "world local")) <> do onAll $ tr "runAt" ; runAt (nodes !! 1) (proc ) -- <|> runAt (nodes !! 2) (proc )
 
   localIO $ print r
   where
@@ -1392,7 +1282,7 @@ mainauction = keep $ initNode $ do
        error "auction: not implemented"
 
 
-maintest = keep $ initNode $ test <|> onAll restore1
+maintest = keep $ initNode $ test <|>  restore1
   where
   test= do
     -- POSTData (name :: String, wallet :: Integer) 
@@ -1450,10 +1340,10 @@ minput1 ident val = response
         if (not $ recover log) || BS.null pstring
           then do
             receivee conn (Just $ BC.pack ident)  val
-            logged $ error "not enough parameters 2" -- read the response, error if response not logged
+            unCloud $ logged $ error "not enough parameters 2" -- read the response, error if response not logged
           else do
             receivee conn (Just $ BC.pack ident)  val
-            logged $ error "insuficient parameters 3" -- read the response
+            unCloud $ logged $ error "insuficient parameters 3" -- read the response
 
       tr ("MINPUT RESULT",idcontext',result)
       return result `asTypeOf` return (type1 response)
@@ -1493,3 +1383,73 @@ maindistrib = keep $ initNode $ inputNodes <|> do
     proc x= do
          localIO $ print x
          return x
+
+
+-- yield that manages blocking tasks
+type Task a=  TransIO a
+data Yield = forall a.Yield EventF (TransIO a) deriving Typeable
+
+-- | Yields the execution to other tasks and gives some blocking procedure that must 
+-- be executed before the task could be awakened again.
+yield' :: TransIO a -> TransIO a
+yield' task = Transient $ do
+  cont <- get
+  case event cont of
+        Nothing -> do
+          runTrans $ putMailbox $ Yield cont task
+          return Nothing
+        just -> do
+          put cont{event=Nothing}
+          return $ unsafeCoerce just
+
+-- | Runs the scheduler in a single thread.reads yielded continuations from the
+-- mailbox queue, execute the blocking task and re executes the continuation
+-- if there are more threads available, there will be more parallelism.
+-- ideally it should be as much threads as the number of blocking tasks
+scheduler= threads 2 $ do
+    Yield cont task <- getMailbox
+    r <-  task
+    liftIO $ runCont' cont{event=Just $ unsafeCoerce r} 
+    empty
+    
+
+mainyield= keep' $ (abduce >> scheduler) <|>  do
+  yi 2  <|> yi 1
+  where
+  yi (i :: Int)= do
+    yield' $ return()
+    tr ("before",i)
+    l <- yield' $ liftIO $ do threadDelay $ i* 1000000 ; return i
+    tr ("after",l)
+
+mainabduce= keep' $ threads 2 $ p 1 <|> p 2
+  where
+  p i= do
+    tr ("before",i)
+    abduce
+    liftIO $ threadDelay $ 1000000
+    tr ("after",i)
+  
+mainbuff= keep' $ do
+  s <- threads 1 $ buffered $ threads 1 $ waitEvents getLine
+  liftIO $ threadDelay 5000000
+  liftIO $ putStrLn s
+  where
+  buffered asyncproc= do
+    ev <- newEVar
+    readEVar ev <|> (asyncproc >>= writeEVar ev >> empty)
+
+  
+maincont= keep' $ do
+  cont <- getCont
+  case event cont of
+    Nothing -> do
+       setData cont{event=Just ()}
+       liftIO $ runCont' cont
+       return ()
+    Just r -> do
+      tr "just"
+      setData cont{event=Nothing}
+      liftIO $ print r
+
+  return HELLO
