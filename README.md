@@ -8,7 +8,7 @@ In the year 2010 Simon Peyton Jones wrote an article **"Tackling the Awkward Squ
 
 Transient demostrates that this awkwad squad code can be combined beautifully using the very same operators and classes used for creating pure code. 
 
-The list of impure effects and, in general, code that usually break composability and can be composed beautifully with transient also incudes threading, concurrency, paralelism, callbacks, resource management, Web programming in the server and the browser, exceptions, loops, non determinism, backtracking, distributed computing, recovery of execution state after shutdowm and restart, blocking IO, console input ...
+The list of impure effects and, in general, code that usually break composability and can be composed beautifully with transient also incudes threading, concurrency, paralelism, callbacks, resource management, Web programming in the server and the browser, exceptions, loops, non determinism, backtracking, distributed computing, recovery of execution state after shutdown and restart, blocking IO, console input ...
 
 ## Motivation
 All of this is done for the glory of God. May Christ reign in the nations and the hearts. «Instaurare omnia in Christo». In the name of the Father, the Son and the Holy Ghost. Amen
@@ -31,6 +31,7 @@ Then the combinations:
      - do x <- ap1; ap2 x   --   "        "
      - ap1 <> ap2           -- monoidal expression
      - (,) <$> ap1 <*> ap2  -- Applicative expression
+     - ap1 `operator` ap2   -- Any binary operator
 
 are possible if the types match, and generate new applications that are composable as well with the same operators.
 
@@ -39,8 +40,10 @@ Other operators like the math operators etc are also permitted if they makes sen
 ```haskell
 term1 `impureoperator` term2  = pureoperator <$> term1 <*> term2
 ```
+Since binary operators can be composed forming arbitrary formulas, then any combination of operators that makes sense with pure terms makes sense with effectful terms within the transient monad.
 
 Transient does exactly that.
+
 
 ![image](https://github.com/user-attachments/assets/f3dbc353-e118-4988-a679-ae4ac6bb6be8) **<>** ![image](https://github.com/user-attachments/assets/f3dbc353-e118-4988-a679-ae4ac6bb6be8) **=** ![image](https://github.com/user-attachments/assets/f3dbc353-e118-4988-a679-ae4ac6bb6be8)
 
