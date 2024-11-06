@@ -19,11 +19,12 @@ See the logs
 TO USE RUNGHC/GHCI when libraries are not found
 
 repeat:
->cabal install library --lib  --package-env .
+>cabal install --lib  --package-env . <library>
 
 for each library that does not find
 
 https://discourse.haskell.org/t/could-not-find-module-in-ghci/4385/9
 
 packages to install:
-random directory bytestring containers mtl stm bytestring aeson case-insensitive network websockets network-uri old-time base64-bytestring  network-uri network-bsd
+
+cabal install  --lib  --package-env . random directory bytestring containers mtl stm bytestring aeson case-insensitive network websockets network-uri old-time base64-bytestring TCache data-default  network-uri network-bsd  text mime-types process
