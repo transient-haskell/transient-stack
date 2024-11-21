@@ -8,10 +8,10 @@ In the year 2010 Simon Peyton Jones wrote an article **"Tackling the Awkward Squ
 
 Transient demostrates that this awkwad squad code can be combined beautifully using the very same operators and classes used for creating pure code. 
 
-The list of impure effects and, in general, code that usually break composability and can be composed beautifully with transient also incudes threading, concurrency, paralelism, callbacks, resource management, Web programming in the server and the browser, exceptions, loops, non determinism, backtracking, distributed computing, recovery of execution state after shutdown and restart, blocking IO, console input ...
+The list of impure effects and, in general, code that usually break composability and can be composed beautifully with transient also includes threading, concurrency, paralelism, callbacks, resource management, Web programming in the server and the browser, exceptions, loops, non determinism, backtracking, distributed computing, recovery of execution state after shutdowm and restart, blocking IO, console input ...
 
 ## Motivation
-All of this is done for the glory of God. May Christ reign in the nations and the hearts. «Instaurare omnia in Christo». In the name of the Father, the Son and the Holy Ghost. Amen
+All of this is done for the glory of God. May Christ reign in the nations and the hearts. «Instaurare omnia in Christo». In the name of the Father, the Son, and the Holy Ghost. Amen
 
 Nada se puede hacer sin amor, excepto destruir. Y el amor es Cristo. *Nada podéis hacer sin Mi* Jn 15:5. God inpires ever
 
@@ -22,7 +22,7 @@ One of the dreams of software engineering is unrestricted composability.
 
 This may be put in these terms:
 
-let `ap1` and `ap2` two applications with arbitrary complexity, with all effects including multiple threads, asynchronous IO, indeterminism, events and perhaps, distributed computing.
+let `ap1` and `ap2` be two applications with arbitrary complexity, with all effects including multiple threads, asynchronous IO, indeterminism, events, and perhaps, distributed computing.
 
 Then the combinations:
 
@@ -31,25 +31,22 @@ Then the combinations:
      - do x <- ap1; ap2 x   --   "        "
      - ap1 <> ap2           -- monoidal expression
      - (,) <$> ap1 <*> ap2  -- Applicative expression
-     - ap1 `operator` ap2   -- Any binary operator
 
-are possible if the types match, and generate new applications that are composable as well with the same operators.
+are possible if the types match, and generates new applications that are composable as well with the same operators.
 
-Other operators like the math operators etc are also permitted if they makes sense in the context. ** Any binary operator which makes sense in pure code can be used to combine "impure" transient terms in the TransIO monad** using the above operators. This is the general definition for any binary operator:
+Other operators like math operators etc. are also permitted if they make sense. ** Any binary operator that makes sense in pure code can be used to combine "impure" transient terms in the TransIO monad** using the above operators. This is the general definition for any binary operator:
 
 ```haskell
 term1 `impureoperator` term2  = pureoperator <$> term1 <*> term2
 ```
-Since binary operators can be composed forming arbitrary formulas, then any combination of operators that makes sense with pure terms makes sense with effectful terms within the transient monad.
 
 Transient does exactly that.
-
 
 ![image](https://github.com/user-attachments/assets/f3dbc353-e118-4988-a679-ae4ac6bb6be8) **<>** ![image](https://github.com/user-attachments/assets/f3dbc353-e118-4988-a679-ae4ac6bb6be8) **=** ![image](https://github.com/user-attachments/assets/f3dbc353-e118-4988-a679-ae4ac6bb6be8)
 
 
 
-Besides their usual meaning of these operators for single threaded programs, the operators `<$>` `<*>` and `<>` express concurrency, the operator `<|>` express parallelism and `>>=` express sequencing. They can be applied to threads, distributed processes or web widgets. So even in the presence of these effects and others, everything composes.
+Besides their usual meaning of these operators for single-threaded programs, the operators `<$>` `<*>` and `<>` express concurrency, the operator `<|>` expresses parallelism, and `>>=` express sequencing. They can be applied to threads, distributed processes, or web widgets. So even in the presence of these effects and others, everything composes.
 
 For this purpose transient is an extensible effects monad with all major effects and primitives for parallelism, events, asynchronous IO, early termination, non-determinism logging and distributed computing. Since it is possible to extend it with more effects without adding monad transformers, the composability is assured.
 
@@ -121,4 +118,3 @@ Among the most crazy ones is the possibility of extending this framework to othe
 Once you learn something interesting, you can [contribute to the wiki](https://github.com/transient-haskell/transient/wiki)
 
 [You can also donate](https://agocorona.github.io/donation.html) 
-

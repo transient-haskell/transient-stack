@@ -23,7 +23,7 @@
 -----------------------------------------------------------------------------
 {-# LANGUAGE  CPP, ExistentialQuantification, FlexibleInstances, ScopedTypeVariables, UndecidableInstances #-}
 module Transient.Move.Logged(
-Loggable(..), logged, received, param, getLog, exec,wait, emptyLog, Log(..),hashExec, PrevClos(..)) where
+Loggable(..), logged, received, param, getLog, exec,wait, emptyLog, Log(..),hashExec) where
 
 import Data.Typeable
 import Data.Maybe
@@ -77,57 +77,68 @@ hashDone= 1000
 
 
 logged :: Loggable a => TransIO a -> Cloud a
-logged mx = Cloud $ sandboxData (PrevClos  0 "0") $ do
-  
+logged mx =  Cloud $ do
 
 
-  -- mode <- gets execMode
-  -- tr ("execMode",mode)
-
-  r <- res <** outdent
-
-  tr ("finish logged stmt of type",typeOf res, "with value", r)
-  
-
-  return r
-  where
-
-  res = do
-        log <- getLog
-
-        debug <- getParseBuffer
-        tr (if recover log then "recovering" else "excecuting" <> " logged stmt of type",typeOf res, debug,"PARTLOG",partLog log)
-        indent
-        let segment= partLog log
 
 
-        rest <- getParseBuffer 
+    r <- res <** outdent
 
-        setData log{partLog=  segment <> exec, hashClosure= hashClosure log + hashExec}
-        
-        r <-(if not $ BS.null rest
-               then do  recoverIt
-               else do   mx)  <|> addWait segment
-                            -- when   p1 <|> p2, to avoid the re-execution of p1 at the
-                            -- recovery when p1 is asynchronous or  empty
-        tr "CONTINUE"
-        rest <- giveParseString
+    tr ("finish logged stmt of type",typeOf res, "with value", r)
+    
 
-        let add= serialize r <> lazyByteString (BS.pack "/")
-            recov= not $ BS.null rest  
-            parlog= segment <> add 
-
-        tr ("parlog2",segment,add,parlog)
-        modifyState'  (\log -> log{recover=recov, partLog= parlog, hashClosure= hashClosure log + hashDone }) emptyLog
-
-
-        return r
-
-
+    return r
     where
+
+    res = do
+          log <- getLog
+          -- tr "resetting PrevClos"
+          -- modifyState'(\(PrevClos a b _) -> PrevClos a b False) (error "logged: no prevclos") -- (PrevClos 0 "0" False) -- 11
+
+          debug <- getParseBuffer
+          tr (if recover log then "recovering" else "excecuting" <> " logged stmt of type",typeOf res,"parseString", debug,"PARTLOG",partLog log)
+          indent
+          let segment= partLog log
+
+
+          rest <- getParseBuffer 
+
+          setData log{partLog=  segment <> exec, hashClosure= hashClosure log + hashExec}
+          
+          r <-(if not $ BS.null rest
+                then recoverIt
+                else do
+                  tr "resetting PrevClos"
+                  modifyState'(\(PrevClos a b _) -> PrevClos a b False) (error "logged: no prevclos") -- (PrevClos 0 "0" False) -- 11
+
+                  mx)  <|> addWait segment
+                              -- when   p1 <|> p2, to avoid the re-execution of p1 at the
+                              -- recovery when p1 is asynchronous or  empty
+          rest <- giveParseString
+
+          let add= serialize r <> lazyByteString (BS.pack "/")
+              recov= not $ BS.null rest  
+              parlog= segment <> add 
+
+          PrevClos s c hadTeleport <- getData `onNothing` (error $ "logged: no prevclos") -- return (PrevClos 0 "0" False)
+          modifyState'  (\log ->  -- problemsol 10
+                        if  hadTeleport 
+                          then 
+                            trace (show("set log","")) $ log{recover=recov, partLog= mempty,hashClosure= hashClosure log  }
+                          else 
+                            trace (show("set log",parlog)) $ log{recover=recov, partLog= parlog, hashClosure= hashClosure log + hashDone } 
+                        ) 
+                        emptyLog
+
+
+
+          return r
+
+
+    
     addWait segment= do
       -- tr ("ADDWAIT",segment)
-      outdent
+      -- outdent
 
       tr ("finish logged stmt of type",typeOf res, "with empty")
       modifyData' (\log -> log{partLog=segment <> wait, hashClosure=hashClosure log + hashWait})
@@ -155,7 +166,7 @@ logged mx = Cloud $ sandboxData (PrevClos  0 "0") $ do
           ("w/",r) -> do
             tr "WAIT"
             setParseString r
-            modify $ \s -> s{execMode=if execMode s /= Remote then Parallel else Remote}  
+            modify $ \s -> s{execMode= if execMode s /= Remote then Parallel else Remote}  
                           -- in recovery, execmode can not be parallel(NO; see below)
             empty                                
 

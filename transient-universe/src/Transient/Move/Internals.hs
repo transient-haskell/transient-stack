@@ -412,16 +412,15 @@ callTo node remoteProc = wormhole' node $ atRemote remoteProc
 atRemote :: Loggable a => Cloud a -> Cloud a
 atRemote proc = loggedc $ do
       tr "ATREMOTE TELEPORT1"
-      teleport
+      teleport 
       tr "ATREMOTE TELEPORT1 END"
 
       -- recover mode is executed in serial mode
       modify $ \s -> s {execMode = if execMode s == Parallel then Parallel else Serial} 
-      -- The remote computation should'nt execute alternative computations afterwards
-      r <- (loggedc proc) <** modify (\s -> s {execMode = Remote}) 
+      r <- (loggedc proc) -- <** modify (\s -> s {execMode = Remote}) 
 
       tr "ATREMOTE TELEPORT2"
-      teleport
+      teleport 
       tr "ATREMOTE TELEPORT2 END"
 
       return r
@@ -498,7 +497,8 @@ wormhole node comp = do
 
 -- | wormhole without searching for relay nodes.
 wormhole' :: Loggable a => Node -> Cloud a -> Cloud a
-wormhole' node (Cloud comp) = Cloud $ sandboxData (M.empty :: M.Map Int Closure) $ unCloud $ local $
+wormhole' node (Cloud comp) = local $  do
+  
   Transient $ do
     moldconn <- getData :: StateIO (Maybe Connection)
     -- tr "wormhole"
@@ -506,7 +506,11 @@ wormhole' node (Cloud comp) = Cloud $ sandboxData (M.empty :: M.Map Int Closure)
     log <- getLog
 
     if not $ recover log
-      then runTrans $ (do
+     then runTrans $ do 
+      abduce
+      sandboxData (LastRemoteClos 0 "0") $ sand  (do
+     
+       delData $ LastRemoteClos 0 "0"
        my <- getMyNode
        if node== my then do
               let conn = fromMaybe (error "wormhole: no connection") moldconn
@@ -533,13 +537,26 @@ wormhole' node (Cloud comp) = Cloud $ sandboxData (M.empty :: M.Map Int Closure)
               when (isJust moldconn) . setData $ fromJust moldconn
       else do
         -- tr "YES REC"
+        
         let conn = fromMaybe (error "wormhole: no connection in remote node") moldconn
         setData $ conn {calling = False}
-        runTrans $ comp
+        -- The remote computation should'nt execute alternative computations afterwards (problemsol 12)
+        
+        -- to avoid executing alternative computations in the remote node
+        runTrans $ comp  <|> (modify (\s -> s {execMode = Remote}) >> empty)
+  where
+  sand x= do
+    PrevClos s c _ <- getData `onNothing` error "wormhole: no PrevClos" -- return (PrevClos 0 "0" False)
+    x <*** 
+          -- do not restore PrevClos if there was a teleport inside mx
+          
+          modifyState' 
+              (\(PrevClos s' c' tel) ->
+                    if tel then PrevClos s' c' True
+                           else PrevClos s  c  False)
+              (PrevClos s c False)
 
-
-
-
+             
 
 -- | set remote invocations synchronous
 -- this is necessary when data is transfered very fast from node to node in a stream non-deterministically
@@ -579,9 +596,10 @@ syncStream proc = do
 
 
 teleport :: Cloud ()
-teleport =  do
+teleport =  do -- local $ do
   modify $ \s -> s {execMode = if execMode s == Remote then Remote else Parallel}
-  PrevClos idsess prevclos <- getData `onNothing` return (PrevClos  0 "0")
+  PrevClos idsess prevclos _ <- getData `onNothing` error "teleport: no prevclos" -- return (PrevClos  0 "0" False)
+  tr ("PREVCLOS",idsess,prevclos)
 
   idSession <- onAll $ if idsess /= 0 then return idsess else  fromIntegral <$> genPersistId
 
@@ -589,49 +607,63 @@ teleport =  do
 
     tr "TELEPORTTT2"
     conn@Connection {idConn = idConn, connData = contype, synchronous = synchronous} <-
-      getData
-        `onNothing` error "teleport: No connection defined: use wormhole"
+              getData
+                `onNothing` error "teleport: No connection defined: use wormhole"
     tr ("teleport REMOTE NODE", fmap  nodePort $ unsafePerformIO $ readIORef $ remoteNode conn, idConn  )
 
     Transient $ do
-      --  labelState  "teleport"
+        --  labelState  "teleport"
 
-      log <- getLog
+        log <- getLog
 
-      if not $ recover log
-        then do
-          -- when a node call itself, there is no need for socket communications
-          ty <- liftIO $ readIORef contype
-          case ty of
-            Just Self -> runTrans $ do
-              modify $ \s -> s {execMode = Parallel} -- setData  Parallel
-              abduce -- !> "SELF" -- call himself
-              tr "SELF"
-              liftIO $ do
-                remote <- readIORef $ remoteNode conn
-                writeIORef (myNode conn) $ fromMaybe (error "teleport: no connection?") remote
-            _ -> do
-              -- tr ("teleport remote call", idConn)
-              (Closure sess closRemote n) <- getIndexData idConn `onNothing` return (Closure 0 "0" [])
-              tr ("getIndexData", idConn, sess, closRemote, n)
-              let prevclosDBRef= getDBRef $ kLocalClos idsess prevclos
-              prevlog <- getClosureLogFrom prevclosDBRef sess  closRemote
-              tr ("prevlog",prevclos,sess,closRemote,prevlog)
-              let tosend =  prevlog <> partLog log
-              
-              let closLocal = BC.pack $show $ hashClosure log
-
-              runTrans $ do
-                msend conn $ toLazyByteString $ serialize $ SMore $ ClosureData closRemote sess closLocal idSession tosend
-                tr ("RECEIVER NODE", unsafePerformIO $ readIORef $ remoteNode conn, idConn )
-
-                receive conn Nothing idSession
-                tr "AFTER RECEIVE"
+        if not $ recover log
+          then do
+            -- when a node call itself, there is no need for socket communications
+            ty <- liftIO $ readIORef contype
+            case ty of
+              Just Self -> runTrans $ do
+                modify $ \s -> s {execMode = Parallel} -- setData  Parallel
+                -- wormhole does abduce now
+                -- abduce 
+                -- call himself
+                tr "SELF"
+                liftIO $ do
+                  remote <- readIORef $ remoteNode conn
+                  writeIORef (myNode conn) $ fromMaybe (error "teleport: no connection?") remote
+              _ -> do
+                -- tr ("teleport remote call", idConn)
+                Just (sessRemote, closRemote) <- runTrans $ 
+                     do
+                      LastRemoteClos s c <- getState
+                      tr ("after LastRemoteClos",s,c)
+                      delState $ LastRemoteClos s c
+                      return (s,c)
+                    <|> do
+                     
+                      (Closure s c _) <- getIndexState idConn
+                      tr("after getIndexState",s,c)
+                      return (s,c)
+                    <|> do
+                      tr "return 0 0"
+                      return (0, "0")
+                -- (Closure sessRemote closRemote n) <- getIndexData idConn `onNothing` return (Closure 0 "0" [])
+                -- tr ("getIndexData", idConn, sessRemote, closRemote, n)
+                let prevclosDBRef= getDBRef $ kLocalClos idsess prevclos
+                prevlog <- getClosureLogFrom prevclosDBRef sessRemote  closRemote
+                let tosend =  prevlog <> partLog log
                 
-        else  return $ Just ()
-  -- onAll $ tr "SETCONT ONALL" >> setCont Nothing idSession
+                let closLocal = BC.pack $show $ hashClosure log
+
+                runTrans $ do
+                  msend conn $ toLazyByteString $ serialize $ SMore $ ClosureData closRemote sessRemote closLocal idSession tosend
+                  tr ("RECEIVER NODE", unsafePerformIO $ readIORef $ remoteNode conn, idConn )
+
+                  receive conn Nothing idSession
+                  tr "AFTER RECEIVE"
+                  
+          else return $ Just ()
+  tr "partLog=mempty"
   modifyState' (\log -> log{partLog= mempty}) (error "teleport: no log")
-  -- modifyState' (\log ->log{partLog= mempty}) (error "teleport: no log")
   return()
 
 
@@ -699,7 +731,7 @@ firstCont = do
 
     -- liftIO $ print url
     liftIO $ atomically $ writeDBRef rthis this
-  setState $ PrevClos 0 "0"
+  setState $ PrevClos 0 "0" False
 
 
 
@@ -2457,13 +2489,10 @@ processMessage s1 closl s2 closr mlog deleteClosure = do
           when (synchronous conn) $ liftIO $ tryPutMVar mv () >> return () -- for syncronous streaming
           case mlog of
             Right log -> do
-              -- tr ("WRITEEVAR", s2, closl,log)
-              
-              -- conn <- getData `onNothing` error "no connection" :: StateIO Connection
               runTrans $
                 if deleteClosure
-                  then writeEVar ev $ Right (SLast log, s2, closr, conn)
-                  else writeEVar ev $ Right (SMore log, s2, closr, conn)
+                  then lastWriteEVar ev $ Right (SLast log, s2, closr, conn)
+                  else writeEVar     ev $ Right (SMore log, s2, closr, conn)
             Left except -> do
               runTrans $ writeEVar ev $ Left except
               empty
@@ -2487,18 +2516,17 @@ setCont mclos idSession = do
 setCont' logstr closName idSession=  do
   tr ("SETCONT", closName, idSession,logstr)
 
-  PrevClos prevSess prevclos <- getState <|> return(PrevClos 0 "0")
+  PrevClos prevSess prevclos _ <- getState <|> error("setCont: PrevClos not set")
 
   let dbprevclos=   getDBRef $ kLocalClos prevSess prevclos  :: DBRef LocalClosure
       dblocalclos = getDBRef $ kLocalClos idSession closName :: DBRef LocalClosure
 
-  log <- getLog
   tr "RESET LOG"
-  setState log{partLog= mempty}
+  modifyState' (\log -> log{partLog= mempty}) (error "setCont: no log")
 
   ev <- newEVar
   tr ("SETSTATE PREVCLOS",idSession, closName)
-  setState $ PrevClos  idSession closName
+  setState $ PrevClos  idSession closName True
 
   cont <- get
 
@@ -2509,7 +2537,7 @@ setCont' logstr closName idSession=  do
   closure <- case mr of
     Just (locClos@LocalClosure {..}) -> do
       tr "found dblocalclos"
-      return locClos {localEvar = Just ev, localCont = Just cont} -- localCont=Just cont} -- (localClos,localMVar,ev,cont)
+      return locClos {localEvar = Just ev, localCont = Just cont,localLog= logstr} -- localCont=Just cont} -- (localClos,localMVar,ev,cont)
     _ -> do
       mv <- liftIO $ newEmptyMVar
 
@@ -2540,6 +2568,7 @@ setLog idConn log sessionId closr = do
   tr ("setLog setCont", idConn, sessionId, closr ,log)
 
   modifyData' (\l -> l {recover = True}) emptyLog
+  setState $ LastRemoteClos sessionId closr
   setCont' log closr sessionId
   return ()
 
