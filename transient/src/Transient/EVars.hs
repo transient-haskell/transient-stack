@@ -42,7 +42,7 @@ newEVar  = Transient $ do
    ref <-liftIO  newBroadcastTChanIO
    return . Just $ EVar  ref
 
--- | delete al the subscriptions for an EVar.
+-- | delete all the subscriptions for an EVar.
 cleanEVar :: EVar a -> TransIO ()
 cleanEVar (EVar  ref1)= liftIO $ atomically $  writeTChan  ref1 SDone
 

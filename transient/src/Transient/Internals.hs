@@ -82,7 +82,7 @@ color x= unsafePerformIO $ do
     th <- myThreadId
     sps <- readIORef rindent >>= \n -> return $ take n $ repeat ' '
     let col=  (read (drop 9 (show th)) `mod` (36-31))+31
-    return $ "\x1b["++ show col ++ ";49m" ++ sps ++ show (th,x) ++ "\x1b[0m"
+    return $ "\x1b["++ show col ++ ";49m" ++ sps ++ show (th,x) ++ "\x1b[0m\n"
 
     -- 256 colors
     -- let col= toHex $ (read  (drop 9(show th))) `mod` 255
@@ -1335,16 +1335,22 @@ sandbox' mx = do
   st <- get
   mx <*** modify (\s ->s { mfData = mfData st, parseContext= parseContext st})
 
--- | executes a computation and restores the concrete state data. Default state is assigned if there isn't any before execution
+-- | executes a computation and restores the concrete state data. the first parameter is used as withness of the type
 --
 -- As said in `sandbox`, sandboxing can be tricked by backtracking
 
 sandboxData :: Typeable a => a -> TransIO b -> TransIO b
 sandboxData def w= do
-   d <- getData `onNothing` return  def
-   w  <***  setState  d
+   d <- getData 
+   w  <***  if isJust d then setState (fromJust d `asTypeOf` def) else delState def
 
 
+
+sandboxCond :: Typeable a => (Maybe a -> Maybe a -> Maybe a) -> TransIO a -> TransIO a
+sandboxCond cond w= do
+  prev <- getData 
+  w <***  modifyState (\mx ->  cond mx prev)
+                       
 
 
 

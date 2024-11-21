@@ -1,6 +1,8 @@
 {-#Language RecordWildCards,DeriveGeneric,CPP, UndecidableInstances
 , OverlappingInstances,FlexibleInstances,GeneralizedNewtypeDeriving, OverloadedStrings #-}
 
+-- Dedicado a Jesucristo, mi salvador
+
 module Transient.Move.Defs where
 
 import Transient.Internals
@@ -36,7 +38,11 @@ import qualified Data.Map                               as M
 import Control.Monad.State
 import Control.Applicative
 
-data PrevClos = PrevClos {idSession :: SessionId, idClosure :: IdClosure}
+-- | previous local checkpointed closure in the execution flow
+data PrevClos = PrevClos {idSession :: SessionId, idClosure :: IdClosure, hasTeleport :: Bool}
+
+-- | last remote closure in a teleport waiting for responses in the execution flow
+data LastRemoteClos= LastRemoteClos{remSession :: SessionId, remClosure :: IdClosure}
 
 type IdClosure = BC.ByteString
 type SessionId = Int
