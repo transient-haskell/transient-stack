@@ -479,17 +479,17 @@ unique f = do
 -- `teleport` uses this connection to translate the computation back and forth between the two nodes connected.
 -- If the connection fails, it search the network for suitable relay nodes to reach the destination node.
 wormhole node comp = do
-  onAll $
-    onException $ \(e@(ConnectionError "no connection" nodeerr)) ->
-      if nodeerr == node then do unCloud $ findRelay node; continue else return ()
-  wormhole' node comp
-  where
-    findRelay node = do
-      relaynode <- exploreNetUntil $ do
-        nodes <- local getNodes
-        let thenode = filter (== node) nodes
-        if not (null thenode) && isJust (connection $ Prelude.head thenode) then return $ Prelude.head nodes else empty
-      local $ addNodes [node {nodeServices = nodeServices node ++ [Service $ M.fromList[("relay", show (nodeHost (relaynode :: Node), nodePort relaynode))]]}]
+    onAll $
+        onException $ \(e@(ConnectionError "no connection" nodeerr)) ->
+           if nodeerr == node then do unCloud $ findRelay node; continue else return ()
+    wormhole' node comp
+    where
+        findRelay node = do
+            relaynode <- exploreNetUntil $ do
+                nodes <- local getNodes
+                let thenode = filter (== node) nodes
+                if not (null thenode) && isJust (connection $ Prelude.head thenode) then return $ Prelude.head nodes else empty
+            local $ addNodes [node {nodeServices = nodeServices node ++ [Service $ M.fromList[("relay", show (nodeHost (relaynode :: Node), nodePort relaynode))]]}]
 
 -- when the first teleport has been sent within a wormhole, the
 -- log sent should be the segment not send in the previous teleport
@@ -3255,5 +3255,5 @@ restoreClosure idSession clos  = do
   let cont' = cont {parseContext = (parseContext cont) {buffer = parses}, mfData = mf'}
   tr ("SET parseString",  log)
   modify (\s -> s{execMode=Remote})
-  void $ liftIO $  runStateT (runCont cont') cont' `catch` exceptBack cont'
+  void $ liftIO $  runStateT (runCont () cont') cont' `catch` exceptBack cont'
 
