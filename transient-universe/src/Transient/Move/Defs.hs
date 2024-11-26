@@ -42,7 +42,7 @@ import Control.Applicative
 data PrevClos = PrevClos {idSession :: SessionId, idClosure :: IdClosure, hasTeleport :: Bool}
 
 -- | last remote closure in a teleport waiting for responses in the execution flow
-data LastRemoteClos= LastRemoteClos{remSession :: SessionId, remClosure :: IdClosure}
+data ClosToRespond= ClosToRespond{remSession :: SessionId, remClosure :: IdClosure}
 
 type IdClosure = BC.ByteString
 type SessionId = Int

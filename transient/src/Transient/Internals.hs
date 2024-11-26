@@ -1338,6 +1338,17 @@ sandbox' mx = do
   st <- get
   mx <*** modify (\s ->s { mfData = mfData st, parseContext= parseContext st})
 
+-- | Sanbox only to other terms of a formula made of applicatives and alternatives
+sandboxSide :: [TypeRep] -> TransIO a  -> TransIO a
+sandboxSide ts mx = do
+  st <- get
+
+  mx <|> (modify (\s ->s { mfData = modif (mfData st) (mfData s), parseContext= parseContext st}) >> empty)
+  where
+  modif mapold m = M.union (M.fromList $ mapMaybe 
+        (\t ->case M.lookup t m of
+                Nothing -> trace "NOTHINGG" Nothing
+                Just x  -> trace "FOUND" $ Just (t,x)) ts) mapold
 -- | executes a computation and restores the concrete state data. the first parameter is used as withness of the type
 --
 -- As said in `sandbox`, sandboxing can be tricked by backtracking
