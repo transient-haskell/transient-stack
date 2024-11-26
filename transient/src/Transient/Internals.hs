@@ -1335,6 +1335,17 @@ sandbox' mx = do
   st <- get
   mx <*** modify (\s ->s { mfData = mfData st, parseContext= parseContext st})
 
+-- | Sanbox only to other terms of a formula made of applicatives and alternatives
+sandboxSide :: [TypeRep] -> TransIO a  -> TransIO a
+sandboxSide ts mx = do
+  st <- get
+
+  mx <|> (modify (\s ->s { mfData = modif (mfData st) (mfData s), parseContext= parseContext st}) >> empty)
+  where
+  modif mapold m = M.union (M.fromList $ mapMaybe 
+        (\t ->case M.lookup t m of
+                Nothing -> trace "NOTHINGG" Nothing
+                Just x  -> trace "FOUND" $ Just (t,x)) ts) mapold
 -- | executes a computation and restores the concrete state data. the first parameter is used as withness of the type
 --
 -- As said in `sandbox`, sandboxing can be tricked by backtracking
@@ -1825,7 +1836,7 @@ react h iob= do
         case event cont of
           Nothing -> do
             liftIO $ setHandler $ \dat ->do
-              (_,cont') <- (runStateT (runCont cont) cont{event= Just $ unsafeCoerce dat}) 
+              (_,cont') <- (runStateT (runCont cont) cont{event= Just $ unsafeCoerce dat}) `catch` exceptBack cont
               -- let rparent=  parent st
               -- Just parent <- liftIO $ readIORef rparent
               -- th <- liftIO myThreadId
@@ -1992,9 +2003,9 @@ instance Read Builder where
 onBack :: (Typeable b, Show b) => TransientIO a -> ( b -> TransientIO a) -> TransientIO a
 onBack ac bac = do
   log <- getLog
-  registerBack  (typeof bac) $  do
+  registerBack  (eventOf bac) $  do
     --  tr "onBack"
-     Backtrack mreason stack <- getData `onNothing` (return $ backStateOf (typeof bac))
+     Backtrack mreason stack <- getData `onNothing` (return $ backStateOf (eventOf bac))
     --  tr ("onBackstack",mreason, length stack)
      case mreason of
                   Nothing     -> do -- tr "ONBACK NOTHING" 
@@ -2006,8 +2017,8 @@ onBack ac bac = do
                                     bac reason 
 
      where
-     typeof :: (b -> TransIO a) -> b
-     typeof = undefined
+     eventOf :: (b -> TransIO a) -> b
+     eventOf = undefined
 
 
 -- | to register  backtracking points of the type of the first parameter within the computation in the second parameter 

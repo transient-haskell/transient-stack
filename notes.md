@@ -28,3 +28,5 @@ https://discourse.haskell.org/t/could-not-find-module-in-ghci/4385/9
 packages to install:
 
 cabal install  --lib  --package-env . random directory bytestring containers mtl stm bytestring aeson case-insensitive network websockets network-uri old-time base64-bytestring TCache data-default  network-uri network-bsd  text mime-types process
+
+for transient-universe-tls:   tls 
