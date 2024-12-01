@@ -2,6 +2,10 @@
 module Transient.EVars where
 
 import Transient.Internals
+    ( StreamData(SLast, SDone, SMore),
+      TransIO(Transient),
+      parallel,
+      checkFinalize )
 import Data.Typeable
 
 import Control.Applicative
@@ -10,7 +14,7 @@ import Control.Monad.State
 
 import Control.Exception as CE
 
-data EVar a= EVar  (TChan (StreamData a)) deriving  Typeable
+newtype EVar a= EVar  (TChan (StreamData a)) deriving  Typeable
 
 
 -- | creates an EVar.

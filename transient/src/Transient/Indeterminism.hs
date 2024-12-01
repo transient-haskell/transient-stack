@@ -21,7 +21,7 @@ import Transient.Internals hiding (retry)
 import Data.IORef
 import Control.Applicative
 import Data.Monoid
-import Control.Concurrent  
+import Control.Concurrent
 import Control.Monad.State
 import Control.Exception hiding (onException)
 import qualified Data.ByteString.Char8 as BS
@@ -31,9 +31,10 @@ import System.IO.Unsafe
 -- | inject a stream of  values in the computation in as much threads as are available. You can use the
 -- 'threads' primitive to control the parallelism.
 --
+-- unlike normal loops, two or more choose primitives or expressions that use choose can be composed algebraically
 choose  ::  [a] -> TransIO  a
 choose []= empty
-choose   xs = chooseStream xs >>= checkFinalize  
+choose   xs = chooseStream xs >>= checkFinalize
 
 -- | inject a stream of SMore values in the computation in as much threads as are available. transmit the end of stream witha SLast value
 chooseStream  ::  [a] -> TransIO (StreamData a)
@@ -51,15 +52,15 @@ chooseStream   xs = do
 
 --
 choose' :: [a] -> TransIO a
-choose' xs = foldr (<|>) empty $ map (async . return) xs
+choose' = foldr ((<|>) . async . return) empty
 
--- | for loop, single threaaded with de-inversion of control
+-- | for loop, single threaded with de-inversion of control
 --
 -- >> do
 -- >>   i <- for [1..10]
 -- >>   liftIO $ print i
 --
--- Composes with any other transient primitive
+-- unlike normal loops, it composes with any other transient primitives or expression that includes them, including itself.
 --
 -- >> main= keep  $  do
 -- >>  x <- for[1..10::Int] <|> (option ("n" :: String) "enter another number < 10" >> input (< 10 ) "number? >")
@@ -81,9 +82,7 @@ group num proc =  do
 
               then ((0,[]), Just $ x:xs)
               else ((n', x:xs),Nothing)
-    case mn of
-      Nothing -> stop
-      Just xs -> return xs
+    maybe stop return mn
 
 
 -- | Collect the results of the first @n@ tasks.  Synchronizes concurrent tasks
@@ -123,7 +122,7 @@ collect n = collect' n 0
 --                 --addThreads 1
 --                 async $ threadDelay t >> putMVar rv Nothing 
 --              empty
-      
+
 --       monitor=  liftIO loop 
 
 --           where
@@ -155,24 +154,23 @@ collect n = collect' n 0
 
 burst :: Int -> TransIO a -> TransIO (StreamData a)
 burst timeout comp= do
-     r <- oneThread comp 
+     r <- oneThread comp
      return (SMore r) <|> (async (threadDelay timeout) >> return SDone)
 
 -- | Collect the results of a task set, grouping all results received within
 -- every time interval specified by the first parameter as `diffUTCTime`. 
 groupByTime :: Monoid a => Int -> TransIO a -> TransIO a
 groupByTime timeout comp= do
-     v <- liftIO $ newIORef mempty 
-     gather v <|> run v 
+     v <- liftIO $ newIORef mempty
+     gather v <|> run v
      where
-     run v =  do 
+     run v =  do
         x <-  comp
         liftIO $ atomicModifyIORef v $ \xs -> (xs <> x,())
         empty
-        
+
      gather v= waitEvents $ do
-             threadDelay timeout 
-             atomicModifyIORef v $ \xs -> (mempty , xs) 
+             threadDelay timeout
+             atomicModifyIORef v $ \xs -> (mempty , xs)
 
 
- 

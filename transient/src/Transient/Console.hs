@@ -1,4 +1,7 @@
-{-# LANGUAGE ScopedTypeVariables,CPP, GeneralizedNewtypeDeriving,DeriveGeneric #-}
+{-# LANGUAGE ScopedTypeVariables, CPP #-}
+{-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
+{-# HLINT ignore "Used otherwise as a pattern" #-}
+{-# HLINT ignore "Use lambda-case" #-}
 
 
 
@@ -29,6 +32,7 @@ import System.IO.Unsafe
 import Data.String
 import qualified Data.Vector as V
 import qualified Data.Map as M
+import Data.Functor
 
 import qualified Data.TCache.DefaultPersistence as TC
 import qualified Data.TCache.Defs  as TC
@@ -39,7 +43,6 @@ import Data.TCache  hiding (onNothing)
 import Control.Monad.State
 import System.Directory
 import Unsafe.Coerce
-import qualified Data.Vector as V
 
 
 
@@ -86,6 +89,7 @@ optionf remove ret message = do
   return ret
 
 -- a new option/input has been added. should be applied to the line if none has parsed the last fragment
+{-# NOINLINE newInput #-}
 newInput= unsafePerformIO $ newIORef False
 -- | General asynchronous console input.
 --
@@ -94,10 +98,10 @@ newInput= unsafePerformIO $ newIORef False
 -- when ident== "input", if there is a default value and the input do not match, the default value is returned and the input is processed by the active  options . if there is no default value (Nothing) the input string is deleted and prompts for a new input. There is at most one single active input. The next active input in an alternative composition disables the previous.
 inputf ::  (Loggable a, Typeable a) => Bool -> String -> String -> Maybe a -> (a -> Bool) -> TransIO a
 inputf remove ident message mv cond = do
-   er <- inputfm remove ident message mv cond 
+   er <- inputfm remove ident message mv cond
    case er of
     Right r -> return r
-    _ ->  empty 
+    _ ->  empty
 
 
 -- | general asynchronous console input with control key events. It returns ANSI escape controls as: Left <control code>
@@ -119,20 +123,20 @@ inputfm remove ident message mv cond = do
         liftIO $ do
           writeIORef rdefault ""
           writeIORef rconsumed $ Just ""
-        
+
         return $ Left str -- control character. Señor, si tus planes no son los míos, destruyelos
     otherwise -> do
-      cont <- getCont 
-      let removeIt= do 
+      cont <- getCont
+      let removeIt= do
             liftIO $ delConsoleAction ident
             liftIO $ atomicModifyIORef (labelth cont) $ \(_,label) -> ((Dead,label),())
-            return()
+            return ()
 
       when (remove && ident /= "input") removeIt
 
 
       c <- liftIO $ readIORef rconsumed
-      let 
+      let
         returnm (Just x) = do
           liftIO $ writeIORef rdefault ""
           when (ident == "input")  removeIt
@@ -142,29 +146,31 @@ inputfm remove ident message mv cond = do
       if isJust c || str== " " -- lo ha consumido otro  
                   -- o la linea esta vacia
         then do
-          liftIO $do
+          liftIO $ do
              writeIORef rconsumed $ Just $ dropspaces str
              writeIORef rdefault ""
           returnm mv
         else do
           -- let res = read2 str
           -- use seriañize/deserialize instead of Read/Show.  El que ama a Dios, guarda su palabra. Conviertete y conoce la paz y el amor de Dios.
-          res <- withParseString (BSL.pack str) $ 
+          
+          res <- withParseString (BSL.pack str) $
                   (Just <$> ((,) <$> deserialize <*> giveParseString)) <|> return Nothing
+          
           case res of
-            Nothing -> 
+            Nothing ->
               -- if (ident=="input")  -- retry. "Venid a Mi los cansados y abatidos y yo os aliviaré, porque mi yugo es llevadero y mi cargal ligera"
               --   then do liftIO $ writeIORef rconsumed $ Nothing ; inputfm remove ident message mv cond
                 -- else do 
-                  
+
                     case mv of
                       Nothing -> do
                          when (ident == "input") $ do
-                            liftIO $ do 
+                            liftIO $ do
                               putStrLn $ "Must be of type " ++ show (typeOf (fromJust mv))
                               putStr message; hFlush stdout
                             liftIO $ writeIORef rconsumed  $ Just ""
-                            
+
                          empty
 
                       otherwise ->  do
@@ -181,35 +187,34 @@ inputfm remove ident message mv cond = do
                     echo <- readIORef recho
                     when echo $ do putStr ": "; BSL.putStrLn $ toLazyByteString $ serialize x
 
-                    when remove $ do 
+                    when remove $ do
                         -- remove the react task this also remove the remaining option1 composed with this one
                         -- Alabado sea Jesucristo
                         par <- readIORef $ parent cont
-                        when (isJust par) $ do liftIO $ free (threadId cont) $ fromJust par; return()
-                        return()
+                        when (isJust par) $ do liftIO $ free (threadId cont) $ fromJust par; return ()
 
                   -- print x
                   -- hFlush stdout
                   return $ Right x
                 else do
-                  if (ident == "input") 
+                  if ident == "input"
                     then
                       liftIO $ do
                          echo <- readIORef recho
                          when echo $ do putStr " : "; BSL.putStrLn $ toLazyByteString $ serialize x
-                         putStrLn $"value of type " ++ show(typeOf $ fromJust mv) ++ " failed validation"
-                         
+                         putStrLn $ "value of type " ++ show (typeOf $ fromJust mv) ++ " failed validation"
 
-                         putStr message; 
+
+                         putStr message;
                          hFlush stdout
                          writeIORef rconsumed  $ Just ""
                          return $ Left ""
                     else do
                       liftIO $ when (isJust mv) $  putStrLn ""
                       returnm mv
-  
+
 separators = "/:\t\n; "
-dropspaces s = dropWhile (\x -> elem x separators) s
+dropspaces = dropWhile (`elem` separators)
 
 
 -- | Waits on stdin and return a value when a console input matches the
@@ -252,11 +257,11 @@ inputNav mv cond prompt= do
   def <- default' prompt `onBack` \Navigation ->  do
           NavBack doit <- getState <|> return (NavBack False)
           -- tr  $ ("doit",doit)
-          if(doit == False)  
+          if not doit
             then do
               setState $ NavBack True
-              backtrack 
-            else do 
+              backtrack
+            else do
               forward Navigation
               default' prompt
 
@@ -264,10 +269,10 @@ inputNav mv cond prompt= do
   inputit def
   where
   default' prompt= do
-              NavResps resps <- liftIO $ atomically (readDBRef rNavResps) `onNothing` return (NavResps M.empty) 
+              NavResps resps <- liftIO $ atomically (readDBRef rNavResps) `onNothing` return (NavResps M.empty)
               if M.null resps then return mv else do
                 let s = M.lookup prompt resps
-                if isJust s 
+                if isJust s
                   then do
                     r<- withParseString  (BSL.pack $ fromJust s) deserialize
                     return $ Just r
@@ -279,7 +284,7 @@ inputNav mv cond prompt= do
       Left "\ESC[A" -> do liftIO $ putChar '\n';setState $ NavBack False; back Navigation
       Left ('\ESC':_) -> empty
       Right r -> do
-        let str = BSL.unpack $ toLazyByteString $ serialize r  
+        let str = BSL.unpack $ toLazyByteString $ serialize r
 
         -- modifyState' (\(NavResps map) -> (NavResps $ M.insert prompt str map )) $ NavResps (M.singleton prompt str)
         liftIO $ withResource (NavResps M.empty) $ \nr -> case nr of
@@ -309,6 +314,7 @@ reads1 s = x
 
 read1 s = let [(x, "")] = reads1 s in x
 
+{-# NOINLINE rprompt #-}
 rprompt = unsafePerformIO $ newIORef " > "
 
 inputLoop =
@@ -336,7 +342,7 @@ getLineNoBuffering= do
   line <- newIORef $ V.fromList content
   index <- newIORef $ length content
 
-  
+
   let loop= do
         c <- getChar
         case c of
@@ -346,28 +352,28 @@ getLineNoBuffering= do
                 hSetBuffering stdout LineBuffering
                 hSetEcho stdin True
 
-                readIORef line >>= return . V.toList
+                readIORef line <&> V.toList
           '\ESC'  -> do
                 c1 <- getChar
                 c2 <- getChar
-                if (c1== '[') 
+                if c1== '['
                   then case c2 of
-                    'A' -> do 
+                    'A' -> do
                               hSetBuffering stdin LineBuffering
-                              hSetBuffering stdout LineBuffering 
+                              hSetBuffering stdout LineBuffering
                               hSetEcho stdin True
                               return "\ESC[A"
-                    'D' -> do 
+                    'D' -> do
                               i <- readIORef index
-                              when(i>0)$ putChar '\b'
+                              when (i>0)$ putChar '\b'
                               writeIORef index $ if i> 0 then i - 1 else i
-                              loop 
-                    'C' -> do 
+                              loop
+                    'C' -> do
                               i <-readIORef index
                               l <- readIORef line
-                              when (i < V.length l) $ 
-                                putStr "\ESC[1C";modifyIORef index (+1); 
-                            
+                              when (i < V.length l) $
+                                putStr "\ESC[1C";modifyIORef index (+1);
+
                               -- return "\ESC[C"
                               loop
                     'B' -> do -- return "\ESC[B"
@@ -378,9 +384,9 @@ getLineNoBuffering= do
 
                               readIORef line >>= return . V.toList
                   else return $ "\ESC["++ [c2]
-                
 
-          '\DEL' -> do 
+
+          '\DEL' -> do
                   putChar '\b'
                   putStr "\ESC[0K"
                   l <- readIORef line
@@ -388,25 +394,25 @@ getLineNoBuffering= do
 
                   let len = V.length l
                   when (len==0) $  putStr "\ESC[1C"
-                  let slice2= if i <= len then V.slice (i) (len -i) l   else V.empty
+                  let slice2= if i <= len then V.slice i (len -i) l   else V.empty
                   putStr $ V.toList slice2
-                  when (len > i) $ putStr $ "\ESC[" ++ show (len - i) ++"D" 
+                  when (len > i) $ putStr $ "\ESC[" ++ show (len - i) ++"D"
                   when (i > 0) $ writeIORef index (i - 1)
-                  
+
                   writeIORef line $  (if i > 0 then V.slice 0 (i-1) l else V.empty)  <>  slice2
-                  
+
                   loop
           otherwise -> do
               v <- readIORef line
               let l = V.length v
-              i <- readIORef index 
+              i <- readIORef index
               writeIORef index (i+1)
-              if i >= l then  writeIORef line $ V.snoc v c else 
+              if i >= l then  writeIORef line $ V.snoc v c else
                 writeIORef line $
-                  let idx = V.fromList[i+1..l]
+                  let idx = V.fromList [i+1..l]
                       vhole = V.snoc v ' '
                       lenv = V.length v
-                      v'= if (lenv > 0) then V.update_ vhole idx $ V.slice i (lenv -i) v else v
+                      v'= if lenv > 0 then V.update_ vhole idx $ V.slice i (lenv -i) v else v
                   in  V.unsafeUpd v' [(i,c)]
               when (i < l) $  do putStr "\ESC[4h"
 
@@ -426,13 +432,13 @@ rconsumed = unsafePerformIO $ newIORef Nothing
 processLine line' = liftIO $ do
   let line= subst line'
   -- tr ("subst",line)
-  
+
   mbs <- readIORef rcb
   process  mbs line
   writeIORef recho False
   where
     process ::  [(String, String, String -> IO ())] -> String -> IO ()
-    process  _ [] = writeIORef rconsumed Nothing >> return ()
+    process  _ [] = void (writeIORef rconsumed Nothing)
 
     process  [] line = do
       threadDelay 100000
@@ -442,7 +448,7 @@ processLine line' = liftIO $ do
               mbs <- readIORef rcb
               process  mbs line
            else do
-              let (r, rest) = span (\x -> (not $ elem x "/:; ")) line
+              let (r, rest) = span (`notElem` "/:; ") line
               when ( rest /= " " && not (null r)) $ hPutStr stderr  r >> hPutStrLn stderr ": can't read, skip"
               mbs <- readIORef rcb
               writeIORef rconsumed Nothing
@@ -544,7 +550,7 @@ keep mx = do
               mbs <- liftIO $ readIORef rcb
               let filteryn x = x == "y" || x == "n" || x == "Y" || x  == "N"
               prefix <- input' (Just "") (not . filteryn) "command prefix? (default none) "
-              liftIO $ mapM_ (\c -> when (prefix `isPrefixOf` c) $ do putStr c; putStr "|") $ map (\(fst, _, _) -> fst) mbs
+              liftIO $ mapM_ ((\c -> when (prefix `isPrefixOf` c) $ do putStr c; putStr "|") . (\(fst, _, _) -> fst)) mbs
 
               d <- input' (Just "n") filteryn "\nDetails? N/y "
               when (d == "y" || d =="Y") $
@@ -579,10 +585,10 @@ keep mx = do
               empty
 
             <|> do
-    
+
               option "save" "commit now the current execution state to permanent storage"
               abduce
-              liftIO $ syncCache
+              liftIO  syncCache
               liftIO $ putStrLn "saved the execution state"
               empty
             {-
@@ -610,7 +616,7 @@ keep mx = do
               empty
             <|> do
               abduce
-              liftIO $ execCommandLine
+              liftIO execCommandLine
               labelState (fromString "input")
               liftIO inputLoop
               empty
@@ -631,7 +637,7 @@ keep' mx = keepCollect 0 0 $ do
   do
     abduce
     liftIO $ threadDelay 10000
-    fork $ liftIO $ execCommandLine
+    fork $ liftIO  execCommandLine
     empty
   <|> mx
 
@@ -668,9 +674,9 @@ keepCollect n time mx = do
               back $ Finish $ show (unsafePerformIO myThreadId, ThreadKilled)
               liftIO $ putMVar rexit []
               empty
-            
 
-            r <- collect' n time $  mx
+
+            r <- collect' n time   mx
             liftIO $ putMVar rexit r
         `catch` \(e :: BlockedIndefinitelyOnMVar) -> putMVar rexit []
 
@@ -688,28 +694,28 @@ execCommandLine = do
       processLine    path
 
 -- substitute one of more separators by a single '/'
-subst   s= subst1 s
+subst = subst1
             where
             subst2 []=[]
             subst2  (h:t)
                   | h== '\"' = let (s,r)= span (/= '\"') t in h : s ++  h: subst1 (tail r)
-                  | elem h separators = subst2 t        -- eliminate repeated spaces/separators
+                  | h `elem` separators = subst2 t        -- eliminate repeated spaces/separators
                   | otherwise = h:subst1 t
             subst1 []=[]
             subst1  (h:t)
                   | h== '\"' = let (s,r)= span (/= '\"') t in h : s ++  h: subst1 (tail r)
-                  | elem h separators = (whyNot $ recho =: True) `seq` '/':subst2 t
+                  | h `elem` separators = whyNot (recho =: True) `seq` '/':subst2 t
                   | otherwise= h: subst1 t
 
-(=:) ioref val= writeIORef ioref val
+(=:) = writeIORef
 whyNot= unsafePerformIO
 
 thereIsArgPath=  do
   args <- getArgs
   let mindex = findIndex (\o -> o == "-p" || o == "--path") args
-  if (isNothing mindex) then return [] else do
+  if isNothing mindex then return [] else do
     let i = fromJust mindex + 1
-    return $ if (length args >= i) then   args !! i else []
+    return $ if length args >= i then   args !! i else []
 
 -- | write a message and parse a complete line from the console. The parser is constructed with 'Transient.Parse' primitives
 inputParse :: (Typeable b) => TransIO b -> String -> TransIO b
@@ -729,4 +735,4 @@ inputParse parse message = r
       liftIO $ do writeIORef rconsumed $ Just  $ BSL.unpack rest
       return r
 
- 
+

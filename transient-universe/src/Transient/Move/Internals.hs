@@ -667,8 +667,12 @@ teleport =  do -- local $ do
 
 
 receive conn clos idSession = do
-  tr ("SETCONT TO RECEIVE",clos, idSession)
+  tr ("SETCONT TO RECEIVE",unsafePerformIO $ readIORef $ remoteNode conn,clos, idSession)
+
   (lc, log) <- setCont clos idSession
+  -- ttr ("setting closure for idConn",idConn conn)
+  -- setIndexData (idConn conn) (Closure idSession (localClos lc) []) --xxx
+
   -- s <- giveParseString
   -- tr ("receive PARSESTRING",s,"LOG",toPath $ partLog log)
   receive1 lc
@@ -2561,8 +2565,9 @@ setCont' logstr closName idSession=  do
 
   return closure
 
+setLog :: (Typeable b, Ord b, Show b) => b -> Builder -> Int -> B.ByteString -> TransIO ()
 setLog idConn log sessionId closr = do
-  ttr("setIndexState for",idConn,"Closure",sessionId, closr )
+  ttr("setting closure for",idConn,"Closure",sessionId, closr )
   setIndexData idConn (Closure sessionId closr [])
   setParseString $ toLazyByteString log
   tr ("setLog setCont", idConn, sessionId, closr ,log)

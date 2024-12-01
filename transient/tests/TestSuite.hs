@@ -21,6 +21,7 @@ import System.Random
 import Control.Concurrent
 import Control.Exception.Base
 import Data.List
+import System.CPUTime (getCPUTime)
 
 
 --instance Monoid Int where
@@ -28,10 +29,10 @@ import Data.List
 --   mappend = (+)
 
 main= do
-   void $ keep $ do
+   time $ void $ keep $ do
        let -- genElem :: a -> TransIO a
            genElem x= do  -- generates synchronous and asynchronous results with various delays
-                isasync <- liftIO randomIO
+                isasync :: Bool <- liftIO randomIO
                 delay   <- liftIO $ randomRIO (1, 1000)
                 liftIO $ threadDelay delay
                 if isasync then anyThreads $ async $ return x else return x
@@ -42,7 +43,7 @@ main= do
            i <-  threads 0 $ choose [1..100]                               -- test 100 times. 'loop' for 100 times
            nelems   <- liftIO $ randomRIO (1, 100)                         -- :: TransIO Int
            nthreads <- liftIO $ randomRIO (0,nelems)                       -- different numbers of threads
-           r <- threads nthreads $ foldr (+) 0  $ map genElem  [1..nelems] -- sum sync and async results using applicative
+           r <- threads nthreads $ sum  $ map genElem  [1..nelems] -- sum sync and async results using applicative
            let result=sum[1..nelems]
            assert (r == result) $ return()
 
@@ -56,3 +57,9 @@ main= do
        exit ()
 
    exitSuccess
+
+time f= do
+       start <- getCPUTime
+       f
+       end <- getCPUTime
+       putStrLn $ "Execution time: " ++ show (fromIntegral (end - start) / 1e12) ++ " segundos"
