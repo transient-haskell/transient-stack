@@ -30,7 +30,7 @@ import           Control.Applicative
 import           System.Info
 import           Control.Concurrent
 import           Data.IORef
-import           Data.List((\\))
+import           Data.List
 import qualified Data.ByteString.Lazy.Char8 as BS
 import qualified Data.ByteString.Char8 as BC
 import Data.ByteString.Builder
@@ -430,31 +430,31 @@ mainexp= keep' $ do
      r <- atomically $ readDBRef  rtext
      liftIO $ print r
 
-setEventCont2 :: TransIO a -> (a -> TransIO b) -> StateIO ()
-setEventCont2 x f  = modify $ \EventF { fcomp = fs, .. }
-                           -> EventF { xcomp = x
-                                     , fcomp =  unsafeCoerce (\x -> tr "here2" >> f x) :  fs
-                                     , .. }
+-- setEventCont2 :: TransIO a -> (a -> TransIO b) -> StateIO ()
+-- setEventCont2 x f  = modify $ \EventF { fcomp = fs, .. }
+--                            -> EventF { xcomp = x
+--                                      , fcomp =  unsafeCoerce (\x -> tr "here2" >> f x) :  fs
+--                                      , .. }
 
-bind :: (Show a) => TransIO a -> MVar (Maybe a) -> (a -> TransIO b) -> TransIO b
-bind x mv f = Transient $ do
-    setEventCont2 x  (\r -> do tr r; liftIO (tryPutMVar mv $ Just r); f r)
-    mk <- runTrans x
-    resetEventCont mk
-    tr "here"
-    case mk of
-      Just k  ->  runTrans (tr "JUST" >> liftIO (tryPutMVar mv $ Just k) >> f k)
-      Nothing ->  runTrans (tr "NOTHING"  >> empty)
+-- bind :: (Show a) => TransIO a -> MVar (Maybe a) -> (a -> TransIO b) -> TransIO b
+-- bind x mv f = Transient $ do
+--     setEventCont2 x  (\r -> do tr r; liftIO (tryPutMVar mv $ Just r); f r)
+--     mk <- runTrans x
+--     resetEventCont mk
+--     tr "here"
+--     case mk of
+--       Just k  ->  runTrans (tr "JUST" >> liftIO (tryPutMVar mv $ Just k) >> f k)
+--       Nothing ->  runTrans (tr "NOTHING"  >> empty)
 
-synca :: Show a => TransIO a -> TransIO a
-synca pr= do
-    mv <- liftIO newEmptyMVar
-    -- if pr is empty the computation does not continue. It blocks
-    (bind pr mv (const empty)) <|> do
-           r <- liftIO $(takeMVar mv) `catch` \BlockedIndefinitelyOnMVar -> return Nothing
-           case r of 
-             Just x -> return x
-             Nothing -> empty
+-- synca :: Show a => TransIO a -> TransIO a
+-- synca pr= do
+--     mv <- liftIO newEmptyMVar
+--     -- if pr is empty the computation does not continue. It blocks
+--     (bind pr mv (const empty)) <|> do
+--            r <- liftIO $(takeMVar mv) `catch` \BlockedIndefinitelyOnMVar -> return Nothing
+--            case r of 
+--              Just x -> return x
+--              Nothing -> empty
 
 
 mainsync= keep $ do
@@ -595,6 +595,54 @@ mainraw= do
   -- putStrLn c
   -- setTerminalAttributes termattr stdin
 
+{-# NOINLINE ref #-}
+ref= unsafePerformIO $ newIORef Nothing
+runCont1 x= get >>= \(EventF{fcomp=f}) -> runTrans $ unsafeCoerce f x
+
+
+mainsaad= do
+  r <- keep'  $ return ()
+  print r
+
+maincont= runTransient $ do
+  liftIO $ print "HELLO"
+  r <- Transient $ do
+      runCont1  "WORLD"
+      runCont1 "WORLD2"
+      return $ Just "WORLD3"
+  liftIO $ print r
+  
+
+mainasas= keep $ do
+  r <- threads 0 $ choose [1..10 :: Int]
+  ttr r
+
+mainasda= keep' $ do
+  res <- withParseString (BS.pack "go") $
+                   (Just <$> ((,) <$> parseString <*> giveParseString)) <|> return Nothing
+  liftIO $ print (res )
+
+mainzxc= keep' $ do
+  r <- return "HELLO " <> return "WORLD"
+  ttr r
+
+mainasd= keep $ do
+  -- onException $ \(e :: SomeException) ->  ttr e
+  -- r <- option "go" "go"  -- <|> option "ga" "ga"
+  
+  r <- react onFollow (return()) <|> do  liftIO $ threadDelay 1000000;sched "Hello" ; empty
+
+  liftIO $ print  (r :: String)
+
+  -- error "err1"
+  return () 
+  where
+  onFollow f= writeIORef ref $ Just f
+  sched ev= liftIO $ do
+    mf <- readIORef ref
+    case mf of
+      Nothing -> error "empty" 
+      Just f -> f ev
 
 maingold= keep' $ do
     amount :: Int <-   quantity * price 
@@ -832,27 +880,27 @@ main1= keep $ unCloud $ do
   tr ("partLog",partLog log)
 
 
-mainfin= keep' $ do
+-- mainfin= keep' $ do
   
-  onFinish $ \e-> liftIO $ print ("finish",e)
-  liftIO $ print "END"
+--   onFinish $ \e-> liftIO $ print ("finish",e)
+--   liftIO $ print "END"
 
-rone= unsafePerformIO $ newIORef False
-mainfinish= keep' $ do
-  abduce
+-- rone= unsafePerformIO $ newIORef False
+-- mainfinish= keep' $ do
+--   abduce
 
-  cont <- getCont
-  onFinish $ const $ liftIO $ print "finish"
+--   cont <- getCont
+--   onFinish $ const $ liftIO $ print "finish"
 
-  fork $ do  one <- liftIO $ readIORef rone
-             guard $ one == False
-             liftIO $ writeIORef rone True
-             (_,cont') <-liftIO $ runStateT (runCont cont) cont 
-             liftIO $ exceptBackg cont' $ Finish $ "job " <> show (unsafePerformIO myThreadId)
-             return()
+--   fork $ do  one <- liftIO $ readIORef rone
+--              guard $ one == False
+--              liftIO $ writeIORef rone True
+--              (_,cont') <-liftIO $ runStateT (runCont cont) cont 
+--              liftIO $ exceptBackg cont' $ Finish $ "job " <> show (unsafePerformIO myThreadId)
+--              return()
              
-  --            return()
-  liftIO $ print "end"
+--   --            return()
+--   liftIO $ print "end"
   
 {-
  tiene que ser un canal en minput que reciba del proceso
@@ -904,7 +952,8 @@ wormhole                           wormhole
   teleport                            teleport
 -}
 
-main= keep $ initNode $ inputNodes <|> do
+
+maintransitive= keep $ initNode $ inputNodes <|> do
   local $ option "go" "go"
   nodes <- local getNodes 
   tr ("nodes",nodes)
@@ -915,6 +964,56 @@ main= keep $ initNode $ inputNodes <|> do
               localIO $ print "RECEIVED 2"
               local $ return (h,WORLD)
   ttr r
+
+mainnodessad= keep $ initNode $ inputNodes <|> do
+  local $ option "go" "go"
+  nodes <- local getNodes
+
+  -- r <- runAt (nodes !! 1) $ local $ choose [1,2]
+  -- ttr (r :: Int)
+
+  r <-   (runAt (nodes !! 1) ( local $ return "HELLO"))  <|> 
+         (runAt (nodes !! 2) ( local $ return "WORLD"))
+  ttr r
+  r2 <- runAt (nodes !! 2) (local $ return "WORLD2")
+  ttr (r,r2)
+
+  -- empty
+
+  -- Señor, Gracias por todo lo que me das. Dame las gracias para servirte.
+
+-- añadir a 
+mainnodes= keep $ initNode $ inputNodes <|> do
+  local $ option "go" "go"
+  nodes <- local getNodes
+  r <- runAt (nodes !! 1) $ do
+                  localIO $ print "RECEIVED"
+                  h <- local $ return HELLO
+                  ref <- onAll $ liftIO $  newIORef (0::Int)
+                  runAt (nodes !! 0) $ do
+                      onAll $ liftIO $ writeIORef ref 1
+                      localIO $ print "RECEIVED 2"
+                      local $ return (h,WORLD)
+                  runAt (nodes !! 0) $ do
+                      i <- onAll $ liftIO $ readIORef ref
+                      localIO $ print "RECEIVED 3"
+                      local $ return (h,WORLD,i)
+  ttr r
+
+mainkeep= keep $ do
+  return() `onBack` \() ->   forward ()
+  liftIO $ print "HELLO"
+  back ()
+  return()
+
+maintrans= runTransient $ do
+        r <-  return "HELLO"
+        liftIO $ print r
+        r <-  return ("WORLD",r)
+        liftIO $ print r
+
+ 
+
 
 mainlog= keep' $ unCloud $ do
   proc
@@ -1394,13 +1493,9 @@ data Yield = forall a.Yield EventF (TransIO a) deriving Typeable
 yield' :: TransIO a -> TransIO a
 yield' task = Transient $ do
   cont <- get
-  case event cont of
-        Nothing -> do
-          runTrans $ putMailbox $ Yield cont task
-          return Nothing
-        just -> do
-          put cont{event=Nothing}
-          return $ unsafeCoerce just
+  runTrans $ putMailbox $ Yield cont task
+  return Nothing
+
 
 -- | Runs the scheduler in a single thread.reads yielded continuations from the
 -- mailbox queue, execute the blocking task and re executes the continuation
@@ -1409,7 +1504,7 @@ yield' task = Transient $ do
 scheduler= threads 2 $ do
     Yield cont task <- getMailbox
     r <-  task
-    liftIO $ runCont' cont{event=Just $ unsafeCoerce r} 
+    liftIO $ runCont' r cont 
     empty
     
 
@@ -1440,16 +1535,28 @@ mainbuff= keep' $ do
     readEVar ev <|> (asyncproc >>= writeEVar ev >> empty)
 
   
-maincont= keep' $ do
-  cont <- getCont
-  case event cont of
-    Nothing -> do
-       setData cont{event=Just ()}
-       liftIO $ runCont' cont
-       return ()
-    Just r -> do
-      tr "just"
-      setData cont{event=Nothing}
-      liftIO $ print r
+-- maincont= keep' $ do
+--   cont <- getCont
+--   case event cont of
+--     Nothing -> do
+--        setData cont{event=Just ()}
+--        liftIO $ runCont' cont
+--        return ()
+--     Just r -> do
+--       tr "just"
+--       setData cont{event=Nothing}
+--       liftIO $ print r
 
-  return HELLO
+--   return HELLO
+
+
+main= void $ keep $ do
+       let -- genElem :: a -> TransIO a
+           genElem x=  async $ return x 
+
+       liftIO $ putStrLn "--Testing thread control + Monoid + Applicative + async + indetermism---"
+
+       do                                               -- gather the result of 100 iterations
+           modify $ \s ->s{execMode= Parallel}
+           r <-    fmap (+1) (genElem 2) -- sum sync and async results using applicative
+           ttr (r :: Int)
