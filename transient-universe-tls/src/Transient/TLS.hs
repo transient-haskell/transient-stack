@@ -16,6 +16,7 @@
 module Transient.TLS(initTLS, initTLS') where
 #ifndef ghcjs_HOST_OS
 import           Transient.Internals
+import           Transient.Move.Defs
 import           Transient.Move.Internals
 import           Transient.Backtrack
 import           Transient.Parse
