@@ -11,6 +11,7 @@
 -- | See http://github.com/transient-haskell/transient 
 -- Everything in this module is exported in order to allow extensibility.
 -----------------------------------------------------------------------------
+
 {-# LANGUAGE CPP                       #-}
 {-# LANGUAGE ScopedTypeVariables       #-}
 {-# LANGUAGE ExistentialQuantification #-}
@@ -77,7 +78,8 @@ rindent= unsafePerformIO $ newIORef 0
 -- tr x= trace (show(unsafePerformIO myThreadId, unsafePerformIO $ color x))  $ return()
 
 -- {-# NOINLINE tr #-}
-tr x=  trace (color x) $ return ()
+tr :: (Show a, Monad m) => a -> m ()
+tr x=  trace (show x) $ return ()
 
 -- {-# NOINLINE color #-}
 color :: Show a => a -> String
@@ -162,6 +164,7 @@ data ParseContext  = ParseContext { more   :: TransIO  (StreamData BSL.ByteStrin
 
 -- | To define primitives for all the transient monads:  TransIO, Cloud and Widget
 class MonadState EventF m => TransMonad m
+
 instance  MonadState EventF m => TransMonad m
 
 
@@ -259,292 +262,17 @@ compose =  id -- (f:fs) = \x -> f x >>= compose fs
 
 -- | Save a closure and a continuation ('x' and 'f' in 'x >>= f').
 setContinuation ::  (a -> TransIO b) -> (c -> TransIO d) -> StateIO ()
-setContinuation   c fs = modify $ \EventF{..} -> EventF { -- xcomp = b
-                                  fcomp = \x -> c x >>= unsafeCoerce fs
-                                ,   .. }
-
--- | Save a closure and continuation, run the closure, restore the old continuation.
--- | NOTE: The old closure is discarded.
-withContinuation :: b -> TransIO a -> TransIO a
-withContinuation c mx = do
-  EventF { fcomp = fs, .. } <- get
-  put $ EventF { fcomp = unsafeCoerce c >=> fs,
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-                                                        .. }
-  r <- mx
-  restoreStack fs
-  return r
+setContinuation   c fs = modify $ \EventF{..} -> EventF {fcomp = \x -> c x >>= unsafeCoerce fs ,   .. }
+
+-- -- | Save a closure and continuation, run the closure, restore the old continuation.
+-- -- | NOTE: The old closure is discarded.
+-- withContinuation :: b -> TransIO a -> TransIO a
+-- withContinuation c mx = do
+--   EventF { fcomp = fs, .. } <- get
+--   put $ EventF { fcomp = unsafeCoerce c >=> fs, .. }
+--   r <- mx
+--   restoreStack fs
+--   return r
 
 -- | Restore the continuations to the provided ones.
 -- | NOTE: Events are also cleared out.
@@ -672,7 +400,8 @@ instance Monad TransIO where
       Just r  -> runTrans (f r)
       Nothing -> return Nothing
 
-      
+
+
 -- #else
 
 -- instance Monad TransIO where
@@ -706,16 +435,11 @@ setEventCont :: (a -> TransIO b) -> StateIO (a -> TransIO c)
 setEventCont  f  = do
   EventF{fcomp= k} <- get
   let k' y = unsafeCoerce f y >>=  k
-  modify $ \EventF { .. }
-                           -> EventF { -- xcomp = x
-                                       fcomp = k'
-                                     , .. }
+  modify $ \EventF { .. } -> EventF { fcomp = k', .. }
   return $ unsafeCoerce k
 
-resetEventCont k= modify $ \EventF { .. }
-                           -> EventF { -- xcomp = x
-                                       fcomp = k
-                                     , .. }
+{-# INLINABLE resetEventCont #-}
+resetEventCont k= modify $ \EventF { .. } -> EventF {fcomp = k, .. }
 -- #else
 -- setEventCont  x f id = modify $ \EventF { fcomp = fs, .. }
 --                            -> EventF { xcomp = strip x
@@ -783,6 +507,15 @@ resetEventCont k= modify $ \EventF { .. }
 -- --getPrev= return $ pack ""
 -- #endif
 
+callCC :: (a -> TransIO b) -> TransIO b
+callCC comp= Transient $ do
+  EventF{fcomp=k} <- get
+  runTrans $ comp $ unsafeCoerce k
+
+withCont :: (a -> StateIO b) ->  TransIO b
+withCont comp= noTrans $ do
+  EventF{fcomp=k} <- get
+  comp $ unsafeCoerce k
 
 instance MonadIO TransIO where
   liftIO x = Transient $ liftIO x <&> Just
@@ -1366,11 +1099,8 @@ freeThreads :: TransIO a -> TransIO a
 freeThreads process = do
   st <- get
   put st { freeTh = True }
-  r  <-  process
-  -- hangFrom' st "free"
-
-  modify $ \s -> s { freeTh = freeTh st }
-  return r
+  process <*** modify (\s -> s { freeTh = freeTh st })
+ 
 
 -- | Enable tracking and therefore the ability to terminate the child threads.
 -- This is the default but can be used to re-enable tracking if it was
@@ -1570,7 +1300,7 @@ newRState x= do
 -- | mutable state reference that can be updated (similar to STRef in the state monad)
 -- They are identified by his type.
 -- Initialized the first time it is set, but unlike `newRState`, which ever creates a new reference, 
--- this one update it if it exist already
+-- this one update it if it already exist
 setRState:: (MonadIO m,TransMonad m, Typeable a) => a -> m ()
 setRState x= do
     Ref ref <- getData `onNothing` do
@@ -1579,22 +1309,24 @@ setRState x= do
                             return  ref
     liftIO $ atomicModifyIORef ref $ const (x,())
 
+-- | Get the value of the mutable reference created with newRState
 getRData :: (MonadIO m, TransMonad m, Typeable a) => m (Maybe a)
 getRData= do
     mref <- getData
     case mref of
-     Just (Ref ref) -> Just <$> liftIO (readIORef ref)
-     Nothing -> return Nothing
+     Just (Ref ref) -> do tr "getRData Just"; Just <$> liftIO (readIORef ref)
+     Nothing ->  tr "getRData Nothing" >> return Nothing
 
 -- | return the reference value. It has not been  created, the computation stop and executes the anternative computation if any
 getRState :: Typeable a => TransIO a
 getRState= Transient getRData
 
+delRState :: (MonadState EventF m, Typeable a) => a -> m ()
 delRState x= delState (undefined `asTypeOf` ref x)
   where ref :: a -> Ref a
         ref = undefined
 
--- | Run an action, if it does not succeed, undo any state changes
+-- | Run an action. If it does not succeed, undo any state changes
 -- that may have been caused by the action and allow aternative actions to run with the original state
 try :: TransIO a -> TransIO a
 try mx = do
@@ -1632,7 +1364,8 @@ sandbox' mx = do
   st <- get
   mx <*** modify (\s ->s { mfData = mfData st, parseContext= parseContext st})
 
--- | Sanbox only to other terms of a formula made of applicatives and alternatives
+-- | Sanbox only to other terms of a formula made of applicatives and alternatives.
+-- The list of types are the sandbox exceptions and will be leaked 
 sandboxSide :: [TypeRep] -> TransIO a  -> TransIO a
 sandboxSide ts mx = do
   st <- get
@@ -1643,6 +1376,8 @@ sandboxSide ts mx = do
         (\t ->case M.lookup t m of
                 Nothing -> trace "NOTHINGG" Nothing
                 Just x  -> trace "FOUND" $ Just (t,x)) ts) mapold
+
+                
 -- | executes a computation and restores the concrete state data. the first parameter is used as withness of the type
 --
 -- As said in `sandbox`, sandboxing can be tricked by backtracking
@@ -1830,8 +1565,6 @@ fork proc= (abduce >> proc >> empty) <|> return ()
 -- . See also `choose`
 parallel :: IO (StreamData b) -> TransIO (StreamData b)
 parallel ioaction = Transient $ do
-  --was <- gets execMode -- getData `onNothing` return Serial
-  --when (was /= Remote) $ modify $ \s -> s{execMode= Parallel}
   modify $ \s -> s{execMode=let rs= execMode s in if rs /= Remote then Parallel else rs}
   cont <- get
   liftIO $ do
@@ -1879,17 +1612,11 @@ loop parentc rec = forkMaybe False parentc $ \cont -> do
           where
           setworker cont=  liftIO $ atomicModifyIORef (labelth cont) $ \(_,lab) -> ((Alive,lab),())
 
-          iocont  dat cont = do
+          iocont  dat cont = runStateT (runCont dat cont)  cont
 
-              -- let cont'= cont{event= Just $ unsafeCoerce dat}
-              -- (_,st) <- 
-              runStateT (runCont dat cont)  cont
-              -- exceptBackg st $ Finish $ show $ (1,unsafePerformIO myThreadId)
-              -- return ()
 
 
   loop'
-  -- return ()
   where
   {-# INLINABLE forkMaybe #-}
   forkMaybe :: Bool -> EventF -> (EventF -> IO (Maybe a,EventF)) -> IO (Maybe a,EventF)
@@ -1961,7 +1688,7 @@ loop parentc rec = forkMaybe False parentc $ \cont -> do
 
   -- forkFinally1 :: IO a -> (Either SomeException a -> IO ()) -> IO ThreadId
   forkFinally1 action and_then =
-       mask $ \restore ->  forkIO $ Control.Exception.try (restore action) >>= and_then
+       mask $ \restore -> forkIO $  Control.Exception.try (restore action) >>= and_then
 
 freelogic rparentState parentState label =if freeTh parentState then return False else do -- if was not a free thread
   Just actualParent <-readIORef rparentState
@@ -2124,19 +1851,9 @@ react h iob= do
 
 
 
-newtype Exit a= Exit a deriving Typeable
 
 
--- | Exit the main thread with a result, and thus all the Transient threads (and the
--- application if there is no more code)
-exit :: Typeable a => a -> TransIO a
-exit x= do
-  Exit rexit <- getSData <|> error "exit: not the type expected"  `asTypeOf` type1 x
-  liftIO $  putMVar  rexit  $ Just x
-  stop
-  where
-  type1 :: a -> TransIO (Exit (MVar (Maybe a)))
-  type1= undefined
+
 
 -- | Collect the results of the first @n@ tasks (first parameter) or in a time t (second)
 -- and terminate all the non-free threads remaining before
@@ -2153,7 +1870,6 @@ collect' number time proc' = hookedThreads $ do
     -- liftIO $ atomicModifyIORef (labelth cont) $ \(status, lab) -> ((Parent, lab), ())
 
     let proc= do
-
             i <- proc'
             liftIO $ atomicModifyIORef res $ \n-> (i:n,())
             empty
@@ -2177,7 +1893,7 @@ collect' number time proc' = hookedThreads $ do
             f <- liftIO $ atomicModifyIORef done $ \x ->(True,x) -- previous onFinish not triggered?
             if f then backtrack
               else do
-                ttr "forward"
+                tr "forward"
                 forward (Finish "");
 
         --  -- the finished thread is free. It must be "hanged" to the tree -- 
@@ -2362,7 +2078,7 @@ back reason =  do
         setData $ Backtrack (Just reason) bs
         x <-  f  reason
         Backtrack back bs' <- getData `onNothing`  return (backStateOf  reason)
-        ttr ("gobackt",typeOf  reason,length stack)
+        tr ("gobackt",typeOf  reason,length stack)
 
         case back of
                  Nothing    -> do
@@ -2570,7 +2286,7 @@ onException exc= return () `onException'` exc
 exceptionPoint :: Exception e => TransIO (BackPoint e)
 exceptionPoint = do
     point <- liftIO $ newIORef  []
-    return () `onException'` (\e -> do
+    onException (\e -> do
               rs<-  liftIO $ readIORef point
               mapM_ (\r -> r e) rs)
 
@@ -2603,7 +2319,7 @@ onException' mx f= onAnyException mx $ \e -> do
                   Backtrack r stack <- getData  `onNothing`  return (backStateOf  e)
                   setData $ Backtrack r $ tail stack
                   back e
-                  empty
+                  
                Just e' -> f e'
 
 
@@ -2624,39 +2340,7 @@ onAnyException mx exc=   ioexp   `onBack` exc
       put st'
       return mx
 
-    exceptBack' st (e ::SomeException) = do  -- recursive catch itself
-                      tr "CATCHHHHHHHHHHHHH"
-                      runTransState st  (back e )
-                `catch` exceptBack' st
 
-    -- r <- ioexp  `onBack` exc
-    -- threads 0 abduce -- This "magically" solves problems of exception handlers with multithreadint, and react which disables the handler after the first invocation when an exception is thrown.
-    -- return r
-{-
-  ioexp    = Transient $ do
-    st <- get
-
-    (mr,st') <- liftIO $ runStateT
-      (do
-        -- case event st of
-        --   Nothing -> do
-                modify $ \s -> s{execMode=let rs= execMode s in if rs /= Remote then Parallel else rs}
-                r <- runTrans  mx
-                -- modify $ \s -> s{event= Just $ unsafeCoerce r}
-                runCont r st
-              --  was <- gets execMode -- getData `onNothing` return Serial
-              --  when (was /= Remote) $ modify $ \s -> s{execMode= Parallel}
-                -- modify $ \s -> s{execMode=let rs= execMode s in if rs /= Remote then Parallel else rs}
-
-                ) st `catch` exceptBack st
-
-          -- Just r -> do
-          --       modify $ \s ->  s{event=Nothing}
-          --       return  $ unsafeCoerce r) st)
-          --          `catch` exceptBack st 
-    put st'
-    return mr
--}
 -- perform exception backtracking and recursively stablish itself as handler of exceptions
 -- to be triggered in further exceptions in the IO monad
 -- Alabado sea Dios
