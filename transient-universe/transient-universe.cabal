@@ -59,7 +59,7 @@ library
             aeson -any,
             data-default,
             syb,
-            hashable,
+            hashable
             --primitive < 0.6.4.0
             -- entropy <= 0.3.6, 
     build-depends:
