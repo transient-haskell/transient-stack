@@ -33,6 +33,7 @@ import qualified Data.ByteString                        as B(ByteString)
 
 import Control.Concurrent.MVar
 import Data.IORef
+import Data.Aeson
 import qualified Data.Map                               as M
 
 import Control.Monad.State
@@ -55,7 +56,11 @@ data Node = Node
     connection :: Maybe (MVar Pool),
     nodeServices :: [Service]
   }
-  deriving (Typeable,Generic) -- ,Generic,ToJSON,FromJSON)
+  deriving (Typeable,Generic)
+
+instance FromJSON Node
+
+instance ToJSON Node
 
 instance Eq Node where
   Node h p _ _ == Node h' p' _ _ = h == h' && p == p'
@@ -69,6 +74,21 @@ instance Read Node where
      in case r of
           [] -> []
           [((h, p, ss), s')] -> [(Node h p Nothing ss, s')]
+
+instance ToJSON (MVar a) where
+  toJSON mv= Null
+
+instance FromJSON (MVar a) where
+  parseJSON _= return(unsafePerformIO  newEmptyMVar)
+
+
+
+
+instance Loggable Node
+
+instance Ord Node where
+  compare node1 node2 = compare (nodeHost node1, nodePort node1) (nodeHost node2, nodePort node2)
+
 
 
 data CloudException = CloudException Node SessionId IdClosure String deriving (Typeable, Show, Read)
@@ -167,7 +187,7 @@ instance TC.Serializable LocalClosure where
 type Pool = [Connection]
 type SKey = String
 type SValue = String
-newtype Service =Service (M.Map SKey SValue) deriving (Show,Read,Generic,Eq,Semigroup,Monoid)
+newtype Service =Service (M.Map SKey SValue) deriving (Show,Read,Generic,Eq,Semigroup,Monoid,ToJSON,FromJSON)
 
 instance  Loggable Service where
   serialize (Service s)= serialize s 
@@ -228,7 +248,12 @@ data Closure = Closure SessionId IdClosure [Int] deriving (Read, Show, Typeable)
 
 
 
+data ConnectionError = ConnectionError String Node deriving (Read)
 
+instance Show ConnectionError where
+  show (ConnectionError str n)= "Connection Error : "<> str <> " \n\nNode:\n\n" <> BL.unpack (encode n)
+
+instance Exception ConnectionError
 
 
 

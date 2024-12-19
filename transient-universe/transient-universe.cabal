@@ -59,12 +59,13 @@ library
             aeson -any,
             data-default,
             syb,
-            hashable
+            hashable,
             --primitive < 0.6.4.0
             -- entropy <= 0.3.6, 
     build-depends:
-            old-time
-            
+            transient,
+
+            old-time            
 
 
     exposed-modules:
@@ -99,7 +100,7 @@ executable monitorService
         build-depends:
             transformers -any,
             containers,
-            transient >= 0.9.0.0,
+            transient,
             transient-universe,
             process,
             directory,
@@ -173,7 +174,8 @@ executable test-transient1
     if !impl(ghcjs >=0.1)
         build-depends:
             mtl -any,
-            transient >= 0.9.0.0,
+            transient,
+            transient-universe,
             random -any,
             text -any,
             containers -any,
@@ -214,7 +216,8 @@ test-suite test-transient
     if !impl(ghcjs >=0.1)
         build-depends:
             mtl -any,
-            transient >= 0.9.0.0,
+            transient,
+            transient-universe,
             random -any,
             text -any,
             containers -any,

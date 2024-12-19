@@ -1,10 +1,15 @@
-#!/usr/bin/env execthirdlinedocker.sh
---  info: use sed -i 's/\r//g' file if report "/usr/bin/env: ‘execthirdlinedocker.sh\r’: No such file or directory"
+{-# LANGUAGE CPP, ScopedTypeVariables,RecordWildCards,DeriveAnyClass, DeriveGeneric #-}
+{-# LANGUAGE ExistentialQuantification #-}
+{-# LANGUAGE BangPatterns #-}
+{-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
+{-# HLINT ignore "Redundant bracket" #-}
+{-# HLINT ignore "Use head" #-}
+
+-- info: use `sed -i 's/\r//g' file` if message "/usr/bin/env: ‘execthirdlinedocker.sh\r’: No such file or directory"
 -- runghc    -i../transient/src -i../transient-universe/src -i../axiom/src   $1 ${2} ${3}
+-- mkdir -p ./static && ghcjs --make   -i../transient/src -i../transient-universe/src  -i../axiom/src -i../ghcjs-perch/src $1 -o static/out && runghc   -i../transient/src -i../transient-universe/src -i../axiom/src   $1 ${2} ${3}
 
---  mkdir -p ./static && ghcjs --make   -i../transient/src -i../transient-universe/src  -i../axiom/src -i../ghcjs-perch/src $1 -o static/out && runghc   -i../transient/src -i../transient-universe/src -i../axiom/src   $1 ${2} ${3}
 
-{-# LANGUAGE ScopedTypeVariables,RecordWildCards,DeriveAnyClass, DeriveGeneric #-}
 
 module Main where
 
@@ -13,9 +18,9 @@ import           Control.Monad.IO.Class
 import           System.Environment
 import           System.IO
 import           Transient.Internals
+import           Transient.Move.Services
 import           Transient.Move.Defs
 import           Transient.Move.Logged
-import           Transient.EVars
 import           Transient.Parse
 import           Transient.Console
 import           Transient.Indeterminism
@@ -23,7 +28,7 @@ import           Transient.EVars
 import           Transient.Mailboxes
 import           Transient.Move.Internals
 import           Transient.Move.Utils
-import           Transient.Move.Web  
+import           Transient.Move.Web
 import           Transient.Move.IPFS
 import           Transient.Move.Job
 import           Control.Applicative
@@ -56,23 +61,43 @@ import Data.String
 import GHC.Generics
 import Data.Default
 import Data.Char
+import System.CPUTime (getCPUTime)
+-- import Control.DeepSeq
+
 
 
 -- import System.IO.Streams
 -- import System.IO.Streams.Handle
 import qualified Data.Vector as V
+import Transient.Parse (tChar)
+import Transient.Base (ttr)
+import Transient.Internals (LifeCycle(DeadParent))
+import System.Random
+import Data.TCache (syncCache, getDBRef)
+import System.Directory.Internal.Prelude (exitFailure)
+import System.Exit (exitSuccess)
+import Control.Arrow (ArrowLoop(loop))
+import Data.Char (GeneralCategory(InitialQuote))
+import Data.ByteString (getLine)
+import GHC.IO.Exception (ExitCode(ExitSuccess))
+import Control.Exception (SomeException(SomeException))
+import Control.Exception.Base (FixIOException(FixIOException))
+import qualified Data.TCache.DefaultPersistence as TCache
+
+import Control.DeepSeq
+
 -- import Debug.Trace
 
 -- mainrerun = keep $ rerun "config" $ do
 --   logged $ liftIO $ do
 --      putStrLn "configuring the program"
 --      putStrLn "The program will not ask again in further executions within this folder"
-  
+
 --   host <- logged $ input (const True)  "host? "
 --   liftIO $ print "AFTER HOST"
 --   port <- logged $ input (const True)  "port? "
 --   checkpoint
-  
+
 --   liftIO $ putStrLn $ "Running server at " ++ host ++ ":" ++ show port
 --   node <- liftIO $ createNode host port
 --   initWebApp node $ return()
@@ -279,13 +304,13 @@ guardNetworkRequest conn= do
       Just Self -> do liftIO $ print "Self";empty
       -- Just (HTTPS2Node ctx) -> return()
       -- Just (HTTP2Node _ sock _) -> return()
-      _ ->  return()
+      _ ->  return ()
 
 -- maingetClos= keep' $ do
 --    closCheckpoint
 --    (r,_) <- noTrans $ getClosureLog 0 3000  
 --    liftIO $ print r
-   
+
 -- mainhelloword= keep' $ do
 --   closCheckpoint
 --   x <- logged $ return "hello "
@@ -352,7 +377,7 @@ instance Loggable THAT1
 
     -- tr ("CONTINUING",toPath $ partLog log)
     -- ev <- newEVar
-    
+
     -- tr "newevar"
     -- mr <- liftIO $ atomically $ readDBRef dblocalclos
     -- pair <- case mr of
@@ -363,7 +388,7 @@ instance Loggable THAT1
 
     --     _ ->   do 
     --             mv <- liftIO $ newEmptyMVar
-      
+
     --             mprevClosData <- liftIO $ atomically $ readDBRef  prev -- `onNothing` error "no previous session data"
 
     --             let ns = if isJust mprevClosData then localEnd (fromJust mprevClosData) else []
@@ -380,11 +405,11 @@ instance Loggable THAT1
     --             tr ("FULLLOG",partLog log)
     --             tr ("DROP",ns,dropFromIndex ns $ partLog log)
     --             return lc
-    
+
 
     -- liftIO $ modifyMVar_ localClosures $ \map ->  return $ M.insert closLocal pair map
     -- liftIO $ atomically $ writeDBRef dblocalclos pair
-    
+
     -- tr ("writing closure",dblocalclos,prevClos pair)
     -- tr ("partLog in setCont", partLog log,recover log)
 
@@ -396,24 +421,25 @@ instance Loggable THAT1
 -- deriving instance ToJSON BS.ByteString 
 
 
-mainnav= keep' $do
+mainnav= keep $ do
   (liftIO $ putStr "ONE ") `onBack` \(Navigation) -> do liftIO $ putStr "one " ; forward Navigation
   (liftIO $ putStr "TWO ") `onBack` \(Navigation) -> do liftIO $ putStr "two "
-  (liftIO $ putStr "THREE ") `onBack` \(Navigation) -> do liftIO $ putStr "three " 
-  (liftIO $ putStr "FOUR ") `onBack` \(Navigation) -> do liftIO $ putStr "four " 
+  (liftIO $ putStr "THREE ") `onBack` \(Navigation) -> do liftIO $ putStr "three "
+  (liftIO $ putStr "FOUR ") `onBack` \(Navigation) -> do liftIO $ putStr "four "
   liftIO $ threadDelay 2000000 >> putChar '\n'
-  
-  back Navigation
-  return()
 
-mainex= keep' $do
+  back Navigation
+  return ()
+
+mainex= keep $ do
   onException $ \(e::SomeException) -> do liftIO $ putChar '1' ; continue
-  onException $ \(e::SomeException) -> do liftIO $ putChar '2' 
-  onException $ \(e::SomeException) -> do liftIO $ putChar '3' 
+  onException $ \(e::SomeException) -> do liftIO $ putChar '2'
+  onException $ \(e::SomeException) -> do liftIO $ putChar '3'
   onException $ \(e::SomeException) -> do liftIO $ putChar '4'
   liftIO $ putChar '\n'
   liftIO $ threadDelay 1000000
   error "error"
+  return()
 
 newtype TestJSON= TestJSON [String] deriving (Generic,ToJSON,FromJSON)
 
@@ -422,7 +448,7 @@ instance TC.Indexable TestJSON where key= const "TestJSON"
 rtext= getDBRef "TestJSON"
 mainexp= keep' $ do
   liftIO $ do
-     
+
      error "err"
      atomically $ writeDBRef  rtext $ TestJSON ["hello","world"]
      syncCache
@@ -464,13 +490,13 @@ mainsync= keep $ do
 
 
 mainback1= keep $  do
-  return() `onBack` \Navigation -> forward Navigation
+  return () `onBack` \Navigation -> forward Navigation
 
-  r0 <- inputNav (Just "1111") (const True) "one" 
+  r0 <- inputNav (Just "1111") (const True) "one"
   r1 <- inputNav (Just False) (const True) "two"   :: TransIO Bool
   r2 <- inputNav (Just 3333) (const True) "three"  :: TransIO Int
-  r3 <- inputNav (Just "4444") (const True) "four" 
-  r4 <- inputNav (Just "5555") (const True) "five" 
+  r3 <- inputNav (Just "4444") (const True) "four"
+  r4 <- inputNav (Just "5555") (const True) "five"
 
   liftIO $ do print r0  ;  print r1 ; print r2 ;print r3; print r4
 
@@ -481,27 +507,27 @@ mainback1= keep $  do
 
 
 
-  
-    
+
+
 
 
 mainalter= keep $ unCloud $ do
   proc <|> restore1 <|> save
 
-  where 
+  where
   proc= do
     sal "HELLO" <|> (local abduce >> sal "WORLD")
     showLog
-  
-  sal x= do 
-    logged setc 
+
+  sal x= do
+    logged setc
     lprint x
 
 (</>) x y= Transient $ do
     mx <- runTrans x
 
     was <- gets execMode
-    
+
     if was == Remote
 
       then return Nothing
@@ -515,8 +541,8 @@ mainsimple= keep $  initNode $ do
   -- firstCont
   -- logged $ logged $ do
   proc2 <|> restore1 <|> save
-  
-  
+
+
   where
   proc2= do
     logged $ option "p" "process"
@@ -540,7 +566,7 @@ mainexcept= keep $ initNode $ do
   showLog
   local $ return "HI"
   error "err"
-  return()
+  return ()
 
 salutation= unsafePerformIO $ newIORef undefined
 
@@ -550,17 +576,17 @@ main2= do
   onSalutation $ \s -> do
     putStr "hello "
     putStrLn s
-  
+
   invocation "Alberto"
   invocation "Pepe"
 
 
-invocation s= liftIO $ do 
+invocation s= liftIO $ do
     proc <- readIORef salutation
     proc s
 
 maininvoc= keep' $ installation <|> do
-  async (invocation "Alberto") <|> async (putStrLn "some other text") <|> async (invocation "Pepe") 
+  async (invocation "Alberto") <|> async (putStrLn "some other text") <|> async (invocation "Pepe")
   liftIO $ print "something has been called in parallel"
   where
   installation= do
@@ -572,7 +598,7 @@ maininvoc= keep' $ installation <|> do
 
 mainraw= do
   putStrLn "--------------"
-  
+
   hSetBuffering System.IO.stdin NoBuffering
   hSetEcho System.IO.stdin False
   x <-  hLookAhead System.IO.stdin
@@ -586,7 +612,7 @@ mainraw= do
   -- liftIO $ print x
   -- unRead (BC.singleton x)  System.IO.Streams.Handle.stdin
   -- line <- System.IO.Streams.takeBytesWhile (/='\n') System.IO.Streams.Handle.stdin 
-  line <- getLine
+  line <- System.IO.getLine
   print line
   -- termattr <- getTerminalAttributes stdin
   -- let rawtermattr = withoutMode ProcessInput termattr
@@ -611,7 +637,7 @@ maincont= runTransient $ do
       runCont1 "WORLD2"
       return $ Just "WORLD3"
   liftIO $ print r
-  
+
 
 mainasas= keep $ do
   r <- threads 0 $ choose [1..10 :: Int]
@@ -629,29 +655,29 @@ mainzxc= keep' $ do
 mainasd= keep $ do
   -- onException $ \(e :: SomeException) ->  ttr e
   -- r <- option "go" "go"  -- <|> option "ga" "ga"
-  
-  r <- react onFollow (return()) <|> do  liftIO $ threadDelay 1000000;sched "Hello" ; empty
+
+  r <- react onFollow (return ()) <|> do  liftIO $ threadDelay 1000000;sched "Hello" ; empty
 
   liftIO $ print  (r :: String)
 
   -- error "err1"
-  return () 
+  return ()
   where
   onFollow f= writeIORef ref $ Just f
   sched ev= liftIO $ do
     mf <- readIORef ref
     case mf of
-      Nothing -> error "empty" 
+      Nothing -> error "empty"
       Just f -> f ev
 
 maingold= keep' $ do
-    amount :: Int <-   quantity * price 
+    amount :: Int <-   quantity * price
     newExchange <- liftIO $ readIORef newEx
     guard  newExchange -- avoid printing exchanges when price changes. only when quantities of gold are exchanged
     liftIO $ writeIORef newEx False
     liftIO $ putStrLn $ show amount <> "$ exchanged"
   <|> liftIO  externalInvocations
- 
+
   where
   quantity :: TransIO Int
   quantity= do
@@ -659,7 +685,7 @@ maingold= keep' $ do
     liftIO $ writeIORef newEx True
     liftIO $ putStrLn $ "quantity exchanged :" <> show q <> " ounces"
     return q
-  
+
   price :: TransIO Int
   price= do
     p <- react onPriceChange $ return ()
@@ -695,14 +721,14 @@ mainexcepterr= keep  $ do
 
     -- abduce
     -- onFinish $ const $ tr "==============================FINISH"
-    r <- return "WORLD" `onException'`  \(SomeException e) -> do 
+    r <- return "WORLD" `onException'`  \(SomeException e) -> do
           continue
-          
+
           option1 "c" "continue"
           return "PASA"
     tr r
     error "---------------------err"
-    return()
+    return ()
 
 mainjob2= keep $ initNode $  do
   runJobs
@@ -710,8 +736,8 @@ mainjob2= keep $ initNode $  do
   job $  localIO $ print "hello"
   job $ local $ option "c" "continue"  <|>( option "s" "stop" >> empty)
   job $  localIO $ print "world"
-  
-maincollect0= keep $ do 
+
+maincollect0= keep $ do
      option "go" "go"
      r <-    do
                 topState >>= showThreads
@@ -737,8 +763,8 @@ mainprior= keep' $ do
   term  x= pr x
 
 pr x= liftIO $ putStr x
-  
-  
+
+
 
 mainbug= keep $ initNode $  go <|> restore1
   where
@@ -748,7 +774,7 @@ mainbug= keep $ initNode $  go <|> restore1
     r <-loggedc $  do
           loggedc $ do
                   loggedc $ do
-                    onAll $ tr "===================> two" 
+                    onAll $ tr "===================> two"
                     local $ setcn "two"
                     return HELLO
           local $ return WORLD
@@ -759,7 +785,7 @@ mainbug= keep $ initNode $  go <|> restore1
 
 
 maincomplex = keep $ initNode $ inputNodes <|> do
-  r <- proc2 <|> (restore1 >> empty) 
+  r <- proc2 <|> (restore1 >> empty)
   localIO $ print ("res",r)
 
   where
@@ -769,14 +795,14 @@ maincomplex = keep $ initNode $ inputNodes <|> do
     local $ tr "executing proc3"
     local $ option x $ "process " <> show x
     local $ setc
-    
+
     return x
 
   proc1= proc "p1" <|> proc "p2"
   proc op= do
     logged $ option op ("process "++ op)
     r <- logged $ return HELLO
-    
+
     logged $ liftIO $ putStrLn $ show r ++ op
     r <- loggedc $  loggedc $ logged $ return WORLD
     logged $ liftIO $ putStrLn $ show r ++ op
@@ -787,7 +813,7 @@ maincomplex = keep $ initNode $ inputNodes <|> do
             logged setc
             logged $ return POST1
         logged $ return POSTT
-        
+
     showLog
 
     logged $ return THAT
@@ -804,22 +830,22 @@ maincomplex = keep $ initNode $ inputNodes <|> do
 
     showLog
     return op
-    
+
 save= logged $ do
     option "save" "save execution state"
     liftIO  syncCache
     empty
 
 restoren= do
-        option "res" "restore1" 
+        option "res" "restore1"
         clos <- input (const True) "closure"
 
-        noTrans $ restoreClosure 0 clos 
+        noTrans $ restoreClosure 0 clos
 
 restore1= logged $ do
         restoren
         empty
-      
+
 lprint :: Show a => a -> Cloud ()
 lprint= localIO . print
 
@@ -854,9 +880,9 @@ showLog=do
 -}
 
 main22= keep $  initNode $ proc  <|> restore1
-  
+
   where
-  proc= do  
+  proc= do
     logged $ option "go" "go" >> setc
     logged setc
 
@@ -871,7 +897,7 @@ main1= keep $ unCloud $ do
               logged $ return HELLO
 
   logged $ liftIO $ print r
-  
+
   r1 <- logged $ do
     setc
     return WORLD
@@ -881,7 +907,7 @@ main1= keep $ unCloud $ do
 
 
 -- mainfin= keep' $ do
-  
+
 --   onFinish $ \e-> liftIO $ print ("finish",e)
 --   liftIO $ print "END"
 
@@ -898,10 +924,10 @@ main1= keep $ unCloud $ do
 --              (_,cont') <-liftIO $ runStateT (runCont cont) cont 
 --              liftIO $ exceptBackg cont' $ Finish $ "job " <> show (unsafePerformIO myThreadId)
 --              return()
-             
+
 --   --            return()
 --   liftIO $ print "end"
-  
+
 {-
  tiene que ser un canal en minput que reciba del proceso
  minput 
@@ -917,7 +943,7 @@ mainshow= keep  $ initNode $ do
   local showURL
 
   minput "next" "next" :: Cloud String
-  
+
 
 str :: IsString a => String -> a
 str= fromString
@@ -925,7 +951,7 @@ str= fromString
 mainremote= keep $ do
    (do d <- getState <|> return 0 :: TransIO Int
        tr ("-------",d)
-       ((unCloud $ logged $ gets execMode >>= tr)  <***  setState  d ))  <** modify (\s -> s {execMode = Remote}) 
+       ((unCloud $ logged $ gets execMode >>= tr)  <***  setState  d ))  <** modify (\s -> s {execMode = Remote})
    tr "END"
 
 {-
@@ -955,7 +981,7 @@ wormhole                           wormhole
 
 maintransitive= keep $ initNode $ inputNodes <|> do
   local $ option "go" "go"
-  nodes <- local getNodes 
+  nodes <- local getNodes
   tr ("nodes",nodes)
   r <- runAt (nodes !! 1) $ do
            localIO $ print "RECEIVED"
@@ -965,20 +991,38 @@ maintransitive= keep $ initNode $ inputNodes <|> do
               local $ return (h,WORLD)
   ttr r
 
-mainnodessad= keep $ initNode $ inputNodes <|> do
+#define SHOULDRUNIN(x)    (local $ do p <-getMyNode;assert ( p == (x)) (liftIO $ print p))
+
+
+service= Service $ M.fromList
+         [("service","test suite")
+         ,("executable", "test-transient1")
+         ,("package","https://github.com/agocorona/transient-universe")]
+
+main= do
+  r <- keep $ do
+     option "go" "go"
+     exit "world"
+     return "hello"
+  ttr r
+
+maindd= keep $ initNode $ inputNodes <|> do
   local $ option "go" "go"
   nodes <- local getNodes
 
-  -- r <- runAt (nodes !! 1) $ local $ choose [1,2]
-  -- ttr (r :: Int)
+  let node1= nodes !! 1
+      node2= nodes !! 2
+      node0= nodes !! 0
+      
+  -- loggedc $  requestInstance service 1 >> return ()
+  runAt  node2 $ do local $ return "AAA";local $ return "KLLLL"
+  -- logged $ return "kkkkk"
+  r <- runAt node1 $ do
+        runAt node2 $  return "world" 
+  ttr (r )
+  ttr "EEEEEEENNNDDD"
+  
 
-  r <-   (runAt (nodes !! 1) ( local $ return "HELLO"))  <|> 
-         (runAt (nodes !! 2) ( local $ return "WORLD"))
-  ttr r
-  r2 <- runAt (nodes !! 2) (local $ return "WORLD2")
-  ttr (r,r2)
-
-  -- empty
 
   -- Señor, Gracias por todo lo que me das. Dame las gracias para servirte.
 
@@ -1001,10 +1045,10 @@ mainnodes= keep $ initNode $ inputNodes <|> do
   ttr r
 
 mainkeep= keep $ do
-  return() `onBack` \() ->   forward ()
+  return () `onBack` \() ->   forward ()
   liftIO $ print "HELLO"
   back ()
-  return()
+  return ()
 
 maintrans= runTransient $ do
         r <-  return "HELLO"
@@ -1012,7 +1056,7 @@ maintrans= runTransient $ do
         r <-  return ("WORLD",r)
         liftIO $ print r
 
- 
+
 
 
 mainlog= keep' $ unCloud $ do
@@ -1043,9 +1087,9 @@ mainjob3 = keep $ initNode $ do
   minput "input" "test" :: Cloud ()
 
 
-   
+
   --  minput "input2"  "test2" :: Cloud()
-  job(process ev) <|> report ev 
+  job (process ev) <|> report ev
 
   where
    process ev= do
@@ -1053,7 +1097,7 @@ mainjob3 = keep $ initNode $ do
     localIO $ threadDelay 10000000
     localIO $ atomicModifyIORef ev $ \l -> (i:l,())
     empty
-    return()
+    return ()
 
    report ev=  do
     minput "log"  "show log" :: Cloud()
@@ -1082,7 +1126,7 @@ en disco necesita limpiar?
 --    r <- minput "enter msg1"  :: Cloud String 
 --    onAll $ liftIO $ print "RECEIVEDDDDD llll"
 --    localIO $ print (r ::String)
- 
+
 --   --  conn <- Cloud getState
 --   --  path "msgs1"
 --    r2 <- minput "enter msg21"  <|> minput "enter msg22" :: Cloud String -- <|>  Cloud( do liftIO $ threadDelay 1000000; msend conn ( BS.pack "0\r\n\r\n"))
@@ -1177,10 +1221,10 @@ mainonwait= keep $ do
   -- ev2 <- newEVar
   -- onFinish $  const $ liftIO $ print "FIN"
   -- onWaitThreads  const $ liftIO $ print "WAIT"
-  readev1 ev <|> readev2 ev <|>    do   liftIO $ threadDelay 5000000 ; return()
+  readev1 ev <|> readev2 ev <|>    do   liftIO $ threadDelay 5000000 ; return ()
   -- topState >>= showThreads
   liftIO $ print "hello"
-  where 
+  where
   readev1 ev= do
       -- par <- get -- >>= \st ->  liftIO $ readIORef (parent st ) >>= \mp -> return (fromJust mp)
       onWaitThreads  $ const $ do
@@ -1205,8 +1249,8 @@ maincollect =do
     -- se ejecuta todo en el parent thread
     -- pero deberia activarse onFinish
     liftIO $ myThreadId >>= print
-    
-    r <- threads 0 $ choose[1..2]
+
+    r <- threads 0 $ choose [1..2]
     onFinish $ const $ liftIO $ print ("FIN",r)
 
     liftIO $ threadDelay 1000000
@@ -1220,7 +1264,7 @@ es un parent. como definir un onFinish parcial onListeners
 que cuente...
 definir un nuevo estado listener . cuando todos
 sean listeners, lanzar el onListeners
--}  
+-}
 
 syncFlush= do
 
@@ -1251,7 +1295,7 @@ mainimput= keep $ initNode $ do
   -- onAll $  throwt $ ErrorCall "error"
   moutput "end" :: Cloud ()
 
-  return()
+  return ()
 
 mainfinish2= keep $  do
   -- threads 0 abduce
@@ -1266,9 +1310,9 @@ mainfinish2= keep $  do
   -- --   -- tr ("SIZE", length stack)
   --    liftIO $ threadDelay 1000000
   -- topState >>= showThreads
-  return()
-  
-  
+  return ()
+
+
 mainerr= keep  $ initNode $ local $ do
   abduce
   topState >>= showThreads
@@ -1276,10 +1320,10 @@ mainerr= keep  $ initNode $ local $ do
 
   -- onException $ \(e:: SomeException) -> throwt e
   throw $ ErrorCall "---------------------err"
-  return()
-  
+  return ()
 
-  
+
+
 
 
 
@@ -1296,14 +1340,14 @@ mainlocalrem= keep $ initNode $ inputNodes <|> do
   localIO $ print ("RESULT",r)
 
 (<->) a b= (do
-  
-  onAll (liftIO $ print "BEFORE") 
+
+  onAll (liftIO $ print "BEFORE")
   a <* onAll (liftIO $ print "AFTER") )
   <> b
 
 runAt2 a b= do
     onAll $ liftIO $ print "RUNAT2"
-    runAt a b 
+    runAt a b
 
 mainsand= keep $ do
   sandbox1 $ throwt $ ErrorCall "err"
@@ -1318,17 +1362,17 @@ sandbox1 mx = do
         def= backStateOf $ SomeException $ ErrorCall "err"
 
     bs <- getState <|> return def
-        
+
     let  mf'= M.insert (typeOf def) (unsafeCoerce bs) mf
     modify (\s ->s { mfData = mf', parseContext= parseContext st})
   mx  <*** modify (\s ->s { mfData = mfData st, parseContext= parseContext st})
-    
+
 
 
 mainsandb= keep $ do
-   setState False  
+   setState False
    sandbox $ liftIO $ print "hello"
-   ac  `catcht` \(e :: SomeException) -> return()
+   ac  `catcht` \(e :: SomeException) -> return ()
    i <- getState
    liftIO $ print (i :: Bool)
    where
@@ -1342,8 +1386,8 @@ mainsandb= keep $ do
 
 mainappl= keep $ initNode $ inputNodes <|> do
   local $ option "go" "go" -- ::Cloud ()
-  nodes <- local getNodes 
-  r <- local (async(return "world local")) <> do onAll $ tr "runAt" ; runAt (nodes !! 1) (proc ) -- <|> runAt (nodes !! 2) (proc )
+  nodes <- local getNodes
+  r <- local (async (return "world local")) <> do onAll $ tr "runAt" ; runAt (nodes !! 1) (proc ) -- <|> runAt (nodes !! 2) (proc )
 
   localIO $ print r
   where
@@ -1359,17 +1403,17 @@ mainauction = keep $ initNode $ do
 
     setIPFS
 
-    POSTData (wallet :: Integer,name :: String) <- minput "enterw"  "enter wallet" 
+    POSTData (wallet :: Integer,name :: String) <- minput "enterw"  "enter wallet"
     setSessionState wallet
-    guessgame name wallet <|> auction  
-    return()
+    guessgame name wallet <|> auction
+    return ()
 
     where
     guessgame name wallet= do
 
        minput "guessgame" "play guessgame"  <|> published "lock" :: Cloud ()
        lock  :: Int <- minput "enterlock" $ name <> ": lock a number to guess it"
-       guessn:: Int <- public "lock" $ minput "enterguess" $ "guess the number entered by: " <>  name  
+       guessn:: Int <- public "lock" $ minput "enterguess" $ "guess the number entered by: " <>  name
        wallet' :: Integer <- local getSessionState
        minput "entered"  [("entered number", show guessn)
                          ,("wallet lock", show wallet)
@@ -1389,7 +1433,7 @@ maintest = keep $ initNode $ test <|>  restore1
 
     i :: Int<- minput "enterw"  "enter wallet" -- (11 :: Int)
     guessgame
-    return()
+    return ()
 
     where
     guessgame= do
@@ -1420,17 +1464,17 @@ minput1 ident val = response
 
         let idSession = 0
 
-        
-        params <- toHTTPReq $ type1 response
-        
-        connected log  idSession conn closLocal    
 
-    
+        params <- toHTTPReq $ type1 response
+
+        connected log  idSession conn closLocal
+
+
 
     connected log  idSession conn closLocal    = do
       cdata <- liftIO $ readIORef $ connData conn
 
-  
+
 
       -- onException $ \(e :: SomeException) -> do liftIO $ print "THROWT"; throwt e; empty
 
@@ -1446,8 +1490,8 @@ minput1 ident val = response
 
       tr ("MINPUT RESULT",idcontext',result)
       return result `asTypeOf` return (type1 response)
- 
-  
+
+
     type1 :: Typeable a => Cloud a -> a
     type1 cx = r
       where
@@ -1458,9 +1502,9 @@ receivee conn clos  val= do
   s <- giveParseString
   -- tr ("receive PARSESTRING",s,"LOG",toPath $ partLog log)
   if recover log && not (BS.null s)
-    then (abduce >> receive1 lc val) <|> return() -- watch this event var and continue restoring
+    then (abduce >> receive1 lc val) <|> return () -- watch this event var and continue restoring
     else  receive1 lc val
-  
+
   where
   -- receive1 :: (Loggable val) => LocalClosure -> val -> TransIO ()
   receive1 lc val= do
@@ -1477,7 +1521,7 @@ maindistrib = keep $ initNode $ inputNodes <|> do
     nodes <- local getNodes
     r <-  runAt (nodes !! 0) (proc "HELLO") <> runAt (nodes !! 1) (proc "WORLD")
     localIO $ print r
-     
+
     where
     proc x= do
          localIO $ print x
@@ -1504,15 +1548,15 @@ yield' task = Transient $ do
 scheduler= threads 2 $ do
     Yield cont task <- getMailbox
     r <-  task
-    liftIO $ runCont' r cont 
+    liftIO $ runCont' r cont
     empty
-    
+
 
 mainyield= keep' $ (abduce >> scheduler) <|>  do
   yi 2  <|> yi 1
   where
   yi (i :: Int)= do
-    yield' $ return()
+    yield' $ return ()
     tr ("before",i)
     l <- yield' $ liftIO $ do threadDelay $ i* 1000000 ; return i
     tr ("after",l)
@@ -1524,9 +1568,9 @@ mainabduce= keep' $ threads 2 $ p 1 <|> p 2
     abduce
     liftIO $ threadDelay $ 1000000
     tr ("after",i)
-  
+
 mainbuff= keep' $ do
-  s <- threads 1 $ buffered $ threads 1 $ waitEvents getLine
+  s <- threads 1 $ buffered $ threads 1 $ waitEvents System.IO.getLine
   liftIO $ threadDelay 5000000
   liftIO $ putStrLn s
   where
@@ -1534,7 +1578,7 @@ mainbuff= keep' $ do
     ev <- newEVar
     readEVar ev <|> (asyncproc >>= writeEVar ev >> empty)
 
-  
+
 -- maincont= keep' $ do
 --   cont <- getCont
 --   case event cont of
@@ -1550,13 +1594,120 @@ mainbuff= keep' $ do
 --   return HELLO
 
 
-main= void $ keep $ do
-       let -- genElem :: a -> TransIO a
-           genElem x=  async $ return x 
+mainmzero= keep $ do
+  r <- async (error "err") `onAnyException` \(e :: SomeException) -> do liftIO $ print e; backtrack
+  ttr (r :: StreamData String)
+  return ()
 
-       liftIO $ putStrLn "--Testing thread control + Monoid + Applicative + async + indetermism---"
 
-       do                                               -- gather the result of 100 iterations
-           modify $ \s ->s{execMode= Parallel}
-           r <-    fmap (+1) (genElem 2) -- sum sync and async results using applicative
-           ttr (r :: Int)
+maindsdds= time $  ttr $ filter isPrime [1..10000]
+  
+  
+isPrime :: Int ->  Bool
+isPrime n =  n== 1 || all (\i-> n `mod` i /= 0) [2..floor (sqrt $ fromIntegral n)::Int]
+
+time f = do
+    start <- getCPUTime
+    f
+    end <- getCPUTime
+    putStrLn $ "Execution time: " ++ show (fromIntegral (end - start) / 1e12) ++ " segundos"
+
+
+mainprimes= time $ keep' $  threads 4 $ do
+  l <- collect 0 $ do
+          i <- choose'[1000000000..10000000000]
+          !r <- guard(isPrime i)
+          return r
+  ttr l
+
+mainsum= time $ keep' $  threads 4 $ do
+  l <- collect 0 $ do
+          i <- choose'[1..1000000]
+          !r <- sum [1,1000000]
+          return r
+  ttr l
+
+mainstrict=  do
+  r <- keep' $ do
+     l <- collect 0 $ let !s=  sum [1..100000000 :: Integer]  in  return s
+     ttr l
+  ttr r
+
+mainkk= do
+  mv <- newEmptyMVar
+  -- do not print in ghc 9.4.2
+  forkIO $ print (sum[1..10000000000 :: Integer])   ; putMVar mv ()
+  takeMVar mv
+
+mainasunasd= keep' $ do
+   let x= 100000000000 :: Integer
+   r <- async (let !r= sum[1.. x]in return r) <|> 
+        async (let !r= sum[1.. x]in return r) <|> 
+        async (let !r= sum[1.. x]in return r) <|> 
+        async (let !r= sum[1.. x]in return r)
+   ttr r
+
+mainasssas= keep' $ do
+      s <- choose [1,2,3,4] -- abduce' <|> abduce' <|> abduce' <|> abduce'
+      ttr "thread"
+      let !r= sum[1.. 100000000]
+      ttr r
+      where
+      abduce'= do
+        abduce
+        liftIO $ myThreadId >>= ttr
+        return ()
+
+mainasddsd= do
+  rr1 <- newEmptyMVar
+  rr2 <- newEmptyMVar
+  forkIO $ putMVar rr1 $ sum[1..100000000000::Integer]
+  forkIO $ putMVar rr2 $ sum[1..100000000000::Integer]
+  takeMVar rr1 >>= ttr
+  takeMVar rr2 >>= ttr
+  
+data A= A Int String String deriving (Typeable,Read,Show)
+
+instance TC.Indexable A where
+   key (A k _ _)= show k
+
+instance NFData A where
+  rnf (A a b c)= rnf a `seq` rnf b `seq` rnf c
+
+instance TCache.Serializable A where
+  serialize = BS.pack . show
+  deserialize= force . read . BS.unpack 
+
+
+newr reg@(A i _ _)=  writeDBRef (getDBRef $ show i) reg 
+
+maindbref= do
+  r <- keep $ do
+    option "go" "go"
+    i :: Int <- input (const True) "give i"
+    liftIO $ atomically $ mapM newr [ A i "hello" ( show $ unsafePerformIO myThreadId)  | i <- [0..1000]]
+    liftIO $ print "end"
+    
+    k <- threads 0 $ choose[0..100]
+
+    liftIO $ atomically $ forM [0..1000] $ \i -> do
+        let dbr= getDBRef $ show i
+        mx <- readDBRef dbr
+        th' <- unsafeIOToSTM myThreadId
+        writeDBRef dbr $ A i  (show k) (show th')
+    return()
+  liftIO $ print r
+
+
+  
+  
+
+
+
+
+
+
+instance MonadFail STM where
+  fail s= error "fail"
+
+

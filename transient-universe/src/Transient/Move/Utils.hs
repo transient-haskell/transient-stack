@@ -90,8 +90,8 @@ getNodeParams  =
          --  oneThread $ 
           option "start" "re/start node"
 
-          host  <-input' (Just "localhost") (const True) "hostname of this node. (Must be reachable, default:localhost)? "
-          retry <-input1 (Just "n") (== "retry") "if you want to retry with higher port numbers when the port is busy, write 'retry'"
+          host  <-input' "localhost" (const True) "hostname of this node. (Must be reachable, default:localhost)? "
+          retry <-input' "n" (== "retry") "if you want to retry with higher port numbers when the port is busy, write 'retry'"
           when (retry == "retry") $ liftIO $ writeIORef rretry True
           port <- input  (const True) "port to listen? "
           liftIO $ createNode host port
@@ -165,7 +165,7 @@ inputNodes= onServer $ do
 
           port      <- local $ input (const True) "port? "
           serv      <- local $ nodeServices <$> getMyNode 
-          services  <- local $ input' (Just serv) (const True) ("services? ("++ show serv ++ ") ")
+          services  <- local $ input' serv (const True) ("services? ("++ show serv ++ ") ")
 
           connectit <- local $ input (\x -> x=="y" || x== "n") "connect to the node to interchange node lists? (n) "
             

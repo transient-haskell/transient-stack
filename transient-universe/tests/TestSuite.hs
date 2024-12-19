@@ -1,4 +1,7 @@
 {-# LANGUAGE CPP, ScopedTypeVariables #-}
+{-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
+{-# HLINT ignore "Move brackets to avoid $" #-}
+{-# HLINT ignore "Redundant bracket" #-}
 module Main where
 
 #ifndef ghcjs_HOST_OS
@@ -49,9 +52,9 @@ main= do
      endMonitor 
 
      case mr of
-       Nothing -> print "NO RESULT, NO THREADS RUNNING" >> exitFailure
-       Just Nothing  -> print  "SUCCESS" >> exitSuccess 
-       Just (Just e) -> putStr "FAIL: "  >> print e >> exitFailure
+       Left _ -> print "NO RESULT, NO THREADS RUNNING" >> exitFailure
+       Right Nothing  -> print  "SUCCESS" >> exitSuccess 
+       Right (Just e) -> putStr "FAIL: "  >> print e >> exitFailure
 
  
 
@@ -72,7 +75,7 @@ thereIsArgPath'= local $ Transient $ liftIO $ do
 
 interactive= do
     liftA1 fork  inputNodes
-    local $ sync $ ( option "f" "fire")
+    local $ sync $ option "f" "fire"
     local $ do ns <- getNodes
                return $ tail ns
 
@@ -80,85 +83,53 @@ interactive= do
 exitIt= onAll $ exit (Nothing  :: Maybe SomeException)
 
 batchTest= do
-          node0 <- local getMyNode
-          local $ guard (nodePort node0== portnumber)       -- only executes locally in node "portnumber"
+          n <- local getMyNode
+          local $ guard (nodePort n== portnumber)       -- only executes locally in node "portnumber"
 
           requestInstance service 3
 
 
-data HELLO= HELLO deriving (Read, Show, Typeable)
-instance Loggable HELLO
-data WORLD= WORLD deriving (Read, Show, Typeable)
-instance Loggable WORLD
 
-runAt' n doit= wormhole' n $ do
-                    teleport
-                    tr "after teleport2"
-                    r <- doit
-                    teleport
-                    tr "after teleport2"
-                    return r
+
 testIt nodes = do
-          let n3002:n3003:n3004:_ = nodes
+          let node1:node2:node3:_ = nodes 
+          ttr nodes
           node0 <- local getMyNode
 
 
           localIO $ putStrLn "------checking  empty in remote node when the remote call back to the caller #46 --------"
 
-        --   r <- runAt n3002 $ do
-        --         runAt node0 $ do
-        --             localIO $ print HELLO 
-        --             return WORLD
-        --   localIO $ print r
-        --   empty
 
-          r <-  runAt n3002 $ do
-                  onAll $ tr ("node",n3002)
-                  SHOULDRUNIN(n3002) 
-                  return "HELLO"
-                  r <- runAt n3003 $ do
-                          SHOULDRUNIN(n3003)  
-                          runAt n3004 $ do 
-                              SHOULDRUNIN(n3004) 
-                              return HELLO
-                          return  WORLD
-                          
-                  localIO $ tr ("RESULT=",r)
-                  local $ tr "AFTER RUNAT n3003" 
-                  return r
-                   
-          localIO $ print r
+          r <- runAt node1 $ do
+                    local $ getMyNode >>= \n -> ttr ("node1",n)
+                    SHOULDRUNIN(node1)
+                    runAt node2 $ (runAt node1 $ SHOULDRUNIN(node1) >> empty)  <|>   (SHOULDRUNIN(node2) >> return "world")
+          localIO $ print r 
 
+          localIO $ putStrLn "------checking Alternative distributed--------"
+
+
+          r <- Cloud $ collect 3 $ unCloud $ 
+                              runAt node0 (SHOULDRUNIN(node0) >> return "hello" ) <|>
+                              runAt node1 (SHOULDRUNIN(node1) >> return "world" ) <|>
+                              runAt node2 (SHOULDRUNIN(node2) >> return "world2")
+          
+          assert(sort r== ["hello", "world", "world2"]) $ localIO $  print r
 
           empty
-          
-
-          -- localIO $ putStrLn "------checking Alternative distributed--------"
-
-
-          -- r <-  (runAt node0 (SHOULDRUNIN( node0) >> return "hello" )) <|>
-          --        (runAt n3002 (SHOULDRUNIN( n3002) >> return "world" )) -- <|>
-          --       -- (runAt n3003 (SHOULDRUNIN( n3003) >> return "world2" ))
-          -- -- 
-          
-          -- -- assert(sort r== ["hello", "world"]) $ localIO $  print r
-
-          -- -- r <- runAt n3002 $ local $ return "world "
-          -- localIO $ print r
-          -- empty
 
           
-          -- localIO $ putStrLn "--------------checking Applicative distributed--------"
-          -- r <- loggedc $(runAt node0 (SHOULDRUNIN( node0) >> return "hello "))
-          --           <>  (runAt n3002 (SHOULDRUNIN( n3002) >> return "world " ))
-          --           -- <>  (runAt n3003 (SHOULDRUNIN( n3003) >> return "world2" ))
+          localIO $ putStrLn "--------------checking Applicative distributed--------"
+          r <- loggedc $(runAt node0 (SHOULDRUNIN( node0) >> return "hello "))
+                    <>  (runAt node1 (SHOULDRUNIN( node1) >> return "world " ))
+                    <>  (runAt node2 (SHOULDRUNIN( node2) >> return "world2" ))
        
-          -- assert(r== "hello world ") $ localIO $ print r
+          assert(r== "hello world world2") $ localIO $ print r
 
           localIO $ putStrLn "----------------checking monadic, distributed-------------"
           r <- runAt node0 (SHOULDRUNIN(node0)
-                  >> runAt n3002 (SHOULDRUNIN(n3002) >>  (return "HELLO" )))
-                      --  >> runAt n3003 (SHOULDRUNIN(n3003) >>  (return "HELLO" ))))
+                  >> runAt node1 (SHOULDRUNIN(node1)
+                       >> runAt node2 (SHOULDRUNIN(node2) >>  (return "HELLO" ))))
 
           assert(r== "HELLO") $ localIO $ print r
  

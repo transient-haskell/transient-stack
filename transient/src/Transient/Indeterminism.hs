@@ -85,7 +85,8 @@ group num proc =  do
     maybe stop return mn
 
 
--- | Collect the results of the first @n@ tasks.  Synchronizes concurrent tasks
+-- | Collect the results of the first @n@ tasks. if n==0 it collects all the results until there are no
+-- active threads within the argument. Synchronizes concurrent tasks
 -- to collect the results safely and kills all the non-free threads before
 -- returning the results.  Results are returned in the thread where 'collect'
 -- is called.

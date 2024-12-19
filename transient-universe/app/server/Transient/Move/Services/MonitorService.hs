@@ -1,4 +1,4 @@
-#!/usr/bin/env execthirdlinedocker.sh
+
 --  info: use sed -i 's/\r//g' file if report "/usr/bin/env: ‘execthirdlinedocker.sh\r’: No such file or directory"
 -- LIB="/projects/transient-stack" && runghc  -DDEBUG  -i${LIB}/transient/src -i${LIB}/transient-universe/src -i${LIB}/transient/src -i${LIB}/transient-universe-tls/src -i${LIB}/axiom/src   $1  ${2} ${3}
 
@@ -47,10 +47,10 @@ import Data.Maybe(fromMaybe)
 import Control.Exception
 import qualified Data.ByteString.Lazy.Char8   as BS
 import qualified Data.ByteString.Char8 as BSS
-import System.Exit 
+import System.Exit
 
 
-   
+
 main = do
    putStrLn "Starting Transient monitor"
    keep $ initNode $ inputNodes <|> returnInstances
@@ -71,15 +71,15 @@ pings =  do
   local $ threads 1 $ unCloud $ mapM ping $  tail nodes
   empty
 -}
-  
-   
+
+
 type Port= Int
 
 -- | receive a status from an executable.
 receiveStatus :: (Port, String) -> Cloud ()
 receiveStatus (port, logLine)= do
    localIO $ appendFile ("log"++ show port) $ logLine++"\n"
-   
+
 
 blockings= unsafePerformIO $ newIORef M.empty
 
@@ -87,12 +87,12 @@ blockings= unsafePerformIO $ newIORef M.empty
 withBlockingService :: Service -> Cloud a -> Cloud a
 withBlockingService serv proc= do
    let servname= lookupService "name" serv
-   beingDone <- localIO $ atomicModifyIORef  blockings $ \map -> 
+   beingDone <- localIO $ atomicModifyIORef  blockings $ \map ->
                                 let mv = M.lookup servname map
                                 in case mv of
                                    Nothing -> (M.insert servname () map,False)
                                    Just () -> (map,True)
-   if beingDone 
+   if beingDone
     then do
       --localIO $ threadDelay 3000000
       withBlockingService serv proc
@@ -113,36 +113,36 @@ withBlockingService serv proc= do
 -- among all the nodes which have monitoService executables running and connected 
 returnInstances ::  Cloud ()
 returnInstances = do
-    POSTData(ident :: String,service :: Service, num :: Int) <-  minput "returnInstances" "enter user ident,service and number of instances:"
+    POSTData(ident :: String,service :: Service, num :: Int) <-  minput "returnInstances" "enter user ident, service and number of instances:"
     r <-  withBlockingService service $  do
                 nodes :: [Node] <- local $ findInNodes service >>= return . take num
 
                 let n= num - length nodes
-                if n <= 0 then return $ take num nodes 
-                    else  return nodes <> requestInstall ident service n 
+                if n <= 0 then return $ take num nodes
+                    else  return nodes <> requestInstall ident service n
     moutput r -- minput "" r :: Cloud()
     where
 
     requestInstall :: String -> Service -> Int -> Cloud [ Node]
     requestInstall ident service num=  do
-        ns <-  local getEqualNodes  
-       
-        tr ("monitors: ",map nodeHost ns)    
+        ns <-  local getEqualNodes
+
+        tr ("monitors: ",map nodeHost ns)
         auth <- callNodes' ns (<>) mempty  $  localIO $ authorizeService ident service >>=  \x -> return [x]
         tr ("authotorized: ",auth)
-        let nodes = map fst $ filter  snd  $ zip ns auth 
+        let nodes = map fst $ filter  snd  $ zip ns auth
             nnodes= length nodes
             pernode= num `div` nnodes
             lacking= num `rem` nnodes
             (nodes1,nodes2)= splitAt  lacking nodes
         return () !> (pernode,lacking,nodes1,nodes2)
-        rs <- callNodes' nodes1 (<>) mempty (installHere  service (pernode+1))  <>           
+        rs <- callNodes' nodes1 (<>) mempty (installHere  service (pernode+1))  <>
               callNodes' nodes2 (<>) mempty (installHere  service pernode)
-        local $ addNodes rs 
+        local $ addNodes rs
         --ns <- onAll getNodes
         tr   ("MONITOR RETURN---------------------------------->", rs)
-        return rs     
-       
+        return rs
+
     -- installIt = installHere  service <|> installThere  service
     installHere  ::  Service -> Int -> Cloud [ Node]
     installHere  service n= local $  replicateM n installOne
@@ -154,12 +154,12 @@ returnInstances = do
 
                 thisNode <- getMyNode
                 let node= Node (nodeHost thisNode)  port Nothing  ([service])  --  ++ [relayinfo thisNode]) -- node to be published
-                addNodes [node] 
+                addNodes [node]
                 return $ stripService node
         --   `catcht` \(e :: SomeException) ->  liftIO (putStr "INSTALL error: " >> print e) >> empty
-          
-        relayinfo mon= if nodeHost mon /= "localhost" then [("relay",show(nodeHost mon,nodePort mon))] else []
-        stripService n= n{nodeServices=[Service(M.singleton "service" (fromMaybe "unknown" $ M.lookup "service" s)) | Service s <- nodeServices n ]}
+
+        relayinfo mon= if nodeHost mon /= "localhost" then [("relay",show (nodeHost mon,nodePort mon))] else []
+        stripService n= n{nodeServices=[Service (M.singleton "service" (fromMaybe "unknown" $ M.lookup "service" s)) | Service s <- nodeServices n ]}
 
 
 
@@ -173,21 +173,21 @@ install  service port= do
         my <- getMyNode
         let host= nodeHost my
         program <- return (lookupService "executable" service) `onNothing` empty
-      
+
         tryExec program host port  -- <|> tryDocker service host port program
                                   -- <|> do tryInstall service  ; tryExec program host port
 
 
 -- | Attempts to install the given service. If the service's package is a Git repository, it will be cloned and installed using Cabal. If the package is not a Git repository, an error is thrown indicating that the package/image cannot be installed.
 tryInstall :: Service -> TransIO ()
-tryInstall service = do 
-    package <- emptyIfNothing (lookupService "package" service) 
+tryInstall service = do
+    package <- emptyIfNothing (lookupService "package" service)
     install package
-    where  
+    where
     install package
-        | "git:" `isPrefixOf` package= installGit package  
-        | "https://github.com" `isPrefixOf` package =  installGit package  
-        | "http://github.com"  `isPrefixOf` package =  installGit package  
+        | "git:" `isPrefixOf` package= installGit package
+        | "https://github.com" `isPrefixOf` package =  installGit package
+        | "http://github.com"  `isPrefixOf` package =  installGit package
         | otherwise= error "can not install the package/image for the program requested"
 
 -- | Attempts to run the given service using the Docker image specified in the service. If the Docker image is not found or the executable cannot be run, this function will fail.
@@ -199,38 +199,38 @@ tryDocker service host port program= do
 
 
 tryExec program host port= do
-    (Transient $ liftIO $ findExecutable program)  -- if it is not int the executable paths would abandon (empty) if the executable is not found
+    Transient (liftIO $ findExecutable program)  -- if it is not int the executable paths would abandon (empty) if the executable is not found
                                  <|> error (program ++ " not found")
-    sync' $ spawnProgram program host port  --  !>"spawn"
-    return()
+    sync1 $ spawnProgram program host port  --  !>"spawn"
+    return ()
     where
     spawnProgram  program host port= do
 
         let prog = pathExe  program host port
         liftIO $ putStr  "executing: " >> putStrLn prog
 
-        networkExecuteStreamIt prog 
+        networkExecuteStreamIt prog
         -- fork $ liftIO $ callCommand  prog
         -- liftIO $ threadDelay 200000
 
         -- tr ("INSTALLED", program,port)
-          
-          
+
+
 pathExe  program host port=
-                 program  ++ " -p start/" ++  (host ::String) 
+                 program  ++ " -p start/" ++  (host ::String)
                                    ++"/" ++ show (port ::Int) -- ++ " > "++ program ++ host ++ show port  ++ ".log  2>&1"
 
 
 
 
 
- 
+
 installGit package  = liftIO $  do
     let packagename = name package
     when (null packagename) $ error $ "source for \""++package ++ "\" not found"
     callProcess  "git" ["clone",package]
     liftIO $ putStr package >> putStrLn " cloned"
-    setCurrentDirectory packagename 
+    setCurrentDirectory packagename
     callProcess  "cabal" ["install","--force-reinstalls"]
     setCurrentDirectory ".."
 
@@ -262,12 +262,12 @@ sendToNodeStandardInputIt (node,inp)= do
     sendExecuteStreamIt1 (expr, inp)
     where
     sendExecuteStreamIt1 (cmdline, inp)= localIO $ do
-       map <- readIORef rinput 
-       let input1= fromMaybe (error "this command line has not been opened") $ M.lookup cmdline map 
-       hPutStrLn input1 inp 
+       map <- readIORef rinput
+       let input1= fromMaybe (error "this command line has not been opened") $ M.lookup cmdline map
+       hPutStrLn input1 inp
        hFlush input1
-       return()
-       
+       return ()
+
 receiveFromNodeStandardOutputIt :: ReceiveFromNodeStandardOutput -> Cloud String
 receiveFromNodeStandardOutputIt (ReceiveFromNodeStandardOutput node ident) = local $ do
     let program = fromMaybe (error "no Executable in service "++ show (nodeServices node)) $
@@ -278,7 +278,7 @@ receiveFromNodeStandardOutputIt (ReceiveFromNodeStandardOutput node ident) = loc
     getMailbox' ("output"++ expr)
 
 rinput :: IORef (M.Map String Handle)
-rinput= unsafePerformIO $ newIORef M.empty 
+rinput= unsafePerformIO $ newIORef M.empty
 
 
 logFolder= "./log/"
@@ -286,38 +286,39 @@ logFolder= "./log/"
 logFileName ('.':expr) = logFileName expr
 logFileName expr= logFolder ++ subst expr ++ ".log"
     where
-    subst []= [] 
+    subst []= []
     subst (' ':xs)= '-':subst xs
     subst ('/':xs)= '-':subst xs
     subst ('\"':xs)= '-':subst xs
-    subst (x:xs)= x:subst xs   
+    subst (x:xs)= x:subst xs
 
 -- | execute the shell command specified in a string and stream back at runtime -line by line- the standard output
 -- as soon as there is any output. It also stream all the standard error in case of exiting with a error status.
 -- to the service caller. invoked by `networkExecuteStream`.
 
 
-     
+
 -- networkExecuteStreamIt :: String -> TransIO String
 networkExecuteStreamIt expr = do
       liftIO $ createDirectoryIfMissing True logFolder
-      blocked <- liftIO $ newMVar () 
+      blocked <- liftIO $ newMVar ()
+      tr "createProcess"
       r <- liftIO $ createProcess $ (shell expr){std_in=CreatePipe,std_err=CreatePipe,std_out=CreatePipe}
       liftIO $ atomicModifyIORef rinput $ \map ->   (M.insert expr (input1 r) map,())
-   
-      liftIO $ threadDelay 200000 -- to allow the process to be started
-      let logfile= logFileName  expr 
 
-      hlog <- liftIO $ openFile logfile WriteMode 
+      liftIO $ threadDelay 200000 -- to allow the process to be started
+      let logfile= logFileName  expr
+
+      hlog <- liftIO $ openFile logfile WriteMode
       liftIO $ hPutStrLn  hlog expr
-      liftIO $ hClose hlog    
-      
-      line <- watch (output r) <|> watch (err r) <|> watchExitError r 
+      liftIO $ hClose hlog
+
+      line <- watch (output r) <|> watch (err r) <|> watchExitError r
       putMailbox' ("output" ++ expr) line
       liftIO $ withMVar blocked $ const $ do
-         hlog <- openFile logfile AppendMode 
+         hlog <- openFile logfile AppendMode
          hPutStrLn  hlog line
-         hClose hlog    
+         hClose hlog
       return line
       where
 
@@ -329,17 +330,17 @@ networkExecuteStreamIt expr = do
       watch :: Handle -> TransIO String
       watch h=   do
         abduce
-        mline  <- threads 0 $ (parallel $  (SMore <$> hGetLine' h) `catch` \(e :: SomeException) -> return SDone)
+        mline  <- threads 1 $ (parallel $  (SMore <$> hGetLine' h) `catch` \(e :: SomeException) -> return SDone)
         case mline of
            SDone -> empty
            SMore line ->  return line
-           
+
         where
 
         hGetLine' h= do
           buff <- newIORef []
           getMore buff
-          
+
           where
 
           getMore buff= do

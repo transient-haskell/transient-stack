@@ -119,7 +119,7 @@ minput ident msg' = response
             Nothing -> return $ Context 0 (M.empty)
             Just (Context 0 x) ->  do
               ctx <- Context <$>  (unCloud $ logged genSessionId) <*> return x
-              tr("CONTEXR from 0",ctx)
+              tr ("CONTEXR from 0",ctx)
               setState ctx
               return ctx
             Just ct -> return ct
@@ -134,9 +134,9 @@ minput ident msg' = response
                 -- </> intt sess
                 -- </> intt idcontext ::
                 -- BS.ByteString
-        
+
         params <- toHTTPReq $ type1 response
-        
+
         let httpreq = mempty {requrl = urlbase} <> params :: HTTPReq
             msgdat = if typeOf msg' == typeOf (undefined :: String) then  BS.pack  $ unsafeCoerce  msg'
                      else if typeOf msg' == typeOf (undefined :: BS.ByteString) then unsafeCoerce msg'
@@ -165,23 +165,22 @@ minput ident msg' = response
 
           let ref = getDBRef $ show n
           liftIO $ atomically $ writeDBRef ref $ Context n st
-          
+
           execmode <- gets execMode
           tr ("LOG",execmode)
-          option ident $ BS.unpack msg <> "\t\x1b[1;31m" ++ "endpt "<> ident <> "\x1b[0m " <> " for endpoint details" 
+          option ident $ BS.unpack msg <> "\nEnter\t\x1b[1;31m" ++ "endpt "<> ident <> "\x1b[0m" <> "\tfor this endpoint details"
           setState IsCommand
 
           ctx@(Context idc _) <- liftIO $ atomically $ readDBRef ref `onNothing` error "minput: no context"
           setState ctx
 
-          r <- 
+          r <-
             if typeOf response /= typeOf (undefined :: Cloud ())
               then do
-                r <-  inputParse deserialize $ BS.unpack msg
+                inputParse deserialize $ BS.unpack msg
 
-                return r
-              else return $ unsafeCoerce () 
-          (_,r') <- unCloud $ logged $ return(idc,r)
+              else return $ unsafeCoerce ()
+          (_,r') <- unCloud $ logged $ return (idc,r)
           return r'
 
     connected log ctx@(Context idcontext _) idSession conn closLocal  httpreq = do
@@ -190,8 +189,8 @@ minput ident msg' = response
       onException $ \( e :: SomeException) -> do -- 
                   cdata <- liftIO $ readIORef $ connData conn
                   case cdata of
-                   Just Self -> return()
-                   Just _ -> do 
+                   Just Self -> return ()
+                   Just _ -> do
                         tr cdata
                         let tosend = str "{\"error\"," <> str (show $ show e) <> str "}"
                         sendFragment tosend
@@ -204,11 +203,11 @@ minput ident msg' = response
 
       liftIO $ atomically $ writeDBRef (getDBRef $ show idcontext) ctx -- store the state, the id will be in the URL
       Endpoints endpts <- getEndpoints
-      setRState $ Endpoints  $ M.insert (str ident) httpreq endpts 
+      setRState $ Endpoints  $ M.insert (str ident) httpreq endpts
       tr ("ADDED ENDPOINT",ident,httpreq)
       (idcontext' :: Int, result) <- do
         pstring <- giveParseString
-        if (not $ recover log) || BS.null pstring
+        if not (recover log) || BS.null pstring
           then do
             tr "EN NOTRECOVER"
 
@@ -218,12 +217,12 @@ minput ident msg' = response
                 receive conn (Just $ BC.pack ident) idSession
                 delState IsCommand
                 tr "SELF XXX"
-                
+
                 ps <- giveParseString
                 -- log <- getLog
 
                 -- tr ("PARSE BEFORE LOGGED EN MINPUT",ps, recover log)
-                
+
                 -- setData log{recover=True}
                 (string "e/" >> string "e/") <|> return "e/"
                 unCloud $ logged $  liftIO $ do error "insuficient parameters 1"; empty -- read the response
@@ -295,9 +294,9 @@ public key inp= inp  <|> add key
   add k= local $ do
         idata :: InputData  <-  getState
         tr idata
-        liftIO $ withResource(InputDatas k undefined) $ \case 
+        liftIO $ withResource (InputDatas k undefined) $ \case
                     Nothing                  -> InputDatas k [idata]
-                    Just(InputDatas k lcks) -> InputDatas k $ idata:lcks 
+                    Just(InputDatas k lcks) -> InputDatas k $ idata:lcks
 
 
         empty
@@ -321,12 +320,11 @@ public key inp= inp  <|> add key
 published k=  local $ do
     InputDatas _ inputdatas <-  liftIO $ getResource (InputDatas k undefined)  `onNothing` return (InputDatas k []) -- getRState
     tr ("PUBLISHED", inputdatas)
-    
+
     mcommand <- getData :: TransIO (Maybe IsCommand)
-    if (isNothing mcommand) 
-      then do foldr (<|>) empty $ map (\(InputData id msg url) ->  sendOption msg url) inputdatas; empty
-      else do
-            foldr (<|>) empty $ map (\(InputData id msg url) ->  optionl id  (BS.unpack msg <> "\t\"endpt " <> id <> "\" for endpoint details")  url) inputdatas
+    if isNothing mcommand
+      then do foldr ((<|>) . (\(InputData id msg url) ->  sendOption msg url)) empty inputdatas; empty
+      else do foldr ((<|>) . (\(InputData id msg url) ->  optionl id  (BS.unpack msg <> "\t\"endpt " <> id <> "\" for endpoint details")  url)) empty inputdatas
     empty
     where
     -- for console interaction
@@ -338,26 +336,26 @@ published k=  local $ do
       pars' <- input (const True) "enter the parameters > "
       tr ("PARS'",pars')
       -- substitute spaces by '/'
-      pars <- withParseString (BS.pack pars') $ chainMany mappend (tTakeWhile' (/= ' ') <> ((tChar ' ' >>tTakeWhile' (==' ') >> "/") <|> mempty)) 
-      tr("PARS",pars)
+      pars <- withParseString (BS.pack pars') $ chainMany mappend (tTakeWhile' (/= ' ') <> ((tChar ' ' >>tTakeWhile' (==' ') >> "/") <|> mempty))
+      tr ("PARS",pars)
       let p = requrl url
-      (cl,s,cl',s',ids) <- withParseString p $  do 
-           string "http://" ; tTakeWhile' (/='/') 
+      (cl,s,cl',s',ids) <- withParseString p $  do
+           string "http://" ; tTakeWhile' (/='/')
            (,,,,) <$> tTakeWhile' (/='/') <*> tTakeWhile' (/='/')  <*> tTakeWhile' (/='/') <*> tTakeWhile' (/='/') <*> tTakeWhile' (/='/')
-      tr("CL S",cl,s,cl',s',ids)
+      tr ("CL S",cl,s,cl',s',ids)
       Transient $ processMessage (read $ BS.unpack s) (BS.toStrict cl)  (read $ BS.unpack s') (BS.toStrict cl') (Right $ lazyByteString $ ids <> "/" <> pars) False
-      return()
+      return ()
 
 newtype Endpoints= Endpoints (M.Map BS.ByteString HTTPReq)
-getEndpoints= getRState <|> return (Endpoints M.empty)
+getEndpoints= getRState <|> error "NO ENDPOINT state: use optionEndpoints" -- return (Endpoints M.empty)
 
 -- | show the URL that may be called to access that functionality within a program 
-showURL= do 
-       mprev <- getState 
+showURL= do
+       mprev <- getState
        (sess,clos) <- case mprev of
                          Nothing -> return (0,"0")
                          Just prev -> liftIO $ do
-                           mprevClos <- atomically $ readDBRef prev 
+                           mprevClos <- atomically $ readDBRef prev
                            case mprevClos of
                             Just prevClos -> return $ (localSession prevClos,localClos prevClos)
                             Nothing -> return (0,"0")
@@ -375,21 +373,23 @@ showURL= do
            putStr $ show sess
            putStr "/"
            BS.putStr $  toLazyByteString $ partLog log
-           putStrLn "'"    
+           putStrLn "'"
 
 {-
 give URL for a new session or the current session?
   new ever? current session are not given by the console
 -}
 -- | menu to show info about the endpoints available
+optionEndpoints :: TransIO b
 optionEndpoints = do
-  Endpoints endpts <- getEndpoints
-  guard(not $ null endpts)
+  -- Endpoints endpts <- getEndpoints
+  -- guard(not $ null endpts)
   newRState $ Endpoints M.empty
   option ("endpt" :: String) "info about a endpoint"
+  Endpoints endpts <- getEndpoints
   liftIO $ do putStr "endpoints available: "; print $ M.keys endpts
-  ident:: BS.ByteString <- input (const True) "enter the endpoint for which you want to know the interface > "
-  
+  ident:: BS.ByteString <- input (const True) "enter the endpoint for which you want to know the interface"
+
   let murl = M.lookup ident  endpts
   case murl of
     Nothing ->  liftIO $ do putStr $ "No such endpoint: " ; print ident
@@ -431,12 +431,12 @@ getCookies= getState <|> return (Cookies [])
 sendCookies conn= do
       cookies <- getCookiesStr
       when (not $ BS.null cookies) $ msend conn cookies
-      
+
   where
   getCookiesStr= do
     Cookies cs <- getCookies
-    setState $ Cookies[]
-    return $  BS.concat (map (\(n,v)->  "Set-Cookie: " <> n <>"="<> v <> "\r\n" ) cs) 
+    setState $ Cookies []
+    return $  BS.concat (map (\(n,v)->  "Set-Cookie: " <> n <>"="<> v <> "\r\n" ) cs)
 
 -- | set a cookie in the browser.
 -- Example
@@ -460,7 +460,7 @@ getCookie name= do
     where
     search= do
        tr "search cookie"
-       d <- isDone 
+       d <- isDone
        if d then return Nothing else do
                 dropSpaces
                 name' <- tTakeWhile' (/='=')
@@ -477,7 +477,7 @@ sendOption msg req = do
 
   where
   long id= do
-    s <- tTakeUntilToken "/T" 
+    s <- tTakeUntilToken "/T"
     ses <-tTakeUntilToken "/"
     tDropUntilToken ("/")
     rest <- giveParseString
@@ -489,12 +489,12 @@ sendOption msg req = do
     rest <- giveParseString
     return $ s <> "/T" <> ses <> "/" <> intt id <> "/" <> rest
 
-  
+
   intt = BS.pack . show
 
 -- | include JSON data in the response.
 output :: ToJSON a => a -> TransIO ()
-output= sendFragment . encode 
+output= sendFragment . encode
 
 -- | It is  used as the last response in a flow
 moutput :: ToJSON a => a -> Cloud ()
@@ -512,7 +512,7 @@ sendFragment tosend = do
                 -- msend conn $ str "HTTP/1.0 200 OK\r\nContent-Length: " <> str(show l) <> str "\r\n\r\n" <> tosend
                 -- mclose conn
   checkComposeJSON conn
-  msend conn $ toHex l <> "\r\n" <> tosend <> "\r\n" 
+  msend conn $ toHex l <> "\r\n" <> tosend <> "\r\n"
 
 getSessionState :: (Typeable a, Loggable a) => TransIO a
 getSessionState = res
@@ -537,7 +537,7 @@ newSessionState x = local $ do
 -- | set a session value of the given type that last across all the navigation of a given user
 setSessionState x = do
   modifyData'
-    (\(Context n map) -> (Context n $ M.insert (show $ typeOf x) (toLazyByteString $ serialize x) map))
+    (\(Context n map) -> Context n $ M.insert (show $ typeOf x) (toLazyByteString $ serialize x) map)
     (Context 0 $ M.singleton (show $ typeOf x) $ toLazyByteString $ serialize x)
   return ()
 
@@ -581,8 +581,8 @@ instance ToHTTPReq a => ToHTTPReq [a] where
 
 instance  (Default a, ToJSON a, Typeable a
           ,Default b, ToJSON b, Typeable b) => ToHTTPReq (POSTData(a,b)) where
-    toHTTPReq (POSTData x)=  addbody "["   <> toHTTPReq (POSTData(fst x)) <>  
-                              addbody ", " <> toHTTPReq (POSTData(snd x)) <>  
+    toHTTPReq (POSTData x)=  addbody "["   <> toHTTPReq (POSTData (fst x)) <>
+                              addbody ", " <> toHTTPReq (POSTData (snd x)) <>
                               addbody "]"
       where
       addbody s= return mempty{reqbody=s}
@@ -590,9 +590,9 @@ instance  (Default a, ToJSON a, Typeable a
 instance  (Default a, ToJSON a, Typeable a
           ,Default b, ToJSON b, Typeable b
           ,Default c, ToJSON c, Typeable c) => ToHTTPReq (POSTData(a,b,c)) where
-    toHTTPReq (POSTData x)=  addbody "["   <> toHTTPReq (POSTData(fst x)) <>  
-                              addbody ", " <> toHTTPReq (POSTData(snd x)) <>  
-                              addbody ", " <> toHTTPReq (POSTData(trd x)) <>  
+    toHTTPReq (POSTData x)=  addbody "["   <> toHTTPReq (POSTData (fst x)) <>
+                              addbody ", " <> toHTTPReq (POSTData (snd x)) <>
+                              addbody ", " <> toHTTPReq (POSTData (trd x)) <>
                               addbody "]"
       where
       fst (x,_,_)= x
@@ -604,10 +604,10 @@ instance  (Default a, ToJSON a, Typeable a
           ,Default b, ToJSON b, Typeable b
           ,Default c, ToJSON c, Typeable c
           ,Default d, ToJSON d, Typeable d) => ToHTTPReq (POSTData(a,b,c,d)) where
-    toHTTPReq (POSTData x)=  addbody "["   <> toHTTPReq (POSTData(fst x)) <>  
-                              addbody ", " <> toHTTPReq (POSTData(snd x)) <>  
-                              addbody ", " <> toHTTPReq (POSTData(trd x)) <>  
-                              addbody ", " <> toHTTPReq (POSTData(frt x)) <>  
+    toHTTPReq (POSTData x)=  addbody "["   <> toHTTPReq (POSTData (fst x)) <>
+                              addbody ", " <> toHTTPReq (POSTData (snd x)) <>
+                              addbody ", " <> toHTTPReq (POSTData (trd x)) <>
+                              addbody ", " <> toHTTPReq (POSTData (frt x)) <>
                               addbody "]"
       where
       fst (x,_,_,_)= x
@@ -620,7 +620,7 @@ instance (ToHTTPReq a, ToHTTPReq b) => ToHTTPReq (a, b) where
    toHTTPReq x = toHTTPReq (fst x) <> toHTTPReq (snd x)
 
 instance (ToHTTPReq a, ToHTTPReq b,ToHTTPReq c) => ToHTTPReq(a,b,c) where
-    toHTTPReq x=  toHTTPReq (fst x) <>   toHTTPReq (snd x)<>  toHTTPReq (trd x) 
+    toHTTPReq x=  toHTTPReq (fst x) <>   toHTTPReq (snd x)<>  toHTTPReq (trd x)
       where
       fst (x,_,_)= x
       snd (_,x,_)= x
@@ -639,8 +639,8 @@ newtype POSTData a = POSTData a deriving (ToJSON, FromJSON, Typeable)  -- POSTDa
 
 instance (Loggable a, ToJSON a, FromJSON a) => Loggable (POSTData a)  where
   serialize (POSTData x)=  serializeToJSON x
-  deserialize =   POSTData <$> deserializeJSON 
-    
+  deserialize =   POSTData <$> deserializeJSON
+
 
 -- instance ToHTTPReq (POSTData String) where
 --   toHTTPReq (POSTData s) = return mempty {reqbody = "$string"}
@@ -659,12 +659,12 @@ data Vars= Vars[BS.ByteString]
 varunique s= do
       Vars vars <- getState <|> let v= Vars [] in setState v >> return v
       if null $ filter (== s) vars then do setState $ Vars (s:vars); return s
-                                    else varunique $ BS.snoc s 'x'  
+                                    else varunique $ BS.snoc s 'x'
 
 instance  {-# OVERLAPPING #-} (Default a, ToJSON a, Typeable a) => ToHTTPReq (POSTData a) where
-  toHTTPReq (POSTData x) = 
+  toHTTPReq (POSTData x) =
     do
-      setState $ Vars[]
+      setState $ Vars []
       pc <- process $ encode (def `asTypeOf` x)
       return $ mempty {reqtype = POST, reqbody = pc}
      <|> do
@@ -672,12 +672,12 @@ instance  {-# OVERLAPPING #-} (Default a, ToJSON a, Typeable a) => ToHTTPReq (PO
        return mempty{reqtype=POST,reqbody= t}
 
     where
-  
 
-    jsonType x=do 
+
+    jsonType x=do
         let types = show $ typeOf x
         withParseString (BS.pack types) elemType
-         
+
         where
         elemType =   tuple  <|> list <|> single
         -- si tipo empieza por(
@@ -686,7 +686,7 @@ instance  {-# OVERLAPPING #-} (Default a, ToJSON a, Typeable a) => ToHTTPReq (PO
         tuple=   parens $ "[" <> elemType  <> chainMany (<>) (comma <>  elemType) <> "]"
         list=  (sandbox' (string "[Cha") >> single) {- <|> deflist -} <|> (tChar '[' >> ("[" <> elemType <> (tChar ']' >> "]"))) -- (brackets $ tTakeWhile (/= ']')) <> "'s")
 
-        single=   chainManyTill BS.cons (toLower <$> anyChar) (tCharn ',' <|> tCharn ')' <|> done) >>= stringFix 
+        single=   chainManyTill BS.cons (toLower <$> anyChar) (tCharn ',' <|> tCharn ')' <|> done) >>= stringFix
 
         -- not consuming tChar
         tCharn c= tChar c <* tPutStr (BS.singleton c)
@@ -709,11 +709,11 @@ instance  {-# OVERLAPPING #-} (Default a, ToJSON a, Typeable a) => ToHTTPReq (PO
             ( many $ do
                 prev <- tTakeUntilToken "\""
                 var  <- tTakeUntilToken "\""
- 
+
                 tDropUntilToken ":"
                 dropSpaces
                 isq <- anyChar
-                
+
                 -- chainManyTill BS.cons anyChar (sandbox $ tChar ',' <|> tChar '}')
                 tTakeWhile (\c -> c /= ',' && c /= '}')
 
@@ -734,8 +734,8 @@ instance  {-# OVERLAPPING #-} (Default a, ToJSON a, Typeable a) => ToHTTPReq (PO
 
 
 rawHTTP :: (Typeable a, Loggable a) => Node -> String -> TransIO a
-rawHTTP node restmsg =res 
- where 
+rawHTTP node restmsg =res
+ where
  res= sandbox $ do
   abduce -- is a parallel operation
   tr ("***********************rawHTTP", nodeHost node,nodePort node, restmsg)
@@ -756,7 +756,7 @@ rawHTTP node restmsg =res
       liftIO $ takeMVar blocked
       -- tr "after blocked"
       ctx <- liftIO $ readIORef $ istream c
-      
+
       liftIO $ writeIORef (done ctx) False
       modify $ \s -> s {parseContext = ctx} -- actualize the parse context
       return c
@@ -793,13 +793,13 @@ rawHTTP node restmsg =res
     <|> do
       Raw body <- parseBody  headers
       endthings c mcon vers blocked headers
-      error $ "Transient.Move.Web: ERROR in REQUEST: \n" <> restmsg  <> show body <> "\nRESPONSE HEADERS:\n " <> show hdrs 
+      error $ "Transient.Move.Web: ERROR in REQUEST: \n" <> restmsg  <> show body <> "\nRESPONSE HEADERS:\n " <> show hdrs
   tr ("HEADERS",headers)
 
   result <- parseBody headers
   -- let mresult = decode r 
   --     result= fromMaybe (error $ "can not decode JSON string:" <> show(BS.unpack r) <> " to type: " <> show(typeOf (type1 res))) mresult
-  
+
   tr ("RESULT BODY",result)
   endthings c mcon vers blocked headers
   return result
@@ -812,7 +812,6 @@ rawHTTP node restmsg =res
     when
       ( vers == http10
           ||
-          --    BS.isPrefixOf http10 str             ||
           lookup "Connection" headers == Just "close"
       )
       $ do
@@ -835,7 +834,7 @@ rawHTTP node restmsg =res
     liftIO $ putMVar blocked $ Just t
 
     if (isJust mcon) then setData (fromJust mcon) else delData c
-  
+
   isTLS c = liftIO $ do
       cdata <- readIORef $ connData c
       case cdata of

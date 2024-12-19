@@ -21,7 +21,7 @@ class (Show a, Read a,Typeable a) => Loggable a where
     serialize = byteString . BSS.pack . show
 
     deserializePure :: BS.ByteString -> Maybe(a, BS.ByteString)
-    
+
     deserializePure s' = r
       where
       (s,rest)=  fragment  s' -- to avoid packing/unpacking the entire string
@@ -87,7 +87,7 @@ instance Loggable a => Loggable (StreamData a) where
 
 instance Loggable ()  where
   serialize _=  "u"
-  deserialize= tChar 'u' >> return ()
+  deserialize= void (tChar 'u')
 
 instance Loggable Bool where
   serialize b= if b then "t" else "f"
@@ -101,6 +101,7 @@ instance Loggable Bool where
   -- deserialize= BS.unpack <$> tTakeWhile (/= '/')
 
 instance Loggable Int
+
 instance Loggable Integer
 
 
@@ -118,10 +119,10 @@ instance   (Typeable a, Loggable a) => Loggable [a]  where
       ty :: TransIO [a] -> [a]
       ty = undefined
       r= if typeOf (ty r) /= typeOf (undefined :: String)
-              then tChar '[' *> commaSep deserialize <* tChar ']' 
-              else 
-                do 
-                  try $ tChar '\"' 
+              then tChar '[' *> commaSep deserialize <* tChar ']'
+              else
+                do
+                  try $ tChar '\"'
                   withGetParseString $ \s -> case deserializePure s of
                     Nothing -> empty
                     Just x -> return x
@@ -143,7 +144,7 @@ instance Loggable a => Loggable (Maybe a)
 
 instance (Loggable a,Loggable b) => Loggable (a,b) where
   serialize (a,b)= serialize a <> byteString "/" <> serialize b
-  deserialize = (,) <$> deserialize <*> (sspace >>  deserialize) 
+  deserialize = (,) <$> deserialize <*> (sspace >>  deserialize)
 
 instance (Loggable a,Loggable b, Loggable c) => Loggable (a,b,c) where
   serialize (a,b,c)=  serialize a <> byteString "/" <> serialize b <> byteString "/" <> serialize c
@@ -200,12 +201,12 @@ undupSlash = do
     s <- tTakeUntil $ \s -> BS.head s == '/'
     do string "//"
        return s <> "/" <> undupSlash
-     <|> return s 
+     <|> return s
 
 instance Loggable BS.ByteString  where
         serialize str =   dupSlash str !> "serialize bytestring"
         deserialize= undupSlash
- 
+
 
 
 instance Loggable BSS.ByteString where

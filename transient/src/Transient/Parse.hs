@@ -5,7 +5,7 @@ module Transient.Parse(
 setParseStream, setParseString, withParseString, withParseStream,
 -- * parsing
 string, tDropUntilToken, tTakeUntilToken, integer, hex, int, double, tChar,anyChar, manyTill, chainManyTill,between, symbol,parens, braces,angles,brackets,
-semi, comma, dot,colon, sepBy, chainSepBy,chainMany,
+semi, comma, dot,colon, sepBy, chainSepBy, chainSepBy1, chainMany,
 commaSep, semiSep,  dropSpaces,dropTillEndOfLine,
 parseString, tTakeWhile,tTakeUntil, tTakeWhile', tTake, tDrop, tDropUntil, tPutStr,
 isDone,dropUntilDone,

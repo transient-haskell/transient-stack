@@ -30,6 +30,8 @@ cradle:
     - path: "transient-universe/."
       component: "lib:transient-universe"
 
+
+
     - path: "transient-universe/app/client/Transient/Move/Services/void.hs"
       component: "transient-universe:exe:monitorService"
 
@@ -53,3 +55,9 @@ cradle:
 
     - path: "transient-universe-tls/src"
       component: "lib:transient-universe-tls"
+
+    - path: "transient-typelevel/."
+      component: "lib:transient-typelevel"
+
+    - path: "transient-typelevel/src"
+      component: "lib:transient-typelevel"

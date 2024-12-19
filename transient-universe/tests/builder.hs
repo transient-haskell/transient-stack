@@ -298,7 +298,7 @@ main5= keep $ do
 main= keep $ do
     option ("compile" :: String) "compile"
     file    <- input  (const  True) "file to compile: " 
-    options <- input' (Just "") (const True) "compilation options? "
+    options <- input' "" (const True) "compilation options? "
     liftIO $ print options
     setState $ Options (words options )
     setRState $ Solved False 

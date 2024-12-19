@@ -238,7 +238,7 @@ TransIO, TransientIO
 , (**>), (<**), (<***)
 
 -- * Running the monad
-,keep, keep',keepCollect, stop, exit
+,keep, keep',keepCollect, stop, exit,exitFailure
 
 -- * Asynchronous console IO
 ,option,option1, input,input'
@@ -270,3 +270,4 @@ where
 
 import    Transient.Internals
 import    Transient.Console
+import System.Directory.Internal.Prelude (exitFailure)
