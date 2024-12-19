@@ -1606,7 +1606,7 @@ mconnect1 (node@(Node host port (Just pool) _))= do
 
 
 
-data ConnectionError = ConnectionError String Node deriving (Show, Read)
+-- data ConnectionError = ConnectionError String Node deriving (Show, Read)
 
 -- instance Exception ConnectionError
 
