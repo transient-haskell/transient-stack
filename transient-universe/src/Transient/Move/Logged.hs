@@ -91,19 +91,19 @@ logged mx =  Cloud $ do
     where
 
     res = do
-          log <- getLog
+          initalLog <- getLog
           -- tr "resetting PrevClos"
           -- modifyState'(\(PrevClos a b _) -> PrevClos a b False) (error "logged: no prevclos") -- (PrevClos 0 "0" False) -- 11
 
           debug <- getParseBuffer
-          tr (if recover log then "recovering" else "excecuting" <> " logged stmt of type",typeOf res,"parseString", debug,"PARTLOG",partLog log)
+          tr (if recover initalLog then "recovering" else "excecuting" <> " logged stmt of type",typeOf res,"parseString", debug,"PARTLOG",partLog initalLog)
           indent
-          let segment= partLog log
+          let segment= partLog initalLog
 
 
           rest <- getParseBuffer 
 
-          setData log{partLog=  segment <> exec, hashClosure= hashClosure log + hashExec}
+          setData initalLog{partLog=  segment <> exec, hashClosure= hashClosure initalLog + hashExec}
           
           r <-(if not $ BS.null rest
                 then recoverIt
@@ -121,12 +121,12 @@ logged mx =  Cloud $ do
               parlog= segment <> add 
 
           PrevClos s c hadTeleport <- getData `onNothing` (error $ "logged: no prevclos") -- return (PrevClos 0 "0" False)
-          modifyState'  (\log ->  -- problemsol 10
+          modifyState'  (\finalLog ->  -- problemsol 10
                         if  hadTeleport 
                           then 
-                            trace (show("set log","")) $ log{recover=recov, partLog= mempty,hashClosure= hashClosure log  }
+                            trace (show("set log","")) $ finalLog{recover=recov, partLog= mempty,hashClosure= hashClosure finalLog  }
                           else 
-                            trace (show("set log",parlog)) $ log{recover=recov, partLog= parlog, hashClosure= hashClosure log + hashDone } 
+                            trace (show("set log",parlog)) $ finalLog{recover=recov, partLog= parlog, hashClosure= hashClosure initalLog{-Alabado sea Dios-} + hashDone } 
                         ) 
                         emptyLog
 
