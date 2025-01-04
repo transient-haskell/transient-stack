@@ -75,11 +75,13 @@ outdent=  liftIO $ modifyIORef rindent $ \n -> n-2
 {-# NOINLINE rindent #-}
 rindent= unsafePerformIO $ newIORef 0
 -- tr x= return () !>   unsafePerformIO (color x)
--- tr x= trace (show(unsafePerformIO myThreadId, unsafePerformIO $ color x))  $ return()
+tr :: (Show a, Monad m) => a -> m ()
+tr x=  trace (color x) $ return ()
+
 
 -- {-# NOINLINE tr #-}
-tr :: (Show a, Monad m) => a -> m ()
-tr x=  trace (show x) $ return ()
+-- tr :: (Show a, Monad m) => a -> m ()
+-- tr x=  trace (show x) $ return ()
 
 -- {-# NOINLINE color #-}
 color :: Show a => a -> String
@@ -2078,7 +2080,7 @@ back reason =  do
         setData $ Backtrack (Just reason) bs
         x <-  f  reason
         Backtrack back bs' <- getData `onNothing`  return (backStateOf  reason)
-        tr ("gobackt",typeOf  reason,length stack)
+        tr ("gobackt",reason,length stack)
 
         case back of
                  Nothing    -> do
