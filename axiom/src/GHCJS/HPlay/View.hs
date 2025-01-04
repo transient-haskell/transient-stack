@@ -113,7 +113,7 @@ module GHCJS.HPlay.View(
 
 
 import           Transient.Internals     hiding (input, option, parent)
-import           Transient.Logged hiding ((<<))
+import           Transient.Move.Logged hiding ((<<))
 import           Transient.Move.Utils
 import qualified Prelude(id,span,div)
 #ifndef ghcjs_HOST_OS
@@ -244,7 +244,7 @@ withElem id f= do
 
 
 type ElemID= JSString
-newtype Widget a=  Widget{ norender :: TransIO a} deriving(MonadIO, Applicative, Alternative, MonadState EventF,MonadPlus,Num)
+newtype Widget a=  Widget{ norender :: TransIO a} deriving(MonadIO, Applicative, Alternative, MonadState EventF,Num)
 
 
   
@@ -273,7 +273,7 @@ instance Monad Widget where
 
 setEventContW :: Widget a -> (a -> Widget b) -> JSString -> StateIO ()
 setEventContW  x f id = modify $ \EventF {mfSequence = seq, fcomp = fs, .. }
-                           -> EventF {mfSequence = seq, xcomp =  strip seq x
+                           -> EventF {mfSequence = seq
                                      , fcomp = unsafeCoerce (rend f id) :  fs
                                      , .. }   !> "setEventContW"
       where
