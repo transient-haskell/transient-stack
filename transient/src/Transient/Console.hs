@@ -557,14 +557,15 @@ keep mx = do
               _ -> do
                 liftIO $ do
                   th <- myThreadId
-                  putStrLn $ show th ++ ": " ++ show e
+                  print $ show th ++ ": " ++ show e
+                  hPutStrLn stderr $ show th ++ ": " ++ show e
                 back $ Finish $ show (unsafePerformIO myThreadId, e)
           --showThreads top`
             liftIO $ appendFile logFile $ show e ++ "\n" -- `catch` \(e:: IOError) -> exc
 
           onException $ \(e :: IOException) -> do
             when (ioeGetErrorString e == "resource busy") $ do
-              liftIO $ do print e; putStrLn "EXITING!!!"; putMVar rexit $ Left "resource busy"
+              liftIO $ do print e; putStrLn "EXITING!!!"; putMVar rexit $ unsafeCoerce $ Left "resource busy"
               empty
 
           onException $ \ThreadKilled -> do
