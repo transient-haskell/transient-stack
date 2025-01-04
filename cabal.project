@@ -2,4 +2,4 @@ packages: */*.cabal
 profiling: True
 library-profiling: True
 executable-profiling: True
-
+tests: True
