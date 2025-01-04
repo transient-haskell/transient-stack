@@ -33,6 +33,7 @@ import Data.List((\\), isPrefixOf)
 import qualified Data.ByteString.Lazy.Char8 as BS
 import Control.Exception hiding(onException)
 import System.IO.Unsafe
+import System.Directory.Internal.Prelude (exitFailure)
 
 rretry= unsafePerformIO $ newIORef False
 
@@ -70,7 +71,7 @@ initNode app= do
               then do
                  liftIO $ putStr "Port busy: " >> print (nodePort node)
                  retry <- liftIO $ readIORef rretry
-                 if retry then do liftIO $ print "retrying with next port" ;continue else empty
+                 if retry then do liftIO $ print "retrying with next port" ;continue else exitLeft $ show(nodePort node) <>": port busy"
                  port <- liftIO $ atomicModifyIORef rport $ \p -> (p+1,p+1)
                  return node{nodePort= port}
                  
