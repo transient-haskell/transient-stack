@@ -39,6 +39,24 @@ import qualified Data.Map                               as M
 import Control.Monad.State
 import Control.Applicative
 
+
+-- The cloud monad is a thin layer over Transient in order to make sure that the type system
+-- forces the logging of intermediate results
+newtype Cloud a = Cloud {unCloud :: TransIO a}
+  deriving
+    ( AdditionalOperators,
+      Functor,
+      Semigroup,
+      Monoid,
+      Alternative,
+      Applicative,
+      MonadFail,
+      Monad,
+      Num,
+      Fractional,
+      MonadState EventF
+    )
+
 -- | previous local checkpointed closure in the execution flow
 data PrevClos = PrevClos {idSession :: SessionId, idClosure :: IdClosure, hasTeleport :: Bool}
 
@@ -201,23 +219,6 @@ instance Default Service where
 instance Default [Service] where
   def= [def]
 
--- The cloud monad is a thin layer over Transient in order to make sure that the type system
--- forces the logging of intermediate results
-newtype Cloud a = Cloud {unCloud :: TransIO a}
-  deriving
-    ( AdditionalOperators,
-      Functor,
-      Semigroup,
-      Monoid,
-      Alternative,
-      Applicative,
-      MonadFail,
-      Monad,
-      Num,
-      Fractional,
-      MonadState EventF
-    )
-
 
 
 data NodeMSG = ClosureData IdClosure SessionId IdClosure SessionId Builder deriving (Read, Show)
@@ -244,7 +245,6 @@ instance Loggable NodeMSG where
 data Closure = Closure SessionId IdClosure [Int] deriving (Read, Show, Typeable)
 
 {-# SPECIALIZE getIndexData :: Int  -> StateIO (Maybe Closure) #-}
-{-# SPECIALIZE getIndexData :: Int  -> TransIO (Maybe Closure) #-}
 
 
 

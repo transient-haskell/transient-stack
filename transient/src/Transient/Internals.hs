@@ -22,9 +22,10 @@
 {-# LANGUAGE DeriveDataTypeable        #-}
 {-# LANGUAGE RecordWildCards           #-}
 {-# LANGUAGE ConstraintKinds           #-}
-{-# LANGUAGE MonoLocalBinds #-}
+{-# LANGUAGE MonoLocalBinds           #-}
 {-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
-{-# HLINT ignore "Use gets" #-}
+{-# HLINT ignore "Use gets"           #-}
+{-# LANGUAGE InstanceSigs             #-}
 
 
 module Transient.Internals where
@@ -123,6 +124,10 @@ data LifeCycle = Alive   -- working
                 | Dead     -- killed waiting to be eliminated
                 | DeadParent  -- Dead with some childs active
   deriving (Eq, Show)
+
+data ExecMode = Remote | Parallel | Serial
+  deriving (Typeable, Eq, Show)
+
 
 -- | EventF describes the context of a TransientIO computation:
 data EventF = forall a b. EventF
@@ -295,8 +300,10 @@ instance Functor TransIO where
 
 
 instance Applicative TransIO where
+  pure :: a -> TransIO a
   pure a  = Transient . return $ Just a
 
+  (<*>) :: TransIO (a -> b) -> TransIO a -> TransIO b
   mf <*> mx = do
 
     r1 <- liftIO $ newIORef Nothing
@@ -336,56 +343,11 @@ instance Applicative TransIO where
 
             Just f -> do
               x <- mx
-              liftIO $ (writeIORef r2 $ Just x)
+              liftIO $ writeIORef r2 (Just x)
               return $ f x
 
-  -- mf <*> mx = Transient $ do
-  --   r1 <- liftIO $ newIORef (Nothing :: Maybe(a -> b))
-  --   r2 <- liftIO $ newIORef (Nothing :: Maybe a)
-  --   runTrans $ (fparallel r1 r2) <|> (xparallel r1 r2)
-
-  --   where
-
-  --   fparallel r1 r2= Transient $ do
-  --     f <- runTrans mf
-  --     liftIO $ writeIORef r1  f
-  --     mr <- liftIO (readIORef r2)
-  --     case (mr,f) of
-  --           (Just x,Just f1)  -> return $ Just $ f1 x
-  --           _ -> return Nothing
-
-  --   xparallel r1 r2 = Transient $ do
-
-  --     mr <- liftIO (readIORef r1)
-  --     case mr of
-  --           Nothing -> do
-
-  --             p <- gets execMode
-  --             -- tr ("EXECMODE",p)
-  --             if p== Serial then empty else do
-
-  --                      -- the first term may be being executed in parallel and will give his result later
-  --                      x <- runTrans mx
-  --                      liftIO (writeIORef r2  x)
-
-  --                      mr <- liftIO (readIORef r1)
-  --                     --  tr ("XPARALELL",isJust mr)
-  --                      case (x,mr) of
-  --                        (Just x1, Just f)  -> return $ Just $ f x1
 
 
-  --           Just f -> do
-  --             xr <- runTrans mx
-  --             liftIO $ writeIORef r2  xr
-  --             case xr of
-  --               Nothing -> return Nothing
-  --               Just x  -> return $ Just $ f x
-
-
-
-
-data ExecMode = Remote | Parallel | Serial
-  deriving (Typeable, Eq, Show)
 
 -- | stop the current computation and does not execute any alternative computation
 fullStop :: TransIO stop
@@ -508,16 +470,21 @@ resetEventCont k= modify $ \EventF { .. } -> EventF {fcomp = k, .. }
 -- --getPrev ::  StateIO  JSString
 -- --getPrev= return $ pack ""
 -- #endif
-
-callCC :: (a -> TransIO b) -> TransIO b
+-- | a version of callCC where the continuation is taken from the state
+callCC :: TransIO a -> TransIO b
 callCC comp= Transient $ do
   EventF{fcomp=k} <- get
-  runTrans $ comp $ unsafeCoerce k
+  runTrans $ comp >>= unsafeCoerce k
 
-withCont :: (a -> StateIO b) ->  TransIO b
+withCont :: StateIO a ->  TransIO b
 withCont comp= noTrans $ do
   EventF{fcomp=k} <- get
-  comp $ unsafeCoerce k
+  comp >>= unsafeCoerce k
+
+-- callCCState :: StateIO a ->  StateIO b
+-- callCCState comp= do
+--   EventF{fcomp=k} <- get
+--   runTrans $ comp >>= unsafeCoerce k
 
 instance MonadIO TransIO where
   liftIO x = Transient $ liftIO x <&> Just
@@ -1102,7 +1069,7 @@ freeThreads process = do
   st <- get
   put st { freeTh = True }
   process <*** modify (\s -> s { freeTh = freeTh st })
- 
+
 
 -- | Enable tracking and therefore the ability to terminate the child threads.
 -- This is the default but can be used to re-enable tracking if it was
@@ -1262,14 +1229,15 @@ delState :: (TransMonad m, Typeable a) => a -> m ()
 delState = delData
 
 
--- | get a pure state identified by his type and an index
+-- | get a pure state identified by his type and an index.
 getIndexData :: (MonadState EventF m, Typeable k, Typeable a, Ord k) =>
      k -> m (Maybe a)
 getIndexData n= do
   clsmap <- getData `onNothing` return M.empty
   return $ M.lookup n clsmap
 
--- | set a pure state identified by his type and an index
+-- | set a pure state identified by his type and an index.
+setIndexData :: (MonadState EventF m, Typeable k, Typeable a, Ord k) => k -> a -> m (M.Map k a)
 setIndexData n val= modifyData' (M.insert n val) (M.singleton n val)
 
 withIndexData
@@ -1379,7 +1347,7 @@ sandboxSide ts mx = do
                 Nothing -> trace "NOTHINGG" Nothing
                 Just x  -> trace "FOUND" $ Just (t,x)) ts) mapold
 
-                
+
 -- | executes a computation and restores the concrete state data. the first parameter is used as withness of the type
 --
 -- As said in `sandbox`, sandboxing can be tricked by backtracking
@@ -1433,6 +1401,7 @@ data StreamData a =
     deriving (Typeable, Show,Read)
 
 instance Functor StreamData where
+    fmap :: (a -> b) -> StreamData a -> StreamData b
     fmap f (SMore a)= SMore (f a)
     fmap f (SLast a)= SLast (f a)
     fmap _ SDone= SDone
@@ -2007,7 +1976,7 @@ onBack ac bac = Transient $ do
     EventF{fcomp=k}  <- get
   -- if isJust (event cont) then return Nothing else do
     md <- getData `asTypeOf` return (Just (backStateOf $ eventOf handler))
-    
+
     case md of
           -- Just (Backtrack b []) ->  setData $ Backtrack b  [(handler,unsafeCoerce k)]
           Just bss@(Backtrack b bs) ->
@@ -2321,7 +2290,7 @@ onException' mx f= onAnyException mx $ \e -> do
                   Backtrack r stack <- getData  `onNothing`  return (backStateOf  e)
                   setData $ Backtrack r $ tail stack
                   back e
-                  
+
                Just e' -> f e'
 
 
@@ -2438,4 +2407,5 @@ localExceptionHandlers w= do
    r <- sandboxData (backStateOf  (undefined :: SomeException)) w
    onException $ \(SomeException _) -> return ()
    return r
+
 

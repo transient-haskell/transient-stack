@@ -15,14 +15,11 @@
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE ExistentialQuantification #-}
 {-# LANGUAGE FlexibleContexts #-}
-{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE OverlappingInstances #-}
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE ScopedTypeVariables #-}
-{-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE UndecidableInstances #-}
 {-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
 {-# HLINT ignore "Use if" #-}
@@ -49,8 +46,8 @@ import Data.String
 import qualified Data.ByteString.Char8                  as BC
 import qualified Data.ByteString.Lazy.Char8             as BS
 
-import qualified Data.TCache.DefaultPersistence as TC
 import Data.TCache  hiding (onNothing)
+-- import Data.TCache.DefaultPersistence as TC(key)
 import Data.TCache.IndexQuery
 
 import System.Time
@@ -145,7 +142,6 @@ newtype PortID = PortNumber Int deriving (Read, Show, Eq, Typeable)
 --         <*> v .: "nodeServices"
 
 -- to allow JSON instances for Node
-
 
 
 
@@ -394,14 +390,14 @@ callTo node remoteProc = wormhole' node $ atRemote remoteProc
 -- >           baz s                 -- in node2
 -- >     bat t                       -- in the original node
 atRemote :: Loggable a => Cloud a -> Cloud a
-atRemote proc = loggedc $ do
+atRemote proc =  do
       tr "ATREMOTE TELEPORT1"
       teleport
       tr "ATREMOTE TELEPORT1 END"
 
       -- recover mode is executed in serial mode
       modify $ \s -> s {execMode = if execMode s == Parallel then Parallel else Serial}
-      r <- (loggedc proc) -- <** modify (\s -> s {execMode = Remote}) 
+      r <- loggedc proc -- <** modify (\s -> s {execMode = Remote}) 
 
       tr "ATREMOTE TELEPORT2"
       teleport
@@ -464,8 +460,8 @@ unique f = do
 -- If the connection fails, it search the network for suitable relay nodes to reach the destination node.
 wormhole node comp = do
     onAll $
-        onException $ \(e@(ConnectionError "no connection" nodeerr)) ->
-           if nodeerr == node then do unCloud $ findRelay node; continue else return ()
+        onException $ \e@(ConnectionError "no connection" nodeerr) ->
+           when (nodeerr == node) $ do unCloud $ findRelay node; continue
     wormhole' node comp
     where
         findRelay node = do
@@ -473,6 +469,7 @@ wormhole node comp = do
                 nodes <- local getNodes
                 let thenode = filter (== node) nodes
                 if not (null thenode) && isJust (connection $ Prelude.head thenode) then return $ Prelude.head nodes else empty
+              <|> (error $ "no connection to: " ++ show node) 
             local $ addNodes [node {nodeServices = nodeServices node ++ [Service $ M.fromList [("relay", show (nodeHost (relaynode :: Node), nodePort relaynode))]]}]
 
 -- when the first teleport has been sent within a wormhole, the
@@ -509,10 +506,17 @@ wormhole' node (Cloud comp) = local $  do
 
                 liftIO $ writeIORef (remoteNode conn) $ Just node
                 -- tr("WORMHOLE",node)
-                setData conn {synchronous = maybe False id $ fmap synchronous moldconn, calling = True}
+                setData conn {synchronous = maybe False synchronous moldconn, calling = True}
 
                 -- tr "before comp"
-                comp
+                r <- comp
+
+                mref <- getData -- if it is inside of an applicative
+                case mref of
+                  Just (Ref ref) -> liftIO $ atomicModifyIORef ref $ \(ApplicativeConns cs) -> (ApplicativeConns $ idConn conn:cs,())
+                  _              -> return ()
+                return r
+
             )
               <*** do
                 when (isJust moldconn) . setData $ fromJust moldconn
@@ -530,7 +534,6 @@ wormhole' node (Cloud comp) = local $  do
     PrevClos s c _ <- getData `onNothing` error "wormhole: no PrevClos" -- return (PrevClos 0 "0" False)
     x <***
           -- do not restore PrevClos if there was a teleport inside mx
-
           modifyState'
               (\(PrevClos s' c' tel) ->
                     if tel then PrevClos s' c' True
@@ -585,9 +588,9 @@ teleport =  do -- local $ do
 
   local $ do
     -- abduce
-    PrevClos idsess prevclos _ <- getData `onNothing` error "teleport: no prevclos" -- return (PrevClos  0 "0" False)
-    tr ("PREVCLOS",idsess,prevclos)
-    idSession <-  if idsess /= 0 then return idsess else  fromIntegral <$> genPersistId
+    PrevClos idSession prevclos _ <- getData `onNothing` error "teleport: no prevclos" -- return (PrevClos  0 "0" False)
+    tr ("PREVCLOS",idSession,prevclos)
+    -- idSession <-  if idsess /= 0 then return idsess else  fromIntegral <$> genPersistId
 
     conn@Connection {idConn = idConn, connData = contype, synchronous = synchronous} <-
               getData
@@ -623,15 +626,16 @@ teleport =  do -- local $ do
                 <|> do
                   tr ("getting closure for idConn",idConn)
                   (Closure s c _) <- getIndexState idConn
-                  tr ("after getIndexState",s,c)
+                  tr ("after getClosureForConnection",s,c)
                   return (s,c)
                 <|> do
                   tr "return 0 0"
-                  return (0, "0")
-            -- (Closure sessRemote closRemote n) <- getIndexData idConn `onNothing` return (Closure 0 "0" [])
-            -- tr ("getIndexData", idConn, sessRemote, closRemote, n)
-            let prevclosDBRef= getDBRef $ kLocalClos idsess prevclos
+                  return (0,BC.pack "0")
+
+            let prevclosDBRef= getDBRef $ kLocalClos idSession prevclos
+            -- calcula el log entre la ultima closure almacenada localmente (prevclos) y el punto que el nodo ya ha recibido (closremote) 
             prevlog <- noTrans $ getClosureLogFrom prevclosDBRef sessRemote  closRemote
+            tr ("PARTLOG", partLog log)
             let tosend =  prevlog <> partLog log
 
             let closLocal = BC.pack $ show $ hashClosure log
@@ -642,81 +646,15 @@ teleport =  do -- local $ do
 
               receive conn Nothing idSession
               tr "AFTER RECEIVE"
-  tr "partLog=mempty"
-  modifyState' (\log -> log{partLog= mempty}) (error "teleport: no log")
   return ()
 
 
 receive conn clos idSession = do
-  tr ("SETCONT TO RECEIVE",unsafePerformIO $ readIORef $ remoteNode conn,clos, idSession)
-
+  tr ("RECEIVE FROM",unsafePerformIO $ readIORef $ remoteNode conn)
   (lc, log) <- setCont clos idSession
-  -- ttr ("setting closure for idConn",idConn conn)
-  -- setIndexData (idConn conn) (Closure idSession (localClos lc) []) --xxx
-
-  -- s <- giveParseString
-  -- tr ("receive PARSESTRING",s,"LOG",toPath $ partLog log)
   receive1 lc
-  -- if recover log && not (BS.null s)
-  --   then do tr "RECEIVE RECOVER" ;(abduce >> receive1 lc) <|> return() -- watch this event var and continue restoring
-  --   else  receive1 lc
 
-  where
-  receive1 lc= do
-      tr "RECEIVE1"
-      when (synchronous conn) $ liftIO $ takeMVar $ localMvar lc
-      -- tr ("EVAR waiting in", localSession lc, localClos lc)
-      mr <- readEVar $ fromJust $ localEvar lc
 
-      -- tr ("RECEIVED", mr)
-
-      case mr of
-        Right (SDone, _, _, _)    -> empty
-        Right (SError e, _, _, _) -> error $ show ("receive:",e)
-        Right (SLast log, s2, closr, conn') -> do
-          -- cdata <- liftIO $ readIORef $ connData conn' -- connection may have been changed
-          -- liftIO $ writeIORef (connData conn) cdata
-          setData conn'
-          -- tr ("RECEIVED <------- SLAST", log)
-          setLog (idConn conn') log s2 closr
-        Right (SMore log, s2, closr, conn') -> do
-          -- cdata <- liftIO $ readIORef $ connData conn'
-          -- liftIO $ writeIORef (connData conn) cdata
-          setData conn'
-          -- tr ("receive REMOTE NODE", unsafePerformIO $ readIORef $ remoteNode conn,idConn conn)
-          -- tr ("receive REMOTE NODE'", unsafePerformIO $ readIORef $ remoteNode conn',idConn conn')
-
-          setLog (idConn conn') log s2 closr
-        Left except -> do
-          throwt except
-          empty
-
-firstCont = do
-  cont <- get
-  log <- getLog
-  let rthis = getDBRef "0-0" -- TC.key this
-  tr ("assign", log)
-  when (not $ recover log) $ do
-    ev <- newEVar
-    mv <- liftIO $ newMVar ()
-
-    let this =
-          LocalClosure
-            { localSession = 0,
-              prevClos = rthis,
-              localLog = partLog log,
-              localClos = BC.pack "0", -- hashClosure log,
-              localEvar = Just ev,
-              localMvar = mv,
-              localCont = Just cont
-            }
-
-    -- n <- getMyNode
-    -- let url= str "http://" <> str (nodeHost n) <> str "/" <> intt (nodePort n) <>"/0/0/0/0/"
-
-    -- liftIO $ print url
-    liftIO $ atomically $ writeDBRef rthis this
-  setState $ PrevClos 0 "0" False
 
 
 
@@ -1734,20 +1672,10 @@ connectToWS  h (PortNumber p) = do
 
 
 
-newtype PersistId = PersistId Integer deriving (Read, Show, Typeable)
-
-instance TC.Indexable PersistId where key _ = "persistId"
 
 
 
-persistDBRef = getDBRef "persistId" :: DBRef PersistId
 
-genPersistId = liftIO $
-
-  atomically $ do
-    PersistId n <- readDBRef persistDBRef `onNothing` return (PersistId 0)
-    writeDBRef persistDBRef $ PersistId $ n + 1
-    return n
 
 
 
@@ -1785,7 +1713,7 @@ defConnection = do
         x
         False
         False
-        z 
+        z
 
 #ifndef ghcjs_HOST_OS
 
@@ -2450,13 +2378,13 @@ processMessage s1 closl s2 closr mlog deleteClosure = do
       let dbref = getDBRef $ kLocalClos s1 closl
       tr ("lookup", dbref)
       mcont <- liftIO $ atomically $ readDBRef dbref
-
+      tr  ("mcont", isJust mcont)
       -- when deleteClosure $ liftIO $ atomically $ flushDBRef dbref
       case mcont of
         Nothing -> do
           cdata <- liftIO $ readIORef $ connData conn
           case cdata of
-            Just(HTTP2Node _ _ _ _) -> runTrans $ msend conn $ "\r\n" <> chunked   "404: not found"  <> endChunk
+            Just(HTTP2Node {}) -> runTrans $ msend conn $ "\r\n" <> chunked   "404: not found"  <> endChunk
             Just (HTTPS2Node _)     -> runTrans $ msend conn $ "\r\n" <> chunked   "404: not found"  <> endChunk
             _ -> do
               node <- liftIO $ readIORef (remoteNode conn) `onNothing` error "mconnect: no remote node?"
@@ -2467,6 +2395,7 @@ processMessage s1 closl s2 closr mlog deleteClosure = do
               throw err
           return Nothing
         Just LocalClosure {localCont = Nothing} -> do
+          tr "localcont nothihg"
           tr "RESTORECLOSuRE"
           restoreClosure s1 $ BC.unpack closl
           tr "AFTER RESTORECLOS"
@@ -2474,9 +2403,11 @@ processMessage s1 closl s2 closr mlog deleteClosure = do
 
         -- execute the closure
         Just LocalClosure {localClos = closLocal, localMvar = mv, localEvar = Just ev, localCont = Just cont} -> do
-          when (synchronous conn) $ liftIO $ tryPutMVar mv () >> return () -- for syncronous streaming
+          ttr "localcont found"
+          when (synchronous conn) $ liftIO $ void (tryPutMVar mv ()) -- for syncronous streaming
           case mlog of
             Right log -> do
+              ttr "before writeevar"
               runTrans $
                 if deleteClosure
                   then lastWriteEVar ev $ Right (SLast log, s2, closr, conn)
@@ -2489,77 +2420,22 @@ processMessage s1 closl s2 closr mlog deleteClosure = do
 
           return Nothing
 
-setCont mclos idSession = do
-
-  closLocal <- case mclos of Just cls -> return cls; _ -> BC.pack <$> show <$> hashClosure <$> getLog
-
-
-  -- let dblocalclos = getDBRef $ kLocalClos idSession closLocal :: DBRef LocalClosure
-
-  log <- getLog
-
-  lc <- setCont' (partLog log) closLocal idSession
-  return (lc, log)
-
-setCont' logstr closName idSession=  do
-  tr ("SETCONT", closName, idSession,logstr)
-
-  PrevClos prevSess prevclos _ <- getState <|> error ("setCont: PrevClos not set")
-
-  let dbprevclos=   getDBRef $ kLocalClos prevSess prevclos  :: DBRef LocalClosure
-      dblocalclos = getDBRef $ kLocalClos idSession closName :: DBRef LocalClosure
-
-  tr "RESET LOG"
-  modifyState' (\log -> log{partLog= mempty}) (error "setCont: no log")
-
-  ev <- newEVar
-  tr ("SETSTATE PREVCLOS",idSession, closName)
-  setState $ PrevClos  idSession closName True
-
-  cont <- get
 
 
 
 
-  mr <- liftIO $ atomically $ readDBRef dblocalclos
-  closure <- case mr of
-    Just (locClos@LocalClosure {..}) -> do
-      tr "found dblocalclos"
-      return locClos {localEvar = Just ev, localCont = Just cont,localLog= logstr} -- localCont=Just cont} -- (localClos,localMVar,ev,cont)
-    _ -> do
-      mv <- liftIO $ newEmptyMVar
-
-
-      return $
-            LocalClosure
-              { localSession = idSession,
-                prevClos = dbprevclos,
-                localLog =  logstr,
-                localClos = closName,
-                localEvar = Just ev,
-                localMvar = mv,
-                localCont = Just cont
-              }
 
 
 
 
-  liftIO $ atomically $ writeDBRef dblocalclos closure
 
 
-  return closure
 
-setLog :: (Typeable b, Ord b, Show b) => b -> Builder -> Int -> B.ByteString -> TransIO ()
-setLog idConn log sessionId closr = do
-  tr ("setting closure for",idConn,"Closure",sessionId, closr )
-  setIndexData idConn (Closure sessionId closr [])
-  setParseString $ toLazyByteString log
-  tr ("setLog setCont", idConn, sessionId, closr ,log)
 
-  modifyData' (\l -> l {recover = True}) emptyLog
-  setState $ ClosToRespond sessionId closr
-  setCont' log closr sessionId
-  return ()
+
+
+
+
 
 #ifdef ghcjs_HOST_OS
 listen node = onAll $ do
@@ -3171,6 +3047,7 @@ loopClosures= do
 
 -}
 
+
 -- | Restore the continuation recursively from the most recent alive closure.
 --  Retrieves the log and continuation from a closure identified by the connection ID (`idConn`) and the closure ID (`clos`).
 -- If the closure with the given ID is not found in the database, an error is raised.
@@ -3205,13 +3082,13 @@ getClosureLog idSession clos = do
 -- If the closure with the given ID is not found, an error is raised.
 getClosureLogFrom :: DBRef LocalClosure -> Int -> B.ByteString -> StateIO Builder
 getClosureLogFrom prev session2 clos2=do
-  closReg <- liftIO $ atomically $ readDBRef prev `onNothing` error ("closure not found in DB:" <> show (session2,clos2))
-  tr ("getClosureLogFrom", prev,localClos closReg,session2, clos2)
+  prevReg <- liftIO $ atomically $ readDBRef prev `onNothing` error ("closure not found in DB:" <> keyObjDBRef prev)
+  tr ("getClosureLogFrom", prev,session2, clos2)
 
-  case BC.readInt (localClos closReg) <= BC.readInt clos2  of -- clos2 is the closure of the remote node. it could not be in the local sequence of closures
+  case BC.readInt (localClos prevReg) <= BC.readInt clos2  of -- clos2 is the closure of the remote node. it could not be in the local sequence of closures
     False -> do
-      prevLog <- getClosureLogFrom (prevClos closReg) session2 clos2
-      let locallogclos = localLog closReg
+      prevLog <- getClosureLogFrom (prevClos prevReg) session2 clos2
+      let locallogclos = localLog prevReg
       tr ("PREVLOG",  prevLog)
       tr ("LOCALLOG",  locallogclos)
       tr ("SUM",  prevLog <> locallogclos)
