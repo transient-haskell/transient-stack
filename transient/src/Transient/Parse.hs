@@ -230,13 +230,15 @@ sepBy1 = chainSepBy1 (:)
 chainSepBy chain p sep= chainSepBy1 chain p sep <|> return mempty
 
 -- take a byteString of elements separated by a separator and  apply the desired operator to the parsed results
-chainSepBy1
-  :: (MonadIO m, TransMonad m,Alternative m, Monoid b) =>
-     (a -> b -> b) -> m a -> m x -> m b
-chainSepBy1 chain p sep= do{ x <- p
-                        ; xs <- chainMany chain (sep >> p)
-                        ; return (x `chain` xs)
-                        }
+-- chainSepBy1
+--   :: (MonadIO m, TransMonad m,Alternative m, Monoid b) =>
+--      (a -> b -> b) -> m a -> m x -> m b
+chainSepBy1 :: Monoid b => (a1 -> b -> b) -> TransIO a1 -> TransIO a2 -> TransIO b
+chainSepBy1 chain p sep= do
+                        x <- p
+                        xs <- chainMany chain (try $ sep >> p)
+                        return (x `chain` xs)
+                        
                         -- !> "chainSepBy "
 
 chainMany chain v=   {- (do tr "chainMany"; isDone >>= guard; return mempty) <|> -} (chain <$> v <*> chainMany chain v) <|> return mempty
