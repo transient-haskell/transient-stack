@@ -16,6 +16,7 @@ import Data.TCache.DefaultPersistence as TC
 import Transient.Internals
 import Transient.Indeterminism
 import Transient.Move.Defs
+import Transient.Move.Logged
 import Transient.Move.Internals
 import  qualified Transient.Move.Services  as Services
 import Transient.Loggable
