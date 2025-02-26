@@ -632,26 +632,29 @@ teleport =  do -- local $ do
                   tr "return 0 0"
                   return (0,BC.pack "0")
 
-            let prevclosDBRef= getDBRef $ kLocalClos idSession prevclos
+            let prevclosDBRef  = getDBRef $ kLocalClos idSession prevclos
+                remoteClosDBRef= getDBRef $ kLocalClos sessRemote closRemote
             -- calcula el log entre la ultima closure almacenada localmente (prevclos) y el punto que el nodo ya ha recibido (closremote) 
-            prevlog <- noTrans $ getClosureLogFrom prevclosDBRef sessRemote  closRemote
+            prevlog <- noTrans $ getClosureLogFrom prevclosDBRef remoteClosDBRef
             tr ("PARTLOG", partLog log)
             let tosend =  prevlog <> partLog log
 
-            let closLocal = BC.pack $ show $ hashClosure log
+            -- let closLocal = BC.pack $ show $ hashClosure log
 
             do
-              msend conn $ toLazyByteString $ serialize $ SMore $ ClosureData closRemote sessRemote closLocal idSession tosend
+              clos <- BC.pack . show <$> liftIO (randomRIO(0,100000) :: IO Int)
+              lc <- setCont'  (partLog log) clos idSession
+              msend conn $ toLazyByteString $ serialize $ SMore $ ClosureData closRemote sessRemote clos idSession tosend
               tr ("RECEIVER NODE", unsafePerformIO $ readIORef $ remoteNode conn, idConn )
-
-              receive conn Nothing idSession
+              receive1 lc
+              -- receive conn Nothing idSession
               tr "AFTER RECEIVE"
   return ()
 
 
-receive conn clos idSession = do
+receiveIt conn mclos idSession = do
   tr ("RECEIVE FROM",unsafePerformIO $ readIORef $ remoteNode conn)
-  (lc, log) <- setCont clos idSession
+  (lc, log) <- setCont mclos idSession
   receive1 lc
 
 
@@ -3049,9 +3052,9 @@ loopClosures= do
 
 
 -- | Restore the continuation recursively from the most recent alive closure.
---  Retrieves the log and continuation from a closure identified by the connection ID (`idConn`) and the closure ID (`clos`).
+--  Retrieves the log and continuation from a closure identified by the Session ID (`idSession`) and the closure ID (`clos`).
 -- If the closure with the given ID is not found in the database, an error is raised.
--- getClosureLog :: Int -> String -> StateIO (Builder, EventF)
+-- getClosureLog :: Int -> BS.ByteString -> StateIO (Builder, EventF)
 getClosureLog idSession "0" = do
   tr ("getClosureLog", idSession, 0)
 
@@ -3077,17 +3080,16 @@ getClosureLog idSession clos = do
 
 
 
--- | Retrieves the log from a closure (identified by his dbref) to the closure identified 
--- by the given session ID and closure ID.
+-- | Retrieves the log from a closure (identified by prevclos) to send to the closure of a remote node (identified by remclos). the prevclos is the segment already saved in LocalClousure register in order to reconstruct the stack in the remote node necessary for continuing the execution. To this sequence is necessary to sum the current fragment that has not yet already commited
 -- If the closure with the given ID is not found, an error is raised.
-getClosureLogFrom :: DBRef LocalClosure -> Int -> B.ByteString -> StateIO Builder
-getClosureLogFrom prev session2 clos2=do
-  prevReg <- liftIO $ atomically $ readDBRef prev `onNothing` error ("closure not found in DB:" <> keyObjDBRef prev)
-  tr ("getClosureLogFrom", prev,session2, clos2)
+getClosureLogFrom :: DBRef LocalClosure -> DBRef LocalClosure -> StateIO Builder
+getClosureLogFrom prevclos remclos=do
+  prevReg <- liftIO $ atomically $ readDBRef prevclos `onNothing` error ("closure not found in DB:" <> keyObjDBRef prevclos)
+  tr ("getClosureLogFrom", prevclos, remclos)
 
-  case BC.readInt (localClos prevReg) <= BC.readInt clos2  of -- clos2 is the closure of the remote node. it could not be in the local sequence of closures
+  case prevclos == remclos of 
     False -> do
-      prevLog <- getClosureLogFrom (prevClos prevReg) session2 clos2
+      prevLog <- getClosureLogFrom (prevClos prevReg) remclos
       let locallogclos = localLog prevReg
       tr ("PREVLOG",  prevLog)
       tr ("LOCALLOG",  locallogclos)
