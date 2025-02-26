@@ -57,7 +57,8 @@ import Data.ByteString.Builder
 import Data.TCache (getDBRef)
 
 import Control.Concurrent.MVar
-import Control.Applicative 
+import Control.Applicative
+import System.Random
 
 
 u= unsafePerformIO
@@ -78,7 +79,7 @@ data IsApplicative2= IsApplicative2  deriving Typeable
 
 -- | Log the result of the applicative computation.
 --
--- In the cloud monadAll applicatives and binary operators involving distributed operations like number invocations of remote nodes  (defined through the applicative operator `<*>`) including monoids `<>`, should be prefixed by 'logApp' to log the result.
+-- In the cloud monad, all applicatives and binary operators involving distributed operations like number invocations of remote nodes  (defined through the applicative operator `<*>`) including monoids `<>`, should be prefixed by 'logApp' to log the result.
 -- This ensures that further computations use the result of the operation and bypass the applicative in recovery mode when they invoke 
 -- closures beyond the binary combinations, further in the monad. The reason behind this is that,
 -- after the finalization of the applicative, no closures inside the applicative should be invoked in the remote node.
@@ -96,29 +97,36 @@ data IsApplicative2= IsApplicative2  deriving Typeable
 -- where a, b and c involve at least one distributed computations.
 
 logApp :: Loggable a => Cloud a -> Cloud a
-logApp  (Cloud app) = logged $ do 
-    
+logApp  (Cloud app) =  do
+
     tr "IN APPLICATIVE"
-    PrevClos s _ _ <- getData `onNothing` error "teleport: please use `initNode to perform distrubuted computing" 
+    PrevClos s _ _ <- getData `onNothing` error "teleport: please use `initNode to perform distrubuted computing"
     log <- getLog
     let clos= BSS.pack $ show $ hashClosure log
+    -- clos <- Cloud (BSS.pack . show <$> liftIO (randomRIO (0,100000) :: IO Int)) -- Gracias Señor mi Dios
+    
     -- setCont must be before the invocation of the applicative so that in subsequent invocations to that node, the entire applicative can be saved on the calling node, which is the one performing the entire applicative
     -- cuando vuelve el resultado al nodo llamante
-    lc <- setCont' (partLog log)  clos s 
-    receive1 lc <|> return ()
+    -- las siguientes invocaciones a los nodos remotos pasado el aplicativo deben ser dirignas a esa closure
+    -- por tanto no necesita el receive en el nodo llamante, si en el llamdo. Nunca va a recibr en esa closure
+    lc <- Cloud $ setCont' (partLog log)  clos s
+    when (recover log) $ Cloud $ receive1 lc <|> return ()    -- no necesita en llamante, si en llamado
+    -- Alabado sea Dios que me inspira todo lo bueno que hago
+
     -- cada wormhole del aplicativo  tiene que notificar su conexion aqui
-    ref <- newRState (ApplicativeConns[]) 
-    r <-  unCloud $ logged $ app  <*** do setState $ PrevClos s clos True 
+    logged $ do
+      ref <- newRState (ApplicativeConns [])
+      r <-  unCloud $ logged $ app  <*** do setState $ PrevClos s clos True
 
-    ApplicativeConns connections <- liftIO $ readIORef ref
-    tr ("Connections", connections)
-    mapM_ (\con -> setLastClosureForConnection con (Closure s clos [])) connections
-    
-    delRState (ApplicativeConns [])   
+      ApplicativeConns connections <- liftIO $ readIORef ref
+      tr ("Connections", connections)
+      mapM_ (\con -> setLastClosureForConnection con (Closure s clos [])) connections
 
-    setData $ IsApplicative2         -- se notifica a logged que introduzca el resultado del aplicativo en el log
-    tr "END APPLICATIVE"
-    return r
+      delRState (ApplicativeConns [])
+
+      setData $ IsApplicative2         -- se notifica a logged que introduzca el resultado del aplicativo en el log
+      tr "END APPLICATIVE"
+      return r
 
 
 
@@ -182,7 +190,10 @@ setLog idConn log sessionId closr = do
 setCont :: Maybe B.ByteString -> Int -> TransIO (LocalClosure, Log)
 setCont mclos idSession = do
   log <- getLog
-  let closLocal = case mclos of Just cls -> cls; _ -> BSS.pack $ show $ hashClosure log
+  closLocal <- case mclos of
+                    Just cls -> return cls
+                    _ -> BSS.pack . show <$> liftIO (randomRIO (0,100000) :: IO Int) -- hashClosure log
+
 
 
   -- let dblocalclos = getDBRef $ kLocalClos idSession closLocal :: DBRef LocalClosure
@@ -194,14 +205,13 @@ setCont mclos idSession = do
 
 setCont' :: Builder -> B.ByteString -> Int -> TransIO LocalClosure
 setCont' logstr closName idSession=  do
-  tr ("SETCONT", closName, idSession,logstr)
 
   PrevClos prevSess prevclos _ <- getState <|> error "setCont: PrevClos not set, use initNode"
 
   let dbprevclos=   getDBRef $ kLocalClos prevSess prevclos  :: DBRef LocalClosure
       dblocalclos = getDBRef $ kLocalClos idSession closName :: DBRef LocalClosure
 
-  tr "RESET LOG"
+  -- tr "RESET LOG"
   modifyState' (\log -> log{partLog= mempty}) (error "setCont: no log")
 
   ev <- newEVar
@@ -234,6 +244,7 @@ setCont' logstr closName idSession=  do
               }
 
 
+  tr ("SETCONT", closName, idSession,"PREVCLOS",dbprevclos,logstr)
 
 
   liftIO $ atomically $ writeDBRef dblocalclos closure
@@ -248,7 +259,8 @@ firstCont = do
   log <- getLog
   let rthis = getDBRef "0-0" -- TC.key this
   tr ("assign", log)
-  when (not $ recover log) $ do
+  -- when (not $ recover log) $ do
+  do
     ev <- newEVar
     mv <- liftIO $ newMVar ()
 
@@ -268,13 +280,18 @@ firstCont = do
 
     -- liftIO $ print url
     liftIO $ atomically $ writeDBRef rthis this
-  setState $ PrevClos 0 "0" False
+    setState $ PrevClos 0 "0" False
+    return this
 
 
 
-hashExec= 10000000
-hashWait= 100000
-hashDone= 1000
+-- hashExec= 10000000
+-- hashWait= 100000
+-- hashDone= 1000
+
+hashDone= 10000000
+hashExec= 100000
+hashWait= 1000
 
 
 -- | Run the computation, write its result in a log in the state
@@ -292,7 +309,7 @@ logged mx =  Cloud $ do
     r <- res <** outdent
 
     tr ("finish logged stmt of type",typeOf res, "with value", r)
-    
+
 
     return r
     where
@@ -307,31 +324,31 @@ logged mx =  Cloud $ do
           let segment= partLog initialLog
 
 
-          rest <- getParseBuffer 
+          rest <- getParseBuffer
 
-          when (recover initialLog && BS.null rest) $ ttr ("AQUI DEBERIA IR SETCONT",hashClosure initialLog)
 
           setData initialLog{partLog=  segment <> exec, hashClosure= hashClosure initialLog + hashExec}
-          
+
           r <-(if not $ BS.null rest
                 then recoverIt
                 else do
                   tr "resetting PrevClos"
-                  modifyState'(\(PrevClos a b _) -> PrevClos a b False) (error "logged: no prevclos") -- (PrevClos 0 "0" False) -- 11
+                  modifyState' (\(PrevClos a b _) -> PrevClos a b False) (error "logged: no prevclos") -- (PrevClos 0 "0" False) -- 11
 
                   mx)  <|> addWait segment
 
           rest <- giveParseString
 
           let add= serialize r <> "/" -- lazyByteString (BS.pack "/")
-              recov= not $ BS.null rest  
-              parlog= segment <> add 
+              recov= not $ BS.null rest
+              parlog= segment <> add
 
           PrevClos s c hadTeleport <- getData `onNothing` (error $ "logged: no prevclos") -- return (PrevClos 0 "0" False)
           tr ("HADTELEPORT", hadTeleport)
           mapplic <- getData
           let hash= hashClosure initialLog{-Alabado sea Dios-} + hashDone -- hashClosure finalLog
-          when (recover initialLog && not recov) $ ttr ("AQUI DEBERIA IR SETCONT2",hash)
+          -- ttr ("HASHCLOSURE",hash)
+          -- when (recover initialLog && not recov) $ ttr ("AQUI DEBERIA IR SETCONT2",hash)
 
           if isJust (mapplic :: Maybe IsApplicative2)
             then do
@@ -342,10 +359,10 @@ logged mx =  Cloud $ do
 
 
               modifyState'  (\finalLog ->  -- problemsol 10
-                        if  hadTeleport && not recov
+                        if  hadTeleport -- Gracias mi Dios y señor -- && not recov
                           then finalLog{recover=recov, partLog= mempty, hashClosure= hash }
-                          else finalLog{recover=recov, partLog= parlog, hashClosure= hash } 
-                        ) 
+                          else finalLog{recover=recov, partLog= parlog, hashClosure= hash }
+                        )
                         emptyLog
 
 
@@ -365,14 +382,14 @@ logged mx =  Cloud $ do
       empty
 
 
-    
+
 
     recoverIt = do
 
         s <- giveParseString
 
-        -- tr ("recoverIt recover", s)
-        let (h,t)=  BS.splitAt 2 s 
+        tr ("recoverIt recover", s)
+        let (h,t)=  BS.splitAt 2 s
         case  (BS.unpack h,t) of
           ("e/",r) -> do
             -- tr "EXEC"
@@ -382,13 +399,13 @@ logged mx =  Cloud $ do
           ("w/",r) -> do
             tr "WAIT"
             setParseString r
-            modify $ \s -> s{execMode= if execMode s /= Remote then Parallel else Remote}  
+            modify $ \s -> s{execMode= if execMode s /= Remote then Parallel else Remote}
                           -- in recovery, execmode can not be parallel(NO; see below)
-            empty                                
+            empty
 
-          _ -> value
+          _ -> value s
 
-    value = r
+    value s = r
       where
       typeOfr :: TransIO a -> a
       typeOfr _= undefined
@@ -396,16 +413,19 @@ logged mx =  Cloud $ do
       r= (do
         -- tr "VALUE"
         -- set serial for deserialization, restore execution mode
-        x <- do mod <-gets execMode;modify $ \s -> s{execMode=Serial}; r <- deserialize; modify $ \s -> s{execMode= mod};return r  -- <|> errparse 
+        x <- do mod <- gets execMode;modify $ \s -> s{execMode=Serial}; r <- deserialize; modify $ \s -> s{execMode= mod};return r
         tr ("value parsed",x)
         psr <- giveParseString
-        when (not $ BS.null psr) $ (tChar '/' >> return ()) --  <|> errparse
+        tr ("parsestring after deserialize",psr)
+
+        when (not $ BS.null psr) $ void (tChar '/')
+
         return x) <|> errparse
 
       errparse :: TransIO a
-      errparse = do 
-        psr <- getParseBuffer;
-        error  ("error parsing <" <> BS.unpack psr <> ">  to " <> show (typeOf $ typeOfr r) <> "\n")
+      errparse = do
+        -- psr <- getParseBuffer;
+        error  ("error parsing <" <> BS.unpack s <> ">  to " <> show (typeOf $ typeOfr r) <> "\n")
 
 
 
@@ -422,11 +442,11 @@ param :: (Loggable a, Typeable a) => TransIO a
 param = r where
   r=  do
        let t = typeOf $ type1 r
-       (Transient.Internals.try $ tChar '/'  >> return ())<|> return () --maybe there is a '/' to drop
+       Transient.Internals.try (void (tChar '/'))<|> return () --maybe there is a '/' to drop
        --(Transient.Internals.try $ tTakeWhile (/= '/') >>= liftIO . print >> empty) <|> return ()
-       if      t == typeOf (undefined :: String)     then return . unsafeCoerce . BS.unpack =<< tTakeWhile' (/= '/')
-       else if t == typeOf (undefined :: BS.ByteString) then return . unsafeCoerce =<< tTakeWhile' (/= '/')
-       else if t == typeOf (undefined :: BSS.ByteString)  then return . unsafeCoerce . BS.toStrict =<< tTakeWhile' (/= '/')
+       if      t == typeRep (Proxy :: Proxy String)     then unsafeCoerce . BS.unpack <$> tTakeWhile' (/= '/')
+       else if t == typeRep (Proxy :: Proxy BS.ByteString) then unsafeCoerce <$> tTakeWhile' (/= '/')
+       else if t == typeRep (Proxy :: Proxy BSS.ByteString)  then unsafeCoerce . BS.toStrict <$> tTakeWhile' (/= '/')
        else deserialize  -- <* tChar '/'
 
 
