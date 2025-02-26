@@ -1,4 +1,7 @@
  {-#Language OverloadedStrings, ScopedTypeVariables #-}
+{-# LANGUAGE InstanceSigs #-}
+{-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
+{-# HLINT ignore "Use typeRep" #-}
 
 module Transient.Loggable where
 
@@ -107,12 +110,19 @@ instance Loggable Integer
 
 instance   (Typeable a, Loggable a) => Loggable [a]  where
     serialize []= byteString "[]"
-    serialize (s@(x:xs))
+    serialize s@(x:xs)
               | typeOf x== typeOf (undefined :: Char) = serialize $ BS.pack (unsafeCoerce s)
-              | otherwise = byteString "[" <> serialize x <> serialize' xs
+              | otherwise = byteString "[" <> serializeNoString x <> serialize' xs
           where
           serialize' []= byteString "]"
-          serialize' (x:xs)= byteString "," <> serialize x <>  serialize' xs
+          serialize' (x:xs)= byteString "," <> serializeNoString x <>  serialize' xs
+
+          serializeNoString x
+            | typeOf x== typeOf (undefined :: String) =
+                        byteString "\""
+                        <> serialize (BS.pack (unsafeCoerce x))
+                        <> byteString "\""
+            | otherwise = serialize x
 
     deserialize= r
       where
@@ -122,11 +132,62 @@ instance   (Typeable a, Loggable a) => Loggable [a]  where
               then tChar '[' *> commaSep deserialize <* tChar ']'
               else
                 do
-                  try $ tChar '\"'
-                  withGetParseString $ \s -> case deserializePure s of
-                    Nothing -> empty
-                    Just x -> return x
-                 <|> unsafeCoerce <$> BS.unpack <$> deserialize
+                  sandbox' $ tChar '\"'
+                  s <- getParseBuffer
+                  withGetParseString $ \s -> maybe empty return (deserializePure s)
+                 <|> (unsafeCoerce . BS.unpack <$> deserialize)
+
+-- instance   (Typeable a, Loggable a) => Loggable [a]  where
+--     serialize :: (Typeable a, Loggable a) => [a] -> Builder
+--     serialize []= byteString "[]"
+--     serialize s@(x:xs)
+--               | typeOf x== typeRep (Proxy :: Proxy Char) = serialize $ BS.pack (unsafeCoerce s)
+--               | otherwise = serialize x <> serialize' xs
+--           where
+--           serialize' []= mempty
+--           serialize' (x:xs)= byteString "/" <> serialize x <>  serialize' xs
+-- -- >>> serialize ["hello","world"]
+-- -- "hello/world"
+
+--     deserialize :: (Typeable a, Loggable a) => TransIO [a]
+--     deserialize= r
+--       where
+--       ty :: TransIO [a] -> [a]
+--       ty = undefined
+--       r= if typeOf (ty r) /= typeRep (Proxy :: Proxy String)
+--               then try (tChar '[' >> sepBy deserialize (tChar ',') <* tChar ']')
+--                  <|> sepBy deserialize (tChar '/')
+--               else
+--                 do
+--                   try $ tChar '\"'
+--                   withGetParseString $ \s -> maybe empty return (deserializePure s)
+--                  <|> (unsafeCoerce . BS.unpack <$> deserialize)
+-- instance   (Typeable a, Loggable a) => Loggable [a]  where
+--     serialize :: (Typeable a, Loggable a) => [a] -> Builder
+--     serialize []= byteString "[]"
+--     serialize s@(x:xs)
+--               | typeOf x== typeRep (Proxy :: Proxy Char) = serialize $ BS.pack (unsafeCoerce s)
+--               | otherwise = serialize x <> serialize' xs
+--           where
+--           serialize' []= mempty
+--           serialize' (x:xs)= byteString "/" <> serialize x <>  serialize' xs
+-- -- >>> serialize ["hello","world"]
+-- -- "hello/world"
+
+--     deserialize :: (Typeable a, Loggable a) => TransIO [a]
+--     deserialize= r
+--       where
+--       ty :: TransIO [a] -> [a]
+--       ty = undefined
+--       r= if typeOf (ty r) /= typeRep (Proxy :: Proxy String)
+--               then try (tChar '[' >> sepBy deserialize (tChar ',') <* tChar ']')
+--                  <|> sepBy deserialize (tChar '/')
+--               else
+--                 do
+--                   try $ tChar '\"'
+--                   withGetParseString $ \s -> maybe empty return (deserializePure s)
+--                  <|> (unsafeCoerce . BS.unpack <$> deserialize)
+
 
 sspace= tChar '/' <|> (many (tChar ' ') >> return ' ')
 
