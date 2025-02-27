@@ -1313,6 +1313,9 @@ try mx = do
 -- will not sandbox mx if there is a backtrack in mx
 
 -- this version at least is protected against exception backtracking.
+-- 
+-- The differnce with `try` is that `sandbox` ever undo the state changes, even if the computation is successful.
+
 sandbox :: TransIO a -> TransIO a
 sandbox mx = do
   st <- get
@@ -1834,6 +1837,7 @@ react h iob= do
 
 collect' :: Int -> Int -> TransIO a -> TransIO [a]
 collect' number time proc' = hookedThreads $ do
+    tr "COLLECT"
     res <- liftIO $ newIORef []
     done <- liftIO $ newIORef False  --finalization already executed or not
     anyThreads abduce                -- all spawned threads will hang from this one
