@@ -501,10 +501,12 @@ exit x= do
   stop
 
 -- | exit the keep and keep' blocks with no result. keep will return Nothing and keep' will return []
+exitLeft :: Show a => a -> TransIO ()
 exitLeft cause= do
+  tr "exitLeft"
   Exit typeofIt rexit <- getState <|> error " no Exit state: use keep or keep'"
   -- when(typeOf x /= typeofIt) $ error $ " exit of type not expected. (expected, sent)= ("<> show typeofIt <> ", "<>  show (typeOf x)
-  liftIO $  putMVar  rexit $ unsafeCoerce $ Left cause
+  liftIO $  putMVar  rexit  $ unsafeCoerce $ Left $ show cause
 
 -- | Runs the transient computation in a child thread and keeps the main thread
 -- running until all the user threads exit or some thread `exit`.
