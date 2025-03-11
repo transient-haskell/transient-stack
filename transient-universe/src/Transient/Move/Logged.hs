@@ -24,7 +24,7 @@
 {-# LANGUAGE  CPP, ExistentialQuantification, FlexibleInstances, ScopedTypeVariables, UndecidableInstances #-}
 {-# LANGUAGE InstanceSigs #-}
 module Transient.Move.Logged(Cloud(..),
-Loggable(..), logged, logApp, received, param, getLog, exec,wait, emptyLog, Log(..),hashExec,genPersistId,persistDBRef,setCont,setCont',ApplicativeConns(..),receive1,firstCont) where
+Loggable(..), logged, checkpoint, received, param, getLog, exec,wait, emptyLog, Log(..),hashExec,genPersistId,persistDBRef,setCont,setCont',receive1,firstCont, dbClos0,setLastClosureForConnection) where
 
 import Data.Typeable
 import Data.Maybe
@@ -71,11 +71,11 @@ wait=  lazyByteString $ BS.pack "w/"
 
 -- | last closure/continuation executed for each remote connection in this branch of execution. Other branches could have other closures so the container should be pure. All further calls from this node to each node/connection should be directed to this corresponding closure.
 setLastClosureForConnection :: Int -> Closure -> TransIO (M.Map Int Closure)
-setLastClosureForConnection= setIndexData
+setLastClosureForConnection a b= do
+  ttr  ("setLastClosureForConnection",a, b)
+  setIndexData a b
 
 
-newtype ApplicativeConns= ApplicativeConns [Int]
-data IsApplicative2= IsApplicative2  deriving Typeable
 
 -- | Log the result of the applicative computation.
 --
@@ -96,38 +96,22 @@ data IsApplicative2= IsApplicative2  deriving Typeable
 --
 -- where a, b and c involve at least one distributed computations.
 
-logApp :: Loggable a => Cloud a -> Cloud a
-logApp  (Cloud app) =  do
 
-    tr "IN APPLICATIVE"
-    PrevClos s _ _ <- getData `onNothing` error "teleport: please use `initNode to perform distrubuted computing"
-    log <- getLog
-    let clos= BSS.pack $ show $ hashClosure log
-    -- clos <- Cloud (BSS.pack . show <$> liftIO (randomRIO (0,100000) :: IO Int)) -- Gracias Señor mi Dios
-    
-    -- setCont must be before the invocation of the applicative so that in subsequent invocations to that node, the entire applicative can be saved on the calling node, which is the one performing the entire applicative
-    -- cuando vuelve el resultado al nodo llamante
-    -- las siguientes invocaciones a los nodos remotos pasado el aplicativo deben ser dirignas a esa closure
-    -- por tanto no necesita el receive en el nodo llamante, si en el llamdo. Nunca va a recibr en esa closure
-    lc <- Cloud $ setCont' (partLog log)  clos s
-    when (recover log) $ Cloud $ receive1 lc <|> return ()    -- no necesita en llamante, si en llamado
-    -- Alabado sea Dios que me inspira todo lo bueno que hago
 
-    -- cada wormhole del aplicativo  tiene que notificar su conexion aqui
-    logged $ do
-      ref <- newRState (ApplicativeConns [])
-      r <-  unCloud $ logged $ app  <*** do setState $ PrevClos s clos True
+-- | stablish a checkpoint
+checkpoint mclosLocal= Cloud $ do
+  log <-  getLog
 
-      ApplicativeConns connections <- liftIO $ readIORef ref
-      tr ("Connections", connections)
-      mapM_ (\con -> setLastClosureForConnection con (Closure s clos [])) connections
-
-      delRState (ApplicativeConns [])
-
-      setData $ IsApplicative2         -- se notifica a logged que introduzca el resultado del aplicativo en el log
-      tr "END APPLICATIVE"
-      return r
-
+  PrevClos dbr <- getData `onNothing` error "teleport: please use `initNode to perform distrubuted computing"
+  idSession <- localSession <$> liftIO (atomically $ readDBRef dbr `onNothing` error "logApp: no prevClos")
+  -- closLocal <- BSS.pack . show <$> liftIO (randomRIO (0,100000) :: IO Int) -- hashClosure log
+  let closLocal= if isJust mclosLocal then fromJust mclosLocal else BSS.pack $ show $ hashClosure log
+  -- let closLocal= BSS.pack $ show $ hashClosure log
+  lc <- setCont' (partLog log) closLocal idSession
+  receive1 lc <|> return ()
+  return ()
+  -- Alabado sea Dios
+ 
 
 
 newtype PersistId = PersistId Integer deriving (Read, Show, Typeable)
@@ -177,14 +161,13 @@ receive1 lc = do
 
 setLog :: Int -> Builder -> Int -> B.ByteString -> TransIO ()
 setLog idConn log sessionId closr = do
-  tr ("setting closure for",idConn,"Closure",sessionId, closr )
-  void $ setLastClosureForConnection idConn (Closure sessionId closr [])
+  tr ("setLog for",idConn,"Closure",sessionId, closr )
+  -- void $ setLastClosureForConnection idConn (getDBRef $ kLocalClos sessionId closr) --  (Closure sessionId closr [])
   setParseString $ toLazyByteString log
-  tr ("setLog setCont", idConn, sessionId, closr ,log)
 
   modifyData' (\l -> l {recover = True}) emptyLog
-  setState $ ClosToRespond sessionId closr
-  setCont' log closr sessionId
+  setState $ ClosToRespond $ getDBRef $ kLocalClos sessionId closr
+  -- setCont' log closr sessionId
   return ()
 
 setCont :: Maybe B.ByteString -> Int -> TransIO (LocalClosure, Log)
@@ -206,17 +189,15 @@ setCont mclos idSession = do
 setCont' :: Builder -> B.ByteString -> Int -> TransIO LocalClosure
 setCont' logstr closName idSession=  do
 
-  PrevClos prevSess prevclos _ <- getState <|> error "setCont: PrevClos not set, use initNode"
+  PrevClos dbprevclos <- getState <|> error "setCont: PrevClos not set, use initNode"
 
-  let dbprevclos=   getDBRef $ kLocalClos prevSess prevclos  :: DBRef LocalClosure
-      dblocalclos = getDBRef $ kLocalClos idSession closName :: DBRef LocalClosure
+  let dblocalclos = getDBRef $ kLocalClos idSession closName :: DBRef LocalClosure
 
   -- tr "RESET LOG"
   modifyState' (\log -> log{partLog= mempty}) (error "setCont: no log")
 
   ev <- newEVar
   tr ("SETSTATE PREVCLOS",idSession, closName)
-  setState $ PrevClos  idSession closName True
 
   cont <- get
 
@@ -227,7 +208,9 @@ setCont' logstr closName idSession=  do
   closure <- case mr of
     Just (locClos@LocalClosure {..}) -> do
       tr "found dblocalclos"
-      return locClos {localEvar = Just ev, localCont = Just cont,localLog= logstr} -- localCont=Just cont} -- (localClos,localMVar,ev,cont)
+      if toLazyByteString logstr== mempty -- two consecutive checkpoints
+        then return locClos 
+        else return locClos {localEvar = Just ev, localCont = Just cont,localLog= logstr} 
     _ -> do
       mv <- liftIO $ newEmptyMVar
 
@@ -246,6 +229,7 @@ setCont' logstr closName idSession=  do
 
   tr ("SETCONT", closName, idSession,"PREVCLOS",dbprevclos,logstr)
 
+  setState $ PrevClos  dblocalclos
 
   liftIO $ atomically $ writeDBRef dblocalclos closure
 
@@ -253,36 +237,30 @@ setCont' logstr closName idSession=  do
   return closure
 
 
+dbClos0= getDBRef $ kLocalClos 0 "0"
+
 
 firstCont = do
   cont <- get
   log <- getLog
-  let rthis = getDBRef "0-0" -- TC.key this
-  tr ("assign", log)
-  -- when (not $ recover log) $ do
-  do
-    ev <- newEVar
-    mv <- liftIO $ newMVar ()
 
-    let this =
-          LocalClosure
-            { localSession = 0,
-              prevClos = rthis,
-              localLog = partLog log,
-              localClos = BSS.pack "0", -- hashClosure log,
-              localEvar = Just ev,
-              localMvar = mv,
-              localCont = Just cont
-            }
+  ev <- newEVar
+  mv <- liftIO $ newMVar ()
 
-    -- n <- getMyNode
-    -- let url= str "http://" <> str (nodeHost n) <> str "/" <> intt (nodePort n) <>"/0/0/0/0/"
+  let this =
+        LocalClosure
+          { localSession = 0,
+            prevClos = dbClos0,
+            localLog = partLog log,
+            localClos = BSS.pack "0", -- hashClosure log,
+            localEvar = Just ev,
+            localMvar = mv,
+            localCont = Just cont
+          }
 
-    -- liftIO $ print url
-    liftIO $ atomically $ writeDBRef rthis this
-    setState $ PrevClos 0 "0" False
-    return this
-
+  liftIO $ atomically $ writeDBRef dbClos0 this
+  setState $ PrevClos dbClos0
+  return this
 
 
 -- hashExec= 10000000
@@ -332,8 +310,8 @@ logged mx =  Cloud $ do
           r <-(if not $ BS.null rest
                 then recoverIt
                 else do
-                  tr "resetting PrevClos"
-                  modifyState' (\(PrevClos a b _) -> PrevClos a b False) (error "logged: no prevclos") -- (PrevClos 0 "0" False) -- 11
+                  -- tr "resetting PrevClos"
+                  -- modifyState' (\(PrevClos a b _) -> PrevClos a b False) (error "logged: no prevclos") -- (PrevClos 0 "0" False) -- 11
 
                   mx)  <|> addWait segment
 
@@ -343,25 +321,26 @@ logged mx =  Cloud $ do
               recov= not $ BS.null rest
               parlog= segment <> add
 
-          PrevClos s c hadTeleport <- getData `onNothing` (error $ "logged: no prevclos") -- return (PrevClos 0 "0" False)
-          tr ("HADTELEPORT", hadTeleport)
-          mapplic <- getData
+          -- PrevClos s c hadTeleport <- getData `onNothing` (error $ "logged: no prevclos") -- return (PrevClos 0 "0" False)
+          -- tr ("HADTELEPORT", hadTeleport)
+          -- mapplic <- getData
           let hash= hashClosure initialLog{-Alabado sea Dios-} + hashDone -- hashClosure finalLog
           -- ttr ("HASHCLOSURE",hash)
           -- when (recover initialLog && not recov) $ ttr ("AQUI DEBERIA IR SETCONT2",hash)
 
-          if isJust (mapplic :: Maybe IsApplicative2)
-            then do
-              delData IsApplicative2
-              tr "LOGGED: ISAPPLICATIVE"
-              modifyState' (\finalLog -> finalLog{recover=recov, partLog= add, hashClosure= hash }) emptyLog
-            else
+          -- if isJust (mapplic :: Maybe IsApplicative2)
+          --   then do
+          --     delData IsApplicative2
+          --     tr "LOGGED: ISAPPLICATIVE"
+          --     modifyState' (\finalLog -> finalLog{recover=recov, partLog= add, hashClosure= hash }) emptyLog
+          --   else
 
-
+          do
               modifyState'  (\finalLog ->  -- problemsol 10
-                        if  hadTeleport -- Gracias mi Dios y señor -- && not recov
-                          then finalLog{recover=recov, partLog= mempty, hashClosure= hash }
-                          else finalLog{recover=recov, partLog= parlog, hashClosure= hash }
+                        -- if  hadTeleport -- Gracias mi Dios y señor -- && not recov
+                        --   then finalLog{recover=recov, partLog= mempty, hashClosure= hash }
+                          -- else 
+                            finalLog{recover=recov, partLog= parlog, hashClosure= hash }
                         )
                         emptyLog
 
@@ -388,7 +367,6 @@ logged mx =  Cloud $ do
 
         s <- giveParseString
 
-        tr ("recoverIt recover", s)
         let (h,t)=  BS.splitAt 2 s
         case  (BS.unpack h,t) of
           ("e/",r) -> do

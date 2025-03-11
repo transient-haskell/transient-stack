@@ -18,7 +18,7 @@ import GHC.Generics
 
 import qualified Network.Socket                         as NS
 import qualified Network.WebSockets.Connection          as WS
-import qualified Network.WebSockets                     as NWS 
+import qualified Network.WebSockets                     as NWS
 
 
 
@@ -57,11 +57,19 @@ newtype Cloud a = Cloud {unCloud :: TransIO a}
       MonadState EventF
     )
 
+-- instance Applicative Cloud where
+--   pure x = Cloud $ return x
+--   Cloud f <*> Cloud g = local $ f <*> g
+
+-- lift a TransIO computation with a parameter to the Cloud monad
+liftCloud :: (TransIO a -> TransIO b) -> Cloud a -> Cloud b
+liftCloud f x = Cloud $ f (unCloud x)
+
 -- | previous local checkpointed closure in the execution flow
-data PrevClos = PrevClos {idSession :: SessionId, idClosure :: IdClosure, hasTeleport :: Bool}
+newtype PrevClos = PrevClos  (DBRef  LocalClosure) -- {idSession :: SessionId, idClosure :: IdClosure, hasTeleport :: Bool}
 
 -- | last remote closure in a teleport waiting for responses in the execution flow
-data ClosToRespond= ClosToRespond{remSession :: SessionId, remClosure :: IdClosure}
+data ClosToRespond= ClosToRespond (DBRef LocalClosure) -- {remSession :: SessionId, remClosure :: IdClosure}
 
 type IdClosure = BC.ByteString
 type SessionId = Int
@@ -97,7 +105,7 @@ instance ToJSON (MVar a) where
   toJSON mv= Null
 
 instance FromJSON (MVar a) where
-  parseJSON _= return(unsafePerformIO  newEmptyMVar)
+  parseJSON _= return (unsafePerformIO  newEmptyMVar)
 
 
 
@@ -187,6 +195,10 @@ data LocalClosure = LocalClosure
 
 kLocalClos idSess clos = BC.unpack clos <> "-" <> show idSess
 
+getSessClosure :: DBRef LocalClosure -> (Int, IdClosure)
+getSessClosure dbref= let (c,s)= span (/= '-') $ keyObjDBRef dbref
+                      in  (read $ tail s, BC.pack  c)
+
 instance TC.Indexable LocalClosure where
   key LocalClosure {..} = kLocalClos localSession localClos
 
@@ -208,11 +220,11 @@ type SValue = String
 newtype Service =Service (M.Map SKey SValue) deriving (Show,Read,Generic,Eq,Semigroup,Monoid,ToJSON,FromJSON)
 
 instance  Loggable Service where
-  serialize (Service s)= serialize s 
+  serialize (Service s)= serialize s
   deserialize = Service <$> deserialize
 
 instance Default Service where
-  def=  Service $ M.fromList[("service","$serviceName")
+  def=  Service $ M.fromList [("service","$serviceName")
         ,("executable", "$execName")
         ,("package","$gitRepo")]
 
@@ -233,8 +245,8 @@ instance Loggable NodeMSG where
       <> build
 
   deserialize =
-    ClosureData <$> (BL.toStrict <$> (tTakeWhile (/= '/')) <* tChar '/') <*> (int <* tChar '/')
-      <*> (BL.toStrict <$> (tTakeWhile (/= '/')) <* tChar '/')
+    ClosureData <$> (BL.toStrict <$> tTakeWhile (/= '/') <* tChar '/') <*> (int <* tChar '/')
+      <*> (BL.toStrict <$> tTakeWhile (/= '/') <* tChar '/')
       <*> (int <* tChar '/')
       <*> restOfIt
     where
@@ -242,9 +254,9 @@ instance Loggable NodeMSG where
 
 
 -- The remote closure ids for each node connection
-data Closure = Closure SessionId IdClosure [Int] deriving (Read, Show, Typeable)
+type Closure = DBRef LocalClosure -- Closure SessionId IdClosure [Int] deriving (Read, Show, Typeable)
 
-{-# SPECIALIZE getIndexData :: Int  -> StateIO (Maybe Closure) #-}
+-- {-# SPECIALIZE getIndexData :: Int  -> StateIO (Maybe Closure) #-}
 
 
 
