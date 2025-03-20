@@ -11,27 +11,27 @@ mapKeyB, mapKeyU, reduce,eval,
 DDS(..),Partition(..),PartRef(..))
  where
 
-#ifdef ghcjs_HOST_OS
-import Transient.Base
-import Transient.Move hiding (pack)
-import Transient.Logged hiding (hash)
--- dummy Transient.MapReduce module,
-reduce _ _ = local stop :: Loggable a => Cloud a
-mapKeyB _ _= undefined
-mapKeyU _ _= undefined
-distribute _ = undefined
-getText _ _ = undefined
-textFile _ = undefined
-getUrl _ _ = undefined
-textUrl _ = undefined
-getFile _ _ = undefined
-eval _= local stop
-data Partition
-data DDS= DDS
-class Distributable
-data PartRef a=PartRef a
 
-#else
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 import Transient.Internals hiding (Ref)
 import Transient.Mailboxes
