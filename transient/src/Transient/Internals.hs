@@ -104,6 +104,7 @@ color x= unsafePerformIO $ do
 
 -- ttr ::(Show a,MonadIO m) => a -> m()
 -- ttr x= liftIO $ do putStr "=======>" ; putStrLn $ color   x
+ttr :: (Show a, Monad m) => a -> m ()
 ttr x=  trace1 ( "=======>" <> color x) $ return ()
 
 
@@ -1337,8 +1338,9 @@ sandbox' mx = do
   st <- get
   mx <*** modify (\s ->s { mfData = mfData st, parseContext= parseContext st})
 
--- | Sanbox only to other terms of a formula made of applicatives and alternatives.
--- The list of types are the sandbox exceptions and will be leaked 
+-- | Sandbox the data only to other terms of a formula made of binary operators,applicatives and alternatives.
+-- It is not sandboxed for the next term in the monad (the imperative sequence)
+-- The list of types are the types that would not be sandboxed and will be leaked 
 sandboxSide :: [TypeRep] -> TransIO a  -> TransIO a
 sandboxSide ts mx = do
   st <- get
@@ -1360,8 +1362,9 @@ sandboxData def w= do
    d <- getData
    w  <***  if isJust d then setState (fromJust d `asTypeOf` def) else delState def
 
+  
 
-
+-- sandbox the data depending on a functin that thakes into accout the previous and new state
 sandboxCond :: Typeable a => (Maybe a -> Maybe a -> Maybe a) -> TransIO a -> TransIO a
 sandboxCond cond w= do
   prev <- getData
@@ -1433,7 +1436,8 @@ async io = do
     -- SMore  x -> return x
     SError e -> back   e
 
--- | sync executes an asynchronous computation, until no thread in that computation is active, and return the list of results without executing any alternative computation. 
+-- | sync executes an asynchronous computation, until no thread in that computation is active, 
+-- and return the list of results without executing any alternative computation. 
 -- if the list of results is empty, the alternative computation is executed.
 --
 -- > ghci> keep' $ sync (abduce >> empty) <|> return "hello"
@@ -1453,13 +1457,13 @@ sync :: TransIO a -> TransIO [a]
 sync x = syncProd  $ collect' 0 0 x
 
 -- | to enclose collect operations avoiding alternative operations and return the result in the original thread.
-
+-- If no result, the alternative computation is executed.
 syncProd :: TransIO [a] -> TransIO [a]
 syncProd x= do
     mv <- liftIO newEmptyMVar
     do
       anyThreads abduce
-      r <- avoidAlternative x
+      r <- x -- avoidAlternative x
       liftIO (putMVar mv r)
       empty
 
@@ -1469,6 +1473,7 @@ syncProd x= do
         [] -> empty
         rs -> return  rs
 
+sync' :: TransIO b -> TransIO b
 sync' pr= do
     mv <- liftIO newEmptyMVar
     (pr >>= liftIO . tryPutMVar mv >> empty) <|>
@@ -1776,7 +1781,7 @@ killChildren childs  = do
 -- into the transient monad using 'react'. Every time the callback is called it
 -- continues the execution inside of the current transient computation.
 --
--- This allows the composition of code activated by callbacks with any other transient code
+-- This allows the composition of callbacks/event handlers with any other transient code, eliminating the callback hell
 -- 
 --
 -- >     
@@ -1794,7 +1799,7 @@ react
   -> IO  response
   -> TransIO eventdata
 react h iob= do
-  abduce
+  -- threads 0 abduce 
   react1 h iob
   where
   react1
@@ -1806,24 +1811,13 @@ react h iob= do
         modify $ \s -> s{execMode=let rs= execMode s in if rs /= Remote then Parallel else rs}
 
         cont <- get
+        liftIO $ atomicModifyIORef (labelth cont) $ \(status, lab) -> ((Listener,lab <> BS.pack ",react"),())
+        
         liftIO $ setHandler $ \dat -> do
               runCont' dat cont `catch` exceptBack cont
-              -- let rparent=  parent st
-              -- Just parent <- liftIO $ readIORef rparent
-              -- th <- liftIO myThreadId
-              -- tr ("THREADID", th)
-              -- liftIO $ writeIORef (pthreadId st) th
-              -- freelogic rparent st (labelth st)
-              -- (exceptBackg cont' $ Finish $ show (unsafePerformIO myThreadId,"react thread ended")) 
-
               iob
 
         return Nothing
-
-
-
-
-
 
 
 
