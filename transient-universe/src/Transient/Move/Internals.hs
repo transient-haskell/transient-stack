@@ -366,6 +366,10 @@ forkTo node = beamTo node <|> return ()
 callTo :: Loggable a => Node -> Cloud a -> Cloud a
 callTo node remoteProc = wormhole' node $ atRemote remoteProc
 
+-- lift a computation, which accept a TransIO parameter, like, for example, `threads`, `collect` etc, to the Cloud monad
+liftCloud :: Loggable b => (TransIO a -> TransIO b) -> Cloud a -> Cloud b
+liftCloud f x = local $ f (unCloud x)
+
 -- #ifndef ghcjs_HOST_OS
 
 -- -- | A connectionless version of callTo for long running remote calls
@@ -458,6 +462,7 @@ unique f = do
 -- | A wormhole opens a connection with another node anywhere in a computation.
 -- `teleport` uses this connection to translate the computation back and forth between the two nodes connected.
 -- If the connection fails, it search the network for suitable relay nodes to reach the destination node.
+wormhole :: Loggable b => Node -> Cloud b -> Cloud b
 wormhole node comp = do
     onAll $
         onException $ \e@(ConnectionError "no connection" nodeerr) ->
@@ -472,9 +477,7 @@ wormhole node comp = do
               <|> error ("no connection to: " ++ show node)
             local $ addNodes [node {nodeServices = nodeServices node ++ [Service $ M.fromList [("relay", show (nodeHost (relaynode :: Node), nodePort relaynode))]]}]
 
--- when the first teleport has been sent within a wormhole, the
--- log sent should be the segment not send in the previous teleport
--- newtype DialogInWormholeInitiated= DialogInWormholeInitiated Bool
+
 
 -- | wormhole without searching for relay nodes.
 wormhole' :: Loggable a => Node -> Cloud a -> Cloud a
@@ -486,11 +489,11 @@ wormhole' node (Cloud comp) =  local $  do
     log <- getLog
 
     if not $ recover log
-      
+
       then do
         abduce
         my <- getMyNode
-        if node== my 
+        if node== my
           then do
             let conn = fromMaybe (error "wormhole: no connection") moldconn
             rself <- liftIO $ newIORef  $ Just Self
@@ -521,7 +524,7 @@ wormhole' node (Cloud comp) =  local $  do
               r <- comp
               return (idConn conn,r)
                 --
-            PrevClos rprev <- getState <|> error ("wormhole: no prevclos")
+            PrevClos rprev <- getState <|> error "wormhole: no prevclos"
             setLastClosureForConnection conn rprev
             return r
 
@@ -529,22 +532,9 @@ wormhole' node (Cloud comp) =  local $  do
         ttr "wormhole recover"
         let conn = fromMaybe (error "wormhole: no connection in remote node") moldconn
         setData $ conn {calling = False}
-        -- The remote computation should'nt execute alternative computations afterwards (problemsol 12)
-
-        -- to avoid executing alternative computations in the remote node
-        -- unCloud checkpoint
-        -- tr "checkpoint"
         unCloud $ checkpoint Nothing
+        -- The remote computation should'nt execute alternative computations afterwards (problemsol 12)
         comp  <|> (modify (\s -> s {execMode = Remote}) >> empty)
-   where
-   sandboxconn def w= do
-      c <- getData
-      let conn= fromJust c
-          node= fmap  nodePort $ unsafePerformIO $ readIORef $ remoteNode conn
-      ttr ("connection",idConn conn,"sandboxing connection with NODE", node)
-
-      w  <*** if isJust c then do ttr("resetting sandboxing connection with NODE",node); setState ( conn `asTypeOf` def) else delState def
-
 
 
 
@@ -586,6 +576,21 @@ syncStream proc = do
 
 
 
+{-|
+  The 'teleport' function is an action in the 'Cloud' monad that
+  facilitates the migration or transfer of the current transient
+  computation to a different execution context, such as another node
+  in a distributed system.
+
+  This function abstracts the mechanics behind moving the execution
+  state, allowing dynamic redistribution of workload in a multi-node
+  environment. It encapsulates the necessary side effects required
+  for this migration, ensuring a smooth transition between nodes.
+
+  Use 'teleport' when you need to shift execution seamlessly, ensuring
+  that computations can continue independently on a different host or
+  environment without loss of state or context.
+-}
 teleport :: Cloud ()
 teleport =  do -- local $ do
 
@@ -608,6 +613,8 @@ teleport =  do -- local $ do
         --  labelState  "teleport"
 
     log <- getLog
+    abduce <|> do when(recover log) $ modify (\s -> s {execMode = Remote}); empty
+
 
     when (not $ recover log) $ do
         -- when a node call itself, there is no need for socket communications
@@ -616,7 +623,7 @@ teleport =  do -- local $ do
           Just Self -> do
             modify $ \s -> s {execMode = Parallel} -- setData  Parallel
             -- wormhole does abduce now
-            abduce
+            -- abduce
             -- call himself
             tr "SELF"
             liftIO $ do
@@ -639,8 +646,7 @@ teleport =  do -- local $ do
                   tr "return 0 0"
                   return dbClos0
 
-            let -- prevclosDBRef  = getDBRef $ kLocalClos idSession prevclos
-                -- remoteClosDBRef= getDBRef $ kLocalClos sessRemote closRemote
+            
             -- calcula el log entre la ultima closure almacenada localmente (prevclos) y el punto que el nodo ya ha recibido (closremote) 
             prevlog <- noTrans $ getClosureLogFrom prevClosDBRef remoteClosDBRef
             tr ("PARTLOG", partLog log)
@@ -657,13 +663,14 @@ teleport =  do -- local $ do
             let (idSession,clos) = getSessClosure prevClosDBRef
             msend conn $ toLazyByteString $ serialize $ SMore $ ClosureData closRemote sessRemote clos idSession tosend
             -- tr ("RECEIVER NODE", unsafePerformIO $ readIORef $ remoteNode conn, idConn )
-            -- receive1 lc
+            -- receive1 lc<
             -- receive conn Nothing idSession
-            empty
-            tr "AFTER RECEIVE"
-  return ()
+            -- ttr ("CALLING",calling conn)
+            -- when (not $ calling conn) $ modify $ \s -> s {execMode = Remote}
+            empty  
 
 
+receiveIt :: Connection -> Maybe B.ByteString -> Int -> TransIO ()
 receiveIt conn mclos idSession = do
   tr ("RECEIVE FROM",unsafePerformIO $ readIORef $ remoteNode conn)
   (lc, log) <- setCont mclos idSession

@@ -1,5 +1,6 @@
 {-# LANGUAGE  ExistentialQuantification, DeriveDataTypeable
 , FlexibleInstances, MultiParamTypeClasses, OverloadedStrings, CPP #-}
+{-# LANGUAGE InstanceSigs #-}
 
 
 module Transient.MapReduce
@@ -11,27 +12,27 @@ mapKeyB, mapKeyU, reduce,eval,
 DDS(..),Partition(..),PartRef(..))
  where
 
+#ifdef ghcjs_HOST_OS
+import Transient.Base
+import Transient.Move hiding (pack)
+import Transient.Logged hiding (hash)
+-- dummy Transient.MapReduce module,
+reduce _ _ = local stop :: Loggable a => Cloud a
+mapKeyB _ _= undefined
+mapKeyU _ _= undefined
+distribute _ = undefined
+getText _ _ = undefined
+textFile _ = undefined
+getUrl _ _ = undefined
+textUrl _ = undefined
+getFile _ _ = undefined
+eval _= local stop
+data Partition
+data DDS= DDS
+class Distributable
+data PartRef a=PartRef a
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+#else
 
 import Transient.Internals hiding (Ref)
 import Transient.Mailboxes
@@ -72,7 +73,6 @@ import Data.Text.Encoding
 
 import Data.IORef
 
-
 -- | a DDS contains a distrib. computation which return a (non-deterministic/stream/set of) 
 -- link/s to the generated chunk/s of data, in different nodes, thanks to the non-deterministic
 -- and multithreaded nature of the Transient/Cloud comp.
@@ -86,18 +86,21 @@ data Partition a=  Part Node Path Save a deriving (Typeable,Read,Show)
 type Save= Bool
 
 instance Loggable Text.Text where
-   serialize t= byteString (encodeUtf8 t) 
+   serialize t= byteString (encodeUtf8 t)
    deserialize = tTakeWhile (/= '/') >>= return . decodeUtf8 . toStrict
 
-instance Typeable a => Loggable (PartRef a) where
+
+
+instance  Loggable a => Loggable (PartRef a) where
+   serialize :: Typeable a => PartRef a -> Builder
    serialize(Ref node path save)= serialize node <> "/" <> serialize path <> "/" <> serialize save  -- <> "/" 
    deserialize= Ref <$> (deserialize <* slash)
                     <*> (deserialize <* slash)
-                    <*> (deserialize)
+                    <*> deserialize
 
     where
     slash= tChar '/'
-                    
+
 instance Indexable (Partition a) where
     key (Part _ string b _)= keyp string b
 
@@ -107,15 +110,19 @@ keyp s True= "PartP@"++s :: String
 keyp s False="PartT@"++s
 
 instance {-# OVERLAPPING #-} Loggable a => IResource (Partition a) where
+    keyResource :: Loggable a => Partition a -> String
     keyResource= key
+    readResourceByKey :: Loggable a => String -> IO (Maybe (Partition a))
     readResourceByKey k=  r
       where
-      typePart :: IO (Maybe (Partition a)) -> Partition a
+      typePart :: IO (Maybe  x) ->  x
       typePart = undefined
       r =  if k !! 4 /= 'P' then return Nothing   else
-            defaultReadByKey  (defPath (typePart r) ++ k) >>= return . fmap ( read . unpack)
-    writeResource (s@(Part _ _ save _))=
-          unless (not save) $ defaultWrite (defPath s ++ key s) (pack $ show s)
+             fmap ( read . unpack) <$> defaultReadByKey  (defPath (typePart r) ++ k)
+
+    writeResource :: Loggable a => Partition a -> IO ()
+    writeResource s@(Part _ _ save _)=
+          when save $ defaultWrite (defPath s ++ key s) (pack $ show s)
 
 
 eval :: DDS a -> Cloud (PartRef a)
@@ -156,10 +163,10 @@ class (F.Foldable c, Monoid (c a), Loggable (c a),Typeable c, Typeable a) => Dis
    fromList :: [a] -> c a
 
 instance Loggable a => Loggable (DV.Vector a) where
-   serialize v= intDec (DV.length v) <> "/" <> foldl' (\s x ->  s <> "/" <> serialize x ) mempty   v 
+   serialize v= intDec (DV.length v) <> "/" <> foldl' (\s x ->  s <> "/" <> serialize x ) mempty   v
    deserialize= do
-       len <- int 
-       DV.replicateM len $ tChar '/' *> deserialize  
+       len <- int
+       DV.replicateM len $ tChar '/' *> deserialize
 
 instance (Typeable a, Loggable a) => Distributable DV.Vector a where
    singleton = DV.singleton
@@ -168,9 +175,9 @@ instance (Typeable a, Loggable a) => Distributable DV.Vector a where
 
 
 instance (Loggable a,DVU.Unbox a) => Loggable (DVU.Vector a) where
-   serialize v= intDec (DVU.length v) <> "/" <> serialize(v DVU.! 0) <> DVU.ifoldl' (\s _ x -> s <> "/" <> serialize x) mempty (DVU.slice 1 (DVU.length v -1) v)
+   serialize v= intDec (DVU.length v) <> "/" <> serialize (v DVU.! 0) <> DVU.ifoldl' (\s _ x -> s <> "/" <> serialize x) mempty (DVU.slice 1 (DVU.length v -1) v)
    deserialize= do
-       len <- int 
+       len <- int
        DVU.replicateM len $ tChar '/' *> deserialize
 
 instance (Typeable a, Loggable a, DVU.Unbox a) => Distributable DVU.Vector a where
@@ -209,9 +216,9 @@ mapKey f (DDS mx)= DDS $ loggedc $  do
 
   where
 --  process ::  Partition a -> Cloud [Partition b]
-  process  (ref@(Ref node path sav))= runAt node $ local $ do
+  process  ref@(Ref node path sav)= runAt node $ local $ do
               xs <- getPartitionData ref          !> ("CMAP", ref,node)
-              (generateRef  $ map1 f xs)
+              generateRef  $ map1 f xs
 
 
 
@@ -247,13 +254,14 @@ map f (DDS mx)= DDS $ loggedc $  do
 
 data ReduceChunk a= EndReduce | Reduce a deriving (Typeable, Read, Show)
 
+{-# NOINLINE boxids #-}
 boxids= unsafePerformIO $ newIORef (0 :: Int)
 
 
 reduce ::  (Hashable k,Ord k, Distributable container a, Typeable k, Loggable k, Typeable a, Loggable a)
              => (a -> a -> a) -> DDS (M.Map k (container a)) ->Cloud (M.Map k a)
 
-reduce red  (dds@(DDS mx))= loggedc $ do
+reduce red  dds@(DDS mx)= loggedc $ do
 
    mboxid <- localIO $ atomicModifyIORef boxids $ \n -> let n'= n+1 in (n',n')
    nodes <- local getEqualNodes
@@ -262,8 +270,8 @@ reduce red  (dds@(DDS mx))= loggedc $ do
    let lengthNodes = length nodes
        shuffler nodes = do
 
-          localIO $ threadDelay 100000
-          ref@(Ref node path sav) <- mx     -- return the resulting blocks of the map
+         --  localIO $ threadDelay 100000
+          ref@(Ref node path sav) <- mx     -- return the resulting blocks of the map 
 
           runAt node $ do
               tr ("FOLDANDSEND","REF",ref, "runAt", node)
@@ -288,7 +296,7 @@ reduce red  (dds@(DDS mx))= loggedc $ do
 
              length <- local . return $ M.size mpairs
 
-             let port2= nodePort node
+            --  let port2= nodePort node
 
 
              if  length == 0 then sendEnd   nodes else do
@@ -301,13 +309,13 @@ reduce red  (dds@(DDS mx))= loggedc $ do
 
                  -- sourcenode <- local getMyNode -- XXX borrar, solo para debug
                  --localIO $ return () !> ("PUTMAILBOX TOSEND from",sourcenode,n,length,i,folded)
-                 (runAt (nodes !! i) $  do
-                        return () !> "JUST BEFORE PUTMAILBOX"
-                        local $ (putMailbox' mboxid (Reduce folded `asTypeOf` paramOf dds))
-                                            !> ("PUTMAILBOX SENT ",n,length,i,folded))
+                 runAt (nodes !! i) $  do
+                        tr "JUST BEFORE PUTMAILBOX"
+                        local $ putMailbox' mboxid (Reduce folded `asTypeOf` paramOf dds)
+                        tr ("PUTMAILBOX SENT ",n,length,i,folded)
 
 
-                
+
                  when (n == length) $ sendEnd nodes
                  return ()
                  empty
@@ -322,7 +330,7 @@ reduce red  (dds@(DDS mx))= loggedc $ do
        sendEnd  nodes   = do
                           -- node <- local getMyNode    -- XXX quitar. solo para debug
 
-                          onNodes nodes $ local $ 
+                          onNodes nodes $ local $
                                 putMailbox'  mboxid (EndReduce `asTypeOf` paramOf dds)
                                    --  !>  ("PUTMAILBOX ENDREDUCE FROM", node))
 
@@ -335,7 +343,7 @@ reduce red  (dds@(DDS mx))= loggedc $ do
 --     reduce1 :: (Ord k)  => Cloud (M.Map k v)
 
        reduce1 =local $ do
-           
+
            reduceResults <- liftIO $ newMVar M.empty
            numberSent    <- liftIO $ newMVar 0
            return () !> "GETMAILBOX"
@@ -344,22 +352,24 @@ reduce red  (dds@(DDS mx))= loggedc $ do
            case minput  of
 
              EndReduce -> do
-                return () !> "ENDREDUCE"
+                tr "ENDREDUCE"
                 n <- liftIO $ modifyMVar numberSent $ \r -> let r'= r+1 in return (r', r')
 
+                tr ("END REDUCE RECEIVEDDDD",n, lengthNodes)
+                -- end reduce received from a node. If all the nodes have sent the end reduce, then return the result
                 if n == lengthNodes
-                                              !> ("END REDUCE RECEIVEDDDD",n, lengthNodes)
+
                  then do
                     deleteMailbox' mboxid (EndReduce `asTypeOf` paramOf dds)
                     r <- liftIO $ readMVar reduceResults
 
-
-                    return r !> ("RETURNING",r)
+                    tr ("RETURNING",r)
+                    return r
 
                  else stop
 
              Reduce kvs ->  do
-                return () !> "REDUCE RECEIVEDDDDDDDDDDDD"
+                tr "REDUCE RECEIVEDDDDDDDDDDDD"
                 let addIt (k,inp) = do
                         let input= inp `asTypeOf` atype dds
                         liftIO $ modifyMVar_ reduceResults
@@ -367,16 +377,16 @@ reduce red  (dds@(DDS mx))= loggedc $ do
                                   let maccum =  M.lookup k map
                                   return $ M.insert k (case maccum of
                                     Just accum ->  red input accum
-                                    Nothing    ->  input) map 
+                                    Nothing    ->  input) map
 
-                mapM addIt  (kvs `asTypeOf` paramOf' dds)
-                                                                     !> ("RECEIVED REDUCEEEEEEEEEEEEE",kvs)
+                tr ("RECEIVED REDUCEEEEEEEEEEEEE",kvs)
+                mapM_ addIt  (kvs `asTypeOf` paramOf' dds)
+
                 stop
 
+
+   reducer  nodes  <|>  shuffler nodes
    
-   r <- reducer  nodes  <|>  shuffler nodes
-   localIO $ return () !> "RETRETRET"
-   return r
    where
      atype ::DDS(M.Map k (container a)) ->  a
      atype = undefined -- type level
@@ -397,7 +407,7 @@ mparallelize f xs =  loggedc $ foldr (<>) mempty $ map f xs
 
 getPartitionData :: (Typeable a, Loggable a) => PartRef a   -> TransIO  a
 getPartitionData (Ref node path save)  = Transient $ do
-    mp <- (liftIO $ atomically
+    mp <- liftIO (atomically
                        $ readDBRef
                        $ getDBRef
                        $ keyp path save)
@@ -416,15 +426,15 @@ getPartitionData1 (Ref node path save)  = Transient $ do
       Just (Part _ _ _ xs) -> return $ Just xs
       Nothing -> return Nothing
 
-getPartitionData2 :: (Typeable a,Loggable a) => PartRef a   -> IO  a
-getPartitionData2 (Ref node path save)  =  do
-    mp <- ( atomically
-                       $ readDBRef
-                       $ getDBRef
-                       $ keyp path save)
-                  `onNothing` error ("not found DDS data: "++ keyp path save)
-    case mp of
-       (Part _ _ _ xs) -> return  xs
+-- getPartitionData2 :: (Typeable a,Loggable a) => PartRef a   -> IO  a
+-- getPartitionData2 (Ref node path save)  =  do
+--     mp <- ( atomically
+--                        $ readDBRef
+--                        $ getDBRef
+--                        $ keyp path save)
+--                   `onNothing` error ("not found DDS data: "++ keyp path save)
+--     case mp of
+--        (Part _ _ _ xs) -> return  xs
 
 -- en caso de fallo de Node, se lanza un clustered en busca del path
 --   si solo uno lo tiene, se copia a otro
@@ -436,11 +446,12 @@ runAtP node f uuid= do
      SLast r -> return r
      SError e -> do
          nodes <-  mclustered $ search uuid
-         when(length nodes < 1) $ asyncDuplicate node uuid
+         when (null nodes) $ asyncDuplicate node uuid
          runAtP ( head nodes) f uuid
 
 search uuid= error $ "chunk failover not yet defined. Lookin for: "++ uuid
 
+asyncDuplicate :: Node -> FilePath -> Cloud ()
 asyncDuplicate node uuid= do
     forkTo node
     nodes <- onAll getEqualNodes
@@ -459,12 +470,11 @@ distribute :: (Loggable a, Distributable container a ) => container a -> DDS (co
 distribute = DDS . distribute'
 
 distribute' xs= loggedc $  do
-   nodes <- local getEqualNodes                                        -- !> "DISTRIBUTE"
+   nodes <- local getEqualNodes
    let lnodes = length nodes
    let size= case F.length xs `div` (length nodes) of 0 ->1 ; n -> n
        xss= split size lnodes 1 xs                                     -- !> size
-   r <- distribute'' xss nodes
-   return r
+   distribute'' xss nodes
    where
    split n s s' xs | s==s' = [xs]
    split n s s' xs=
@@ -477,11 +487,11 @@ distribute'' xss nodes =
    parallelize  move $ zip nodes xss   -- !> show xss
    where
    move (node, xs)=  runAt node $ local $ do
-                        par <- generateRef  xs
-                        return  par
-             !> ("move", node,xs)
+                        tr ("move", node,xs)
+                        generateRef  xs
 
--- | input data from a text that must be static and shared by all the nodes.
+
+-- | Input data from a text that must be static and shared by all the nodes.
 -- The function parameter partition the text in words
 getText  :: (Loggable a, Distributable container a) => (String -> [a]) -> String -> DDS (container a)
 getText part str= DDS $ loggedc $ do
@@ -493,15 +503,15 @@ getText part str= DDS $ loggedc $ do
    parallelize  (process lnodes)  $ zip nodes [0..lnodes-1]
    where
 
-   process lnodes (node,i)= 
+   process lnodes (node,i)=
       runAt node $ local $ do
             tr "GETTEXT PROCESS"
             let xs = part str
                 size= case length xs `div` lnodes of 0 ->1 ; n -> n
                 xss= Transient.MapReduce.fromList $
                        if i== lnodes-1 then drop (i* size) xs else  take size $ drop  (i *  size) xs
-            generateRef  xss  
-        
+            generateRef  xss
+
 
 -- | get the worlds of an URL
 textUrl :: String -> DDS (DV.Vector Text.Text)
@@ -523,7 +533,7 @@ getUrl partitioner url= DDS $ do
                             size= case length xs `div` lnodes of 0 ->1 ; n -> n
                             xss= Transient.MapReduce.fromList $
                                   if i== lnodes-1 then drop (i* size) xs else  take size $ drop  (i *  size) xs
-     
+
                         generateRef  xss
                   !> "GETURL"
 
@@ -545,11 +555,11 @@ getFile partitioner file= DDS $ do
                               c <- liftIO $ readFile file
                               length c `seq` return c
                         let xs = partitioner  content
-                        
+
                             size= case length xs `div` lnodes of 0 ->1 ; n -> n
                             xss= Transient.MapReduce.fromList $
                                    if i== lnodes-1 then drop (i* size) xs else  take size $ drop  (i *  size) xs
-     
+
                         generateRef    xss
                    !> "GETFILE"
 
@@ -562,7 +572,7 @@ generateRef  x=  do
        let reg=  Part node temp True  x   --  False to not save
        atomically $ newDBRef reg
 --       syncCache
-       (return $ getRef reg)     -- !> ("generateRef",reg,node)
+       return $ getRef reg     -- !> ("generateRef",reg,node)
 
 getRef (Part n t s x)= Ref n t s
 
@@ -585,8 +595,6 @@ streamDDS time io= DDS $ do
                     SMore x -> return [x]
                     SError e -> error $ show e
      distribute'  $ Transient.MapReduce.fromList xs
-
-
 
 
 #endif
