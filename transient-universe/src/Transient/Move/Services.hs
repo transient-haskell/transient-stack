@@ -582,7 +582,7 @@ runService' servDesc defPort servAll proc=  do
 
                    local $ do
                       conn <- getState
-                      (Closure sess closRemote (_ ::[Int])) <- getIndexData (idConn conn) `onNothing` error "teleport: no closRemote"
+                      (sess, closRemote) <- getSessClosure <$> getIndexData (idConn conn) `onNothing` error "teleport: no closRemote"
                       conn <- getData `onNothing` error "reportBack: No connection defined: use wormhole"
                       msend conn  $ toLazyByteString $ serialize (SError $ toException $ ErrorCall $ show $ show $ CloudException node sess closRemote $ show e :: StreamData NodeMSG)
                       empty -- return $ toIDyn ()
@@ -609,7 +609,7 @@ runService' servDesc defPort servAll proc=  do
           inputAuthorizations <|> return ()
 
           -- listen mynode <|> return ()
-          listen mynode <|> onAll (do c <- getState; firstCont ; receive c Nothing 0) <|> return ()
+          listen mynode <|> onAll (firstCont >>= receive1) <|> return ()
           onAll $ liftIO $ print "LISTEN"
           return serverNode
 

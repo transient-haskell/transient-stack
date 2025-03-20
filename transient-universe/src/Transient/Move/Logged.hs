@@ -58,11 +58,15 @@ import Data.TCache (getDBRef)
 
 import Control.Concurrent.MVar
 import Control.Applicative
-import System.Random
 
 
+
+u :: IO a -> a
 u= unsafePerformIO
+
+exec :: Builder
 exec=  lazyByteString $ BS.pack "e/"
+wait :: Builder
 wait=  lazyByteString $ BS.pack "w/"
 
 
@@ -76,42 +80,40 @@ setLastClosureForConnection a b= do
   setIndexData a b
 
 
+  {-|
+  The 'checkpoint' function saves the current execution state and validates
+  that all necessary prerequisites for recovery are in place. It is intended
+  to be used for distributed computing. 
+  
+  checkpoints can be continued by messages received in the EVar variable that
+  is associated with the checkpoint.(:++)
 
--- | Log the result of the applicative computation.
---
--- In the cloud monad, all applicatives and binary operators involving distributed operations like number invocations of remote nodes  (defined through the applicative operator `<*>`) including monoids `<>`, should be prefixed by 'logApp' to log the result.
--- This ensures that further computations use the result of the operation and bypass the applicative in recovery mode when they invoke 
--- closures beyond the binary combinations, further in the monad. The reason behind this is that,
--- after the finalization of the applicative, no closures inside the applicative should be invoked in the remote node.
--- Otherwise, this could cause a deadlock in the remote nodes, as each invoked term, even in recovery mode (when the result
--- of the term has been alnready executed in a previous invocation), will wait for the execution of the other term, which could have been
--- executed in a different node. This is because the remote node need the result of the whole operation in order to progress locally the recovery until the target closure, which is beyond the applicative,
---
--- This primitive "erases" these closures. No other primitives should be used to log applicatives but this.
---
--- it should be prefixing of a chain of applicatives or binary operators, for expample:
---
--- > formula :: Cloud Int -> Cloud Int -> Cloud Int -> Cloud Int
--- > formula= logApp $ a * b + c
---
--- where a, b and c involve at least one distributed computations.
+  It is basically invokes a `setCont`, which saves the state
+   and a `receive` function that wait for messages. and continue the execution
 
+  == Parameters
 
+  maybeName The current mame, that can be used to invoke it from a remote node.
+  If not provided, the identifier is generated from a hash that depends on the branch of the computation, so
+  that in all the nodes, the name generated is the same.
 
--- | stablish a checkpoint
-checkpoint mclosLocal= Cloud $ do
+  
+  -}
+checkpoint :: Maybe B.ByteString -> Cloud ()
+checkpoint maybeName= Cloud $ do
   log <-  getLog
 
   PrevClos dbr <- getData `onNothing` error "teleport: please use `initNode to perform distrubuted computing"
-  idSession <- localSession <$> liftIO (atomically $ readDBRef dbr `onNothing` error "logApp: no prevClos")
+  -- idSession <- localSession <$> liftIO (atomically $ readDBRef dbr `onNothing` error "logApp: no prevClos")
+  let (idSession,_) = getSessClosure dbr
   -- closLocal <- BSS.pack . show <$> liftIO (randomRIO (0,100000) :: IO Int) -- hashClosure log
-  let closLocal= if isJust mclosLocal then fromJust mclosLocal else BSS.pack $ show $ hashClosure log
+  let closLocal= fromMaybe (BSS.pack $ show $ hashClosure log) maybeName
   -- let closLocal= BSS.pack $ show $ hashClosure log
   lc <- setCont' (partLog log) closLocal idSession
   receive1 lc <|> return ()
-  return ()
+  -- return ()
   -- Alabado sea Dios
- 
+
 
 
 newtype PersistId = PersistId Integer deriving (Read, Show, Typeable)
@@ -170,12 +172,15 @@ setLog idConn log sessionId closr = do
   -- setCont' log closr sessionId
   return ()
 
+  {-|
+    Stores the computation state for the current session id and names it with the given name. If the name is not provided, a name is generated. The state is stored in the database and the computation continues. The computation can be recovered later and executed with `getClosureLog`.
+  -}
 setCont :: Maybe B.ByteString -> Int -> TransIO (LocalClosure, Log)
 setCont mclos idSession = do
   log <- getLog
   closLocal <- case mclos of
                     Just cls -> return cls
-                    _ -> BSS.pack . show <$> liftIO (randomRIO (0,100000) :: IO Int) -- hashClosure log
+                    _ -> return $  BSS.pack . show $ hashClosure log -- BSS.pack . show <$> liftIO (randomRIO (0,100000) :: IO Int) -- 
 
 
 
@@ -209,8 +214,8 @@ setCont' logstr closName idSession=  do
     Just (locClos@LocalClosure {..}) -> do
       tr "found dblocalclos"
       if toLazyByteString logstr== mempty -- two consecutive checkpoints
-        then return locClos 
-        else return locClos {localEvar = Just ev, localCont = Just cont,localLog= logstr} 
+        then return locClos
+        else return locClos {localEvar = Just ev, localCont = Just cont,localLog= logstr}
     _ -> do
       mv <- liftIO $ newEmptyMVar
 
