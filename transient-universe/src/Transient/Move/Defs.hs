@@ -1,5 +1,6 @@
 {-#Language RecordWildCards,DeriveGeneric,CPP, UndecidableInstances
 , OverlappingInstances,FlexibleInstances,GeneralizedNewtypeDeriving, OverloadedStrings #-}
+{-# LANGUAGE InstanceSigs #-}
 
 -- Dedicado a Jesucristo, mi salvador
 
@@ -46,10 +47,10 @@ newtype Cloud a = Cloud {unCloud :: TransIO a}
   deriving
     ( AdditionalOperators,
       Functor,
-      Semigroup,
-      Monoid,
+      -- Semigroup,
+      -- Monoid,
       Alternative,
-      Applicative,
+      -- Applicative,
       MonadFail,
       Monad,
       Num,
@@ -60,16 +61,39 @@ newtype Cloud a = Cloud {unCloud :: TransIO a}
 -- instance Applicative Cloud where
 --   pure x = Cloud $ return x
 --   Cloud f <*> Cloud g = local $ f <*> g
+instance Monoid a => Monoid (Cloud a) where
+  mappend = (<>) 
+  mempty= return mempty
 
--- lift a TransIO computation with a parameter to the Cloud monad
-liftCloud :: (TransIO a -> TransIO b) -> Cloud a -> Cloud b
-liftCloud f x = Cloud $ f (unCloud x)
+instance Semigroup a => Semigroup (Cloud a) where
+  a <> b= (<>) <$> a <*> b
+  
+instance Applicative Cloud where
+  pure :: a -> Cloud a
+  pure x = Cloud $ return x
+  
+  (<*>) :: Cloud (a -> b) -> Cloud a -> Cloud b
+  Cloud f <*> Cloud g = Cloud $ sandboxData (undefined :: PrevClos) 
+                              $ sandboxData (undefined :: M.Map Int Closure) 
+                              $ do
+        tr "ISAPP"
+        -- modifyState' (\(PrevClos dbr _ _) -> PrevClos dbr False True) (PrevClos dbClos0 False True)
+        f <*> g
+
+-- instance Alternative Cloud where
+--   empty= Cloud empty
+--   Cloud f <|> Cloud g = Cloud -- $ sandboxData (undefined :: PrevClos) 
+--                               -- $ sandboxData (undefined :: M.Map Int Closure) 
+--                               $ do
+--         tr "ISALTRER"
+--         -- modifyState' (\(PrevClos dbr _ _) -> PrevClos dbr False True) (PrevClos dbClos0 False True)
+--         f <|> g
 
 -- | previous local checkpointed closure in the execution flow
-newtype PrevClos = PrevClos  (DBRef  LocalClosure) -- {idSession :: SessionId, idClosure :: IdClosure, hasTeleport :: Bool}
+data PrevClos = PrevClos{dbref:: DBRef LocalClosure, hadTeleport :: Bool, isApplicative :: Bool}
 
 -- | last remote closure in a teleport waiting for responses in the execution flow
-data ClosToRespond= ClosToRespond (DBRef LocalClosure) -- {remSession :: SessionId, remClosure :: IdClosure}
+newtype ClosToRespond= ClosToRespond (DBRef LocalClosure) -- {remSession :: SessionId, remClosure :: IdClosure}
 
 type IdClosure = BC.ByteString
 type SessionId = Int
@@ -213,6 +237,8 @@ instance TC.Serializable LocalClosure where
         block = unsafePerformIO $ newMVar ()
      in LocalClosure localSession prevClos localLog  localClos block Nothing Nothing
 
+dbClos0= getDBRef $ kLocalClos 0 "0" :: DBRef LocalClosure
+
 
 type Pool = [Connection]
 type SKey = String
@@ -236,6 +262,7 @@ instance Default [Service] where
 data NodeMSG = ClosureData IdClosure SessionId IdClosure SessionId Builder deriving (Read, Show)
 
 instance Loggable NodeMSG where
+  serialize :: NodeMSG -> Builder
   serialize (ClosureData clos s1 clos' s2 build) =
     byteString clos <> "/" <> intDec s1 <> "/"
       <> byteString clos'
@@ -244,6 +271,7 @@ instance Loggable NodeMSG where
       <> "/"
       <> build
 
+  deserialize :: TransIO NodeMSG
   deserialize =
     ClosureData <$> (BL.toStrict <$> tTakeWhile (/= '/') <* tChar '/') <*> (int <* tChar '/')
       <*> (BL.toStrict <$> tTakeWhile (/= '/') <* tChar '/')

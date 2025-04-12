@@ -1,4 +1,4 @@
-{-# LANGUAGE ScopedTypeVariables, RecordWildCards,OverlappingInstances, UndecidableInstances #-}
+{-# LANGUAGE FlexibleInstances, ScopedTypeVariables, RecordWildCards,OverlappingInstances, UndecidableInstances #-}
 
 module Main where
 
@@ -51,105 +51,6 @@ import Data.TCache hiding (onNothing)
 
 
 
--- logged :: Loggable a => TransIO a -> TransIO a
--- logged mx = sandboxData (PrevClos $ getDBRef $ kLocalClos 0  $ BC.pack "0") $ do
-
---   indent
---   debug <- getParseBuffer
---   tr ("executing logged stmt of type",typeOf res,"with log",debug)
-
---   -- mode <- gets execMode
---   -- tr ("execMode",mode)
-
---   r <- res <** outdent
-
---   tr ("finish logged stmt of type",typeOf res)
-  
-
---   return r
---   where
---   res = do
---         log <- getLog
---         tr ("log",log)
-
-
-
---         let segment= partLog log
---         rest <- getParseBuffer 
---         let log'= if BS.null rest {-&& typeOf(type1 res) /= typeOf () -}then log{recover=False}  else log
---         process rest segment log'
-
-
---     where
-
-
---     process rest segment log= do
-
---         -- tr ("process, recover",  recover log,partLog log)
-
---         let segmentex=   segment <> exec
-
---         setData log{partLog= segmentex, hashClosure= hashClosure log + hashDone}
---         r <-(if not $ BS.null rest
---                then do  recoverIt
---                else do   mx)  <** modifyData' (\log ->  log{partLog=segment <> wait,hashClosure=hashClosure log + hashWait}) emptyLog
-
---                             -- when   p1 <|> p2, to avoid the re-execution of p1 at the
---                             -- recovery when p1 is asynchronous or  empty
-
---         log' <- getLog
-
---         let
---             recoverAfter= recover log'
---             add=   (serialize r <> lazyByteString (BS.pack "/"))   -- Var (toIDyn r):  segment
-
---         rest <- giveParseString
---         let recov= recoverAfter && not (BS.null rest)  
-
---         setData $ Log{recover=recov, partLog=  segment <> add, hashClosure= hashClosure log +hashExec}
-
-
---         return r
-
-
---     recoverIt = do
-
---         s <- giveParseString
-
---         -- tr ("recoverIt recover", s)
---         let (h,t)=  BS.splitAt 2 s 
---         case  (BS.unpack h,t) of
---           ("e/",r) -> do
---             -- tr "EXEC"
---             setParseString r
---             mx
-
---           ("w/",r) -> do
---             setParseString r
---             modify $ \s -> s{execMode=if execMode s /= Remote then Parallel else Remote}  --setData Parallel 
---             -- in recovery, execmode can not be parallel(NO; see below)
---             empty                                --   !> "Wait"
-
---           _ -> value
-
---     value = r
---       where
---       typeOfr :: TransIO a -> a
---       typeOfr _= undefined
-
---       r= (do
---         -- tr "VALUE"
---         -- set serial for deserialization, restore execution mode
---         x <- do mod <-gets execMode;modify $ \s -> s{execMode=Serial}; r <- deserialize; modify $ \s -> s{execMode= mod};return r  -- <|> errparse 
---         tr ("value parsed",x)
---         psr <- giveParseString
---         when (not $ BS.null psr) $ (tChar '/' >> return ()) --  <|> errparse
---         return x) <|> errparse
-
---       errparse :: TransIO a
---       errparse = do psr <- getParseBuffer;
---                     stack <- liftIO currentCallStack
---                     errorWithStackTrace  ("error parsing <" <> BS.unpack psr <> ">  to " <> show (typeOf $ typeOfr r) <> "\n" <> show stack)
 
 
 

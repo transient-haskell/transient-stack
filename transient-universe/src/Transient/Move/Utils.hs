@@ -13,7 +13,7 @@
 -----------------------------------------------------------------------------
 {-# LANGUAGE CPP, ScopedTypeVariables #-}
 module Transient.Move.Utils (initNode,initNodeDef, initNodeServ, addService, inputNodes, simpleWebApp, initWebApp
-, onServer, onBrowser, atServer, atBrowser, runTestNodes, showURL)
+, onServer, onBrowser, atServer, atBrowser, showURL)
  where
 
 --import Transient.Base
@@ -35,6 +35,8 @@ import Control.Exception hiding(onException)
 import System.IO.Unsafe
 import System.Directory.Internal.Prelude (exitFailure)
 
+{-# NOINLINE rretry #-}
+rretry :: IORef Bool
 rretry= unsafePerformIO $ newIORef False
 
 -- | ask in the console for the port number and initializes a node in the port specified
@@ -244,10 +246,10 @@ initWebApp node app=  do
 #endif   
                    <|> app -- ;(minput "" "end" :: Cloud())
       where
-      listenContsFromNodes= onAll $ firstCont >>= receive1 --  do c <- getState; firstCont ; receive1 c Nothing 0
+      listenContsFromNodes= onAll $ firstCont  >>= receive1
 
+{-
 -- | run N nodes (N ports to listen) in the same program. For testing purposes.
--- It add them to the list of known nodes, so it is possible to perform `clustered` operations with them.
 runTestNodes ports= do
     nodes <- onAll $ mapM (\p -> liftIO $ createNode "localhost" p) ports
     onAll $ addNodes nodes
@@ -261,3 +263,4 @@ runTestNodes ports= do
         conn <- getState <|> error "runTestNodes error"
         liftIO $ writeIORef (myNode conn)  n
 
+-}

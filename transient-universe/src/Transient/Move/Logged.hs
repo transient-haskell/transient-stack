@@ -24,7 +24,7 @@
 {-# LANGUAGE  CPP, ExistentialQuantification, FlexibleInstances, ScopedTypeVariables, UndecidableInstances #-}
 {-# LANGUAGE InstanceSigs #-}
 module Transient.Move.Logged(Cloud(..),
-Loggable(..), logged, checkpoint, received, param, getLog, exec,wait, emptyLog, Log(..),hashExec,genPersistId,persistDBRef,setCont,setCont',receive1,firstCont, dbClos0,setLastClosureForConnection) where
+Loggable(..), logged, endpoint, received, param, getLog, exec,wait, emptyLog, Log(..),hashExec,genPersistId,persistDBRef,setCont,setCont',receive1,firstCont, dbClos0,setLastClosureForConnection) where
 
 import Data.Typeable
 import Data.Maybe
@@ -56,10 +56,9 @@ import Data.ByteString.Builder
 
 import Data.TCache (getDBRef)
 
-import Control.Concurrent.MVar
-import Control.Applicative
+import Control.Concurrent.MVar ( newEmptyMVar, newMVar )
 
-
+import System.Random ( randomRIO )
 
 u :: IO a -> a
 u= unsafePerformIO
@@ -75,18 +74,16 @@ wait=  lazyByteString $ BS.pack "w/"
 
 -- | last closure/continuation executed for each remote connection in this branch of execution. Other branches could have other closures so the container should be pure. All further calls from this node to each node/connection should be directed to this corresponding closure.
 setLastClosureForConnection :: Int -> Closure -> TransIO (M.Map Int Closure)
-setLastClosureForConnection a b= do
-  ttr  ("setLastClosureForConnection",a, b)
-  setIndexData a b
+setLastClosureForConnection= setIndexData
 
 
   {-|
-  The 'checkpoint' function saves the current execution state and validates
+  The 'endpoint' function saves the current execution state and validates
   that all necessary prerequisites for recovery are in place. It is intended
   to be used for distributed computing. 
   
-  checkpoints can be continued by messages received in the EVar variable that
-  is associated with the checkpoint.(:++)
+  endpoints can be continued by messages received in the EVar variable that
+  is associated with the endpoint.(:++)
 
   It is basically invokes a `setCont`, which saves the state
    and a `receive` function that wait for messages. and continue the execution
@@ -99,16 +96,17 @@ setLastClosureForConnection a b= do
 
   
   -}
-checkpoint :: Maybe B.ByteString -> Cloud ()
-checkpoint maybeName= Cloud $ do
-  log <-  getLog
+endpoint :: Maybe B.ByteString -> Cloud ()
+endpoint maybeName= Cloud $ do
 
-  PrevClos dbr <- getData `onNothing` error "teleport: please use `initNode to perform distrubuted computing"
+  PrevClos dbr _ _ <- getData `onNothing` error "teleport: please use `initNode to perform distrubuted computing"
   -- idSession <- localSession <$> liftIO (atomically $ readDBRef dbr `onNothing` error "logApp: no prevClos")
   let (idSession,_) = getSessClosure dbr
-  -- closLocal <- BSS.pack . show <$> liftIO (randomRIO (0,100000) :: IO Int) -- hashClosure log
-  let closLocal= fromMaybe (BSS.pack $ show $ hashClosure log) maybeName
-  -- let closLocal= BSS.pack $ show $ hashClosure log
+  closLocal <- maybe (unCloud $ logged $  liftIO $ BSS.pack . show <$> liftIO (randomRIO (0,100000) :: IO Int)) return maybeName -- hashClosure log
+  log <-  getLog
+
+  -- let closLocal= fromMaybe (BSS.pack $ show $ hashClosure log) maybeName
+
   lc <- setCont' (partLog log) closLocal idSession
   receive1 lc <|> return ()
   -- return ()
@@ -164,7 +162,7 @@ receive1 lc = do
 setLog :: Int -> Builder -> Int -> B.ByteString -> TransIO ()
 setLog idConn log sessionId closr = do
   tr ("setLog for",idConn,"Closure",sessionId, closr )
-  -- void $ setLastClosureForConnection idConn (getDBRef $ kLocalClos sessionId closr) --  (Closure sessionId closr [])
+  void $ setLastClosureForConnection idConn (getDBRef $ kLocalClos sessionId closr) --  (Closure sessionId closr [])
   setParseString $ toLazyByteString log
 
   modifyData' (\l -> l {recover = True}) emptyLog
@@ -194,7 +192,7 @@ setCont mclos idSession = do
 setCont' :: Builder -> B.ByteString -> Int -> TransIO LocalClosure
 setCont' logstr closName idSession=  do
 
-  PrevClos dbprevclos <- getState <|> error "setCont: PrevClos not set, use initNode"
+  PrevClos dbprevclos _ isapp <- getState <|> error "setCont: no execution state, use initNode"
 
   let dblocalclos = getDBRef $ kLocalClos idSession closName :: DBRef LocalClosure
 
@@ -213,7 +211,7 @@ setCont' logstr closName idSession=  do
   closure <- case mr of
     Just (locClos@LocalClosure {..}) -> do
       tr "found dblocalclos"
-      if toLazyByteString logstr== mempty -- two consecutive checkpoints
+      if toLazyByteString logstr== mempty -- two consecutive endpoints
         then return locClos
         else return locClos {localEvar = Just ev, localCont = Just cont,localLog= logstr}
     _ -> do
@@ -234,7 +232,7 @@ setCont' logstr closName idSession=  do
 
   tr ("SETCONT", closName, idSession,"PREVCLOS",dbprevclos,logstr)
 
-  setState $ PrevClos  dblocalclos
+  setState $ PrevClos dblocalclos True isapp
 
   liftIO $ atomically $ writeDBRef dblocalclos closure
 
@@ -242,7 +240,7 @@ setCont' logstr closName idSession=  do
   return closure
 
 
-dbClos0= getDBRef $ kLocalClos 0 "0"
+-- dbClos0= getDBRef $ kLocalClos 0 "0"
 
 
 firstCont = do
@@ -264,7 +262,7 @@ firstCont = do
           }
 
   liftIO $ atomically $ writeDBRef dbClos0 this
-  setState $ PrevClos dbClos0
+  setState $ PrevClos dbClos0 False False
   return this
 
 
@@ -286,82 +284,69 @@ hashWait= 1000
 -- the parent computation is finished its internal (subcomputation) logs are
 -- discarded.
 --
+
+
 logged :: Loggable a => TransIO a -> Cloud a
-logged mx =  Cloud $ do
+logged mx =  Cloud $ sandboxDataCond handle $ do
 
-    r <- res <** outdent
+    -- Cristo es Rey.  Chirst is King.
 
-    tr ("finish logged stmt of type",typeOf res, "with value", r)
+    modifyState' ( \prevc -> prevc{hadTeleport= False}) $ error "logged: no execution state"
 
+    indent
+    r <- logit <** outdent
+
+    tr ("finish logged stmt of type",typeOf logit, "with value", r)
 
     return r
+
     where
 
-    res = do
+    handle (Just mnow) (Just mprev) = Just $ PrevClos (dbref mnow) ( hadTeleport mnow || hadTeleport mprev) False
+
+    logit = do
           initialLog <- getLog
-          -- tr "resetting PrevClos"
-
-          debug <- getParseBuffer
-          tr (if recover initialLog then "recovering" else "excecuting" <> " logged stmt of type",typeOf res,"parseString", debug,"PARTLOG",partLog initialLog)
-          indent
-          let segment= partLog initialLog
-
-
+          let initialSegment= partLog initialLog
           rest <- getParseBuffer
 
+          tr ("LOGGED:" <> if recover initialLog then "recovering" else "executing" <> " logged stmt of type",typeOf logit,"parseString", rest,"PARTLOG",partLog initialLog)
 
-          setData initialLog{partLog=  segment <> exec, hashClosure= hashClosure initialLog + hashExec}
+          setData initialLog{partLog=  initialSegment <> exec, hashClosure= hashClosure initialLog + hashExec}
 
-          r <-(if not $ BS.null rest
-                then recoverIt
-                else do
-                  -- tr "resetting PrevClos"
-                  -- modifyState' (\(PrevClos a b _) -> PrevClos a b False) (error "logged: no prevclos") -- (PrevClos 0 "0" False) -- 11
-
-                  mx)  <|> addWait segment
+          r <-(if not $ BS.null rest then recoverIt else  mx)  <|> addWait initialSegment
 
           rest <- giveParseString
 
-          let add= serialize r <> "/" -- lazyByteString (BS.pack "/")
+          let add= serialize r <> "/"
               recov= not $ BS.null rest
-              parlog= segment <> add
+              parlog= initialSegment <> add
 
-          -- PrevClos s c hadTeleport <- getData `onNothing` (error $ "logged: no prevclos") -- return (PrevClos 0 "0" False)
-          -- tr ("HADTELEPORT", hadTeleport)
-          -- mapplic <- getData
+
+          prevc <- getData `onNothing` error "logged: no execution state"
+
+          tr ("HADTELEPORT", hadTeleport prevc,recov)
+
           let hash= hashClosure initialLog{-Alabado sea Dios-} + hashDone -- hashClosure finalLog
-          -- ttr ("HASHCLOSURE",hash)
-          -- when (recover initialLog && not recov) $ ttr ("AQUI DEBERIA IR SETCONT2",hash)
 
-          -- if isJust (mapplic :: Maybe IsApplicative2)
-          --   then do
-          --     delData IsApplicative2
-          --     tr "LOGGED: ISAPPLICATIVE"
-          --     modifyState' (\finalLog -> finalLog{recover=recov, partLog= add, hashClosure= hash }) emptyLog
-          --   else
+          if hadTeleport prevc
+            then do
+              tr "HADTELEPORT"
+              modifyState'  (\finalLog -> finalLog{recover=recov,  hashClosure= hash }) emptyLog
 
-          do
-              modifyState'  (\finalLog ->  -- problemsol 10
-                        -- if  hadTeleport -- Gracias mi Dios y señor -- && not recov
-                        --   then finalLog{recover=recov, partLog= mempty, hashClosure= hash }
-                          -- else 
-                            finalLog{recover=recov, partLog= parlog, hashClosure= hash }
-                        )
-                        emptyLog
-
-
+            else
+              modifyState'  (\finalLog -> finalLog{recover=recov, partLog= parlog, hashClosure= hash }) emptyLog
 
           return r
 
 
     -- when   p1 <|> p2, to avoid the re-execution of p1 at the
     -- recovery when p1 is asynchronous or  empty
-    addWait segment= do
-      -- tr ("ADDWAIT",segment)
+    addWait initialSegment = do
+      -- tr ("ADDWAIT",initialSegment)
       -- outdent
-
-      tr ("finish logged stmt of type",typeOf res, "with empty")
-      modifyData' (\log -> log{partLog=segment <> wait, hashClosure=hashClosure log + hashWait})
+      tr ("finish logged stmt of type",typeOf logit, "with empty")
+      -- Alabado sea Dios y su madre santísima
+      modifyData' (\log -> trace (show ("LOGWAIT",partLog log)) log{partLog= initialSegment <> wait, hashClosure=hashClosure log + hashWait})
                   emptyLog
       empty
 

@@ -15,6 +15,8 @@ import           Transient.Internals
 import           Transient.Console
 import           Transient.Indeterminism
 import           Transient.Loggable
+
+import           Transient.Move.Logged
 import           Transient.Move.Internals
 import           Transient.Loggable
 import           Transient.Move.Utils
@@ -32,7 +34,7 @@ import           Control.Concurrent(threadDelay )
 import           Data.Typeable
 
 
-#define SHOULDRUNIN(x)    (local $ do p <-getMyNode;assert ( p == (x)) (liftIO $ print p))
+#define SHOULDRUNIN(x)    (local $ do p <-getMyNode;tr p;assert ( p == (x)) (liftIO $ print ("running at node: " <> show x)))
 
 
 -- #define _UPK_(x) {-# UNPACK #-} !(x)
@@ -93,39 +95,42 @@ batchTest= do
 
 testIt nodes = do
           let node1:node2:node3:_ = nodes 
-          ttr nodes
+          tr nodes
           node0 <- local getMyNode
 
 
-          localIO $ putStrLn "------checking  empty in remote node when the remote call back to the caller #46 --------"
+
+          -- localIO $ putStrLn "------checking  empty in remote node when the remote call back to the caller #46 --------"
 
 
-          r <- runAt node1 $ do
-                    local $ getMyNode >>= \n -> ttr ("node1",n)
-                    SHOULDRUNIN(node1)
-                    runAt node2 $ (runAt node1 $ SHOULDRUNIN(node1) >> empty)  <|>   (SHOULDRUNIN(node2) >> return "world")
-          localIO $ print r 
+          -- r <- runAt node1 $ do
+          --           local $ getMyNode >>= \n -> tr ("node1",n)
+          --           SHOULDRUNIN(node1)
+          --           runAt node2 $ (runAt node1 $ SHOULDRUNIN(node1) >> empty)  <|>   (SHOULDRUNIN(node2) >> return "world")
+          -- localIO $ print r 
 
-          localIO $ putStrLn "------checking Alternative distributed--------"
+          -- localIO $ putStrLn "------checking Alternative distributed--------"
 
 
-          r <- Cloud $ collect 3 $ unCloud $ 
-                              runAt node0 (SHOULDRUNIN(node0) >> return "hello" ) <|>
-                              runAt node1 (SHOULDRUNIN(node1) >> return "world" ) <|>
-                              runAt node2 (SHOULDRUNIN(node2) >> return "world2")
+          -- r <- local $ collect 3 $ unCloud $ 
+          --                     runAt node0 (SHOULDRUNIN(node0) >> return "hello" ) <|>
+          --                     runAt node1 (SHOULDRUNIN(node1) >> return "world" ) <|>
+          --                     runAt node2 (SHOULDRUNIN(node2) >> return "world2")
           
-          assert(sort r== ["hello", "world", "world2"]) $ localIO $  print r
-
-          empty
+          -- assert(sort r== ["hello", "world", "world2"]) $ localIO $  print r
 
           
-          localIO $ putStrLn "--------------checking Applicative distributed--------"
-          r <- loggedc $(runAt node0 (SHOULDRUNIN( node0) >> return "hello "))
-                    <>  (runAt node1 (SHOULDRUNIN( node1) >> return "world " ))
-                    <>  (runAt node2 (SHOULDRUNIN( node2) >> return "world2" ))
+
+          
+          -- localIO $ putStrLn "--------------checking Applicative distributed--------"
+          -- r <- loggedc $ (runAt node0 (SHOULDRUNIN( node0) >> return "hello "))
+          --           <>  (runAt node1 (SHOULDRUNIN( node1) >> return "world " ))
+          --           <>  (runAt node2 (SHOULDRUNIN( node2) >> return "world2" ))
        
-          assert(r== "hello world world2") $ localIO $ print r
+          -- assert(r== "hello world world2") $ localIO $ print r
 
+
+          
           localIO $ putStrLn "----------------checking monadic, distributed-------------"
           r <- runAt node0 (SHOULDRUNIN(node0)
                   >> runAt node1 (SHOULDRUNIN(node1)

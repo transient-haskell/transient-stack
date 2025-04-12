@@ -21,7 +21,6 @@
 {-# LANGUAGE MultiParamTypeClasses     #-}
 {-# LANGUAGE DeriveDataTypeable        #-}
 {-# LANGUAGE RecordWildCards           #-}
-{-# LANGUAGE ConstraintKinds           #-}
 {-# LANGUAGE MonoLocalBinds           #-}
 {-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
 {-# HLINT ignore "Use gets"           #-}
@@ -298,8 +297,14 @@ instance Functor TransIO where
     return $ f x
 
 
-
-
+-- | the applicative instance executes both terms in parallel if the first term executes in a different thread.
+-- Since any of the two terms can return 0, 1 or more results, the result of the applicative will be a stream of
+-- results depending on what is the value of each term has in real time. 
+--
+-- It is not a combinatorial applicative: if one of the terms hasn't returned at least one result, any value produced
+-- by the other term is not buffered and it is ignored.
+--
+-- It has also a Serial execution mode used for parsing. 
 instance Applicative TransIO where
   pure :: a -> TransIO a
   pure a  = Transient . return $ Just a
@@ -609,13 +614,13 @@ class AdditionalOperators m where
 
 instance AdditionalOperators TransIO where
 
-  --(**>) :: TransIO a -> TransIO b -> TransIO b
+  (**>) :: TransIO a -> TransIO b -> TransIO b
   (**>) x y =
     Transient $ do
       runTrans x
       runTrans y
 
-  --(<***) :: TransIO a -> TransIO b -> TransIO a
+  (<***) :: TransIO a -> TransIO b -> TransIO a
   (<***) ma mb =
     Transient $ do
       fs  <- getContinuations
@@ -625,7 +630,7 @@ instance AdditionalOperators TransIO where
       restoreStack fs
       return  a
 
-  --(<**) :: TransIO a -> TransIO b -> TransIO a
+  (<**) :: TransIO a -> TransIO b -> TransIO a
   (<**) ma mb =
     Transient $ do
       a <- runTrans ma
@@ -1218,7 +1223,7 @@ modifyState' :: (TransMonad m, Typeable a) => (a ->  a) ->  a -> m a
 modifyState'= modifyData'
 
 -- | Same as `setData`
-setState :: (TransMonad m, Typeable a) => a -> m ()
+setState :: (TransMonad m, Typeable a) => a  -> m ()
 setState = setData
 
 -- | Delete the data item of the given type from the monad state.
@@ -1362,14 +1367,19 @@ sandboxData def w= do
    d <- getData
    w  <***  if isJust d then setState (fromJust d `asTypeOf` def) else delState def
 
-  
 
--- sandbox the data depending on a functin that thakes into accout the previous and new state
-sandboxCond :: Typeable a => (Maybe a -> Maybe a -> Maybe a) -> TransIO a -> TransIO a
-sandboxCond cond w= do
+
+-- | sandbox some data depending on a function that takes into account the previous and new state
+sandboxDataCond :: Typeable a => (Maybe a -> Maybe a -> Maybe a) -> TransIO b -> TransIO b
+sandboxDataCond cond w= do
   prev <- getData
   w <***  modifyState (`cond` prev)
 
+-- | sandbox all the state data except data of type 'a' on a function that takes into accout his previous and new state
+sandboxCond :: Typeable a => (Maybe a -> Maybe a -> Maybe a) -> TransIO b -> TransIO b
+sandboxCond cond w= do
+  prev <- getData
+  sandbox w <*** modifyState (`cond` prev)
 
 
 
@@ -1624,6 +1634,7 @@ loop parentc rec = forkMaybe False parentc $ \cont -> do
      void $ forkFinally1  (do
          th <- myThreadId
         --  tr "thread init"
+         tr ("thread created:",threadId parentState,"->",th)
          let cont'= parentState{parent=rparentState, children= chs, labelth= label,threadId=  th}
          unless (freeTh parentState)$ hangThread parentState cont'
 
@@ -1812,7 +1823,7 @@ react h iob= do
 
         cont <- get
         liftIO $ atomicModifyIORef (labelth cont) $ \(status, lab) -> ((Listener,lab <> BS.pack ",react"),())
-        
+
         liftIO $ setHandler $ \dat -> do
               runCont' dat cont `catch` exceptBack cont
               iob
@@ -2037,7 +2048,7 @@ retry= forward ()
 back :: (Typeable b, Show b) => b -> TransIO a
 back reason =  do
   bs@(Backtrack mreason stack) <- getData  `onNothing`  return (backStateOf  reason)
-  -- ttr ("back",typeOf reason,length stack)
+  -- tr ("back",typeOf reason,length stack)
   goBackt  bs
 
   where

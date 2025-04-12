@@ -623,14 +623,12 @@ keep mx = do
                   putStrLn ""
                   
               liftIO $ do
-                putStrLn "- saving cache at the end of 'keep'"
+                putStrLn "- saving cache at the end of the 'keep' execution"
                 writeIORef save True
               liftIO $ putStrLn "- handling signal 2(SIGINT) and 15(SIGTERM) to save cache state\n"
               sig <- react (System.Signal.installHandler sigINT) (return ()) <|> react (System.Signal.installHandler sigTERM) (return ())
               liftIO $ do  putStr "\nSIGNAL "; print sig
               exitLeft "signal"
-
-
               empty
 
             <|> do

@@ -109,6 +109,10 @@ withBlockingService serv proc= do
 --       local $ delNodes [node]
 --       returnInstances (ident, head $ nodeServices node, num)
 
+
+instance Default (String,Service,Int) where
+  def= ("$identifier",def,1)
+
 -- | install and return n instances of a service, distributed
 -- among all the nodes which have monitoService executables running and connected 
 returnInstances ::  Cloud ()

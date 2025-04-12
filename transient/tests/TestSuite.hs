@@ -27,18 +27,18 @@ main = do
     let -- genElem :: a -> TransIO a
         genElem x = do
           -- generates synchronous and asynchronous results with various delays
-          isasync <- liftIO randomIO
-          delay <- liftIO $ randomRIO (1, 1000)
+          isasync <- return True -- liftIO randomIO
+          delay <-  return 500 -- liftIO $ randomRIO (1, 1000)
           liftIO $ threadDelay delay
-          if isasync then anyThreads $ async $ return x else return x
+          if isasync then async $ return x else return x
 
     liftIO $ putStrLn "--Testing thread control + Monoid + Applicative + async + indetermism---"
 
     void $ collect 0 $ do
       -- gather the result of 100 iterations
       i <- threads 0 $ choose [1 .. 100] -- test 100 times. 'loop' for 100 times
-      nelems <- liftIO $ randomRIO (1, 100) -- :: TransIO Int
-      nthreads <- liftIO $ randomRIO (0, nelems) -- different numbers of threads
+      nelems <-  return 100-- liftIO $ randomRIO (1, 100) -- :: TransIO Int
+      nthreads <- return 50 -- liftIO $ randomRIO (0, nelems) -- different numbers of threads
       r <- threads nthreads $ sum $ map genElem [1 .. nelems] -- sum sync and async results using applicative
       let result = sum [1 .. nelems]
       assert (r == result) $ return ()

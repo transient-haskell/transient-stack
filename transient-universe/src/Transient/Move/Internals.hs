@@ -501,11 +501,9 @@ wormhole' node (Cloud comp) =  local $  do
             setData conn{connData=   rself}
             comp
           else do
-            (conn,r) <- sandbox $ do
-                            --  sandboxSide [] $ sandboxData (PrevClos undefined) 
-                            --                     $ sandboxData (ClosToRespond 0 "0") 
-                            --                     $ sandboxData (undefined :: M.Map Int Closure) 
-                            --                     $ sandboxconn (undefined :: Connection) $ do 
+            (prevprevclos,conn,r) <-  
+                          sandboxData (undefined :: ClosToRespond) $
+                          sandboxData (undefined :: Connection) $ do 
 
               delData $ ClosToRespond dbClos0
 
@@ -520,29 +518,33 @@ wormhole' node (Cloud comp) =  local $  do
               -- tr("WORMHOLE",node)
               setData conn {synchronous = maybe False synchronous moldconn, calling = True}
 
-              unCloud $ checkpoint Nothing
+              -- unCloud $ endpoint Nothing
+              prevprevclos <- getState <|> error "teleport: no execution state data"
               r <- comp
-              return (idConn conn,r)
-                --
-            PrevClos rprev <- getState <|> error "wormhole: no prevclos"
-            setLastClosureForConnection conn rprev
-            return r
+
+              return (prevprevclos :: PrevClos,idConn conn,r)
+                
+            let PrevClos rprev _ isapp = prevprevclos
+            when isapp $ do setState prevprevclos; void $ setLastClosureForConnection conn rprev 
+            return r 
+            
+         
 
     else do
-        ttr "wormhole recover"
+        tr "wormhole recover"
         let conn = fromMaybe (error "wormhole: no connection in remote node") moldconn
         setData $ conn {calling = False}
-        unCloud $ checkpoint Nothing
+        -- unCloud $ endpoint Nothing
         -- The remote computation should'nt execute alternative computations afterwards (problemsol 12)
         comp  <|> (modify (\s -> s {execMode = Remote}) >> empty)
 
+  
 
 
-
--- | set remote invocations synchronous
+-- | set synchronous remote invocations 
 -- this is necessary when data is transfered very fast from node to node in a stream non-deterministically
 -- in order to keep the continuation of the calling node unchanged until the arrival of the response
--- since all the calls share a single continuation in the calling node.
+-- since all the calls share a single continuation in the calling node when the session number is the same.
 --
 -- If there is no response from the remote node, the streaming is interrupted
 --
@@ -595,14 +597,13 @@ teleport :: Cloud ()
 teleport =  do -- local $ do
 
   modify $ \s -> s {execMode = if execMode s == Remote then Remote else Parallel}
-
-
+  endpoint Nothing
 
   local $ do
-    -- abduce
-    PrevClos prevClosDBRef <- getData `onNothing` error "teleport: no prevclos" -- return (PrevClos  0 "0" False)
+    -- unCloud $ endpoint Nothing
+
+    PrevClos prevClosDBRef _ _<- getData `onNothing` error "teleport: no execution state" -- return (PrevClos  0 "0" False)
     tr ("PREVCLOS",prevClosDBRef)
-    -- idSession <-  if idsess /= 0 then return idsess else  fromIntegral <$> genPersistId
 
     conn@Connection {idConn = idConn, connData = contype, synchronous = synchronous} <-
               getData
@@ -615,11 +616,11 @@ teleport =  do -- local $ do
     log <- getLog
     abduce <|> do when(recover log) $ modify (\s -> s {execMode = Remote}); empty
 
-
+    
     when (not $ recover log) $ do
-        -- when a node call itself, there is no need for socket communications
         ty <- liftIO $ readIORef contype
         case ty of
+          -- when a node call itself, there is no need for socket communications
           Just Self -> do
             modify $ \s -> s {execMode = Parallel} -- setData  Parallel
             -- wormhole does abduce now
@@ -629,7 +630,7 @@ teleport =  do -- local $ do
             liftIO $ do
               remote <- readIORef $ remoteNode conn
               writeIORef (myNode conn) $ fromMaybe (error "teleport: no connection?") remote
-          _ -> sandboxSide [] $ do
+          _ ->  do
             -- tr ("teleport remote call", idConn)
             remoteClosDBRef <-
                   do
@@ -665,8 +666,9 @@ teleport =  do -- local $ do
             -- tr ("RECEIVER NODE", unsafePerformIO $ readIORef $ remoteNode conn, idConn )
             -- receive1 lc<
             -- receive conn Nothing idSession
-            -- ttr ("CALLING",calling conn)
+            -- tr ("CALLING",calling conn)
             -- when (not $ calling conn) $ modify $ \s -> s {execMode = Remote}
+            -- unCloud $ endpoint Nothing
             empty  
 
 
@@ -808,7 +810,7 @@ msend :: Connection -> BL.ByteString -> TransIO ()
 #ifndef ghcjs_HOST_OS
 
 msend con bs = do
-  ttr ("MSEND---------->", fmap nodePort $ unsafePerformIO $ readIORef $ remoteNode con, idConn con,  bs)
+  tr ("MSEND---------->", fmap nodePort $ unsafePerformIO $ readIORef $ remoteNode con, idConn con,  bs)
   c <- liftIO $ readIORef $ connData con
   con' <- case c of
     Nothing -> do
@@ -1119,7 +1121,7 @@ parallelReadHandler conn = do
       len <- int <|>  nomore
       tr ("LEN",len)
       str <- tTake (fromIntegral len)
-      ttr ("MREAD  <-------<-------", unsafePerformIO $ readIORef $ remoteNode conn, str)
+      tr ("MREAD  <-------<-------", unsafePerformIO $ readIORef $ remoteNode conn, str)
       TOD t _ <- liftIO $ getClockTime
       liftIO $ modifyMVar_ (isBlocked conn) $ const $ Just <$> return t
 
@@ -1348,7 +1350,7 @@ mconnect1 (node@(Node host port _ services)) = do
       -- tr "BEFORE HANDSHAKE"
 
       sock <- liftIO $ connectTo' size host $ show port
-      let cdata = (Node2Node undefined sock (error $ "addr: outgoing connection"))
+      let cdata = Node2Node undefined sock (error "addr: outgoing connection")
       cdata' <- liftIO $ readIORef rcdata
 
       --input <-  liftIO $ SBSL.getContents sock
@@ -1796,6 +1798,7 @@ listen (node@(Node _ port _ _)) = onAll $ do
 
   mlog <- listenNew (show port) conn <|> listenResponses :: TransIO (StreamData NodeMSG)
   execLog mlog
+  
 
 chunked tosend= do
     let l= fromIntegral $ BS.length tosend
@@ -3116,7 +3119,7 @@ getClosureLogFrom prevclos remclos=do
       prevLog <- getClosureLogFrom (prevClos prevReg) remclos
       let locallogclos = localLog prevReg
       tr ("PREVLOG",  prevLog)
-      tr ("LOCALLOG",  locallogclos)
+      tr ("LOCALLOG",prevclos,  locallogclos)
       tr ("SUM",  prevLog <> locallogclos)
       return (prevLog <> locallogclos)
     True -> do

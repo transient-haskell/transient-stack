@@ -40,9 +40,9 @@ Other operators like math operators etc. are also permitted if they make sense. 
 term1 `impureoperator` term2  = pureoperator <$> term1 <*> term2
 ```
 
-Transient does exactly that.
+Transient does exactly that: Two transient computations can be composed no matter the effects that they perform. Since binary operators can be composed with other binary operators, any algebraic expression can be codified directly in transient.
 
-![image](https://github.com/user-attachments/assets/f3dbc353-e118-4988-a679-ae4ac6bb6be8) **<>** ![image](https://github.com/user-attachments/assets/f3dbc353-e118-4988-a679-ae4ac6bb6be8) **=** ![image](https://github.com/user-attachments/assets/f3dbc353-e118-4988-a679-ae4ac6bb6be8)
+![image](https://github.com/user-attachments/assets/f3dbc353-e118-4988-a679-ae4ac6bb6be8) <span style="font-size: 100px;"><></span> ![image](https://github.com/user-attachments/assets/f3dbc353-e118-4988-a679-ae4ac6bb6be8) <span style="font-size: 100px;">=</span> ![image](https://github.com/user-attachments/assets/f3dbc353-e118-4988-a679-ae4ac6bb6be8)
 
 
 
@@ -88,6 +88,8 @@ This program combines both functionalities:
 ```haskell
 main= keep . initNode $ inputNodes <|> webFib <|> distribStream
 ```
+
+<img width="692" alt="Transient" src="https://github.com/user-attachments/assets/fa9447d2-c3ab-4def-97be-a52ed53ba421" />
 
 Documentation
 =============
