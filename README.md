@@ -13,9 +13,11 @@ The list of impure effects and, in general, code that usually break composabilit
 ## Motivation
 All of this is done for the glory of God. May Christ reign in the nations and the hearts. «Instaurare omnia in Christo». In the name of the Father, the Son, and the Holy Ghost. Amen
 
-Nada se puede hacer sin amor, excepto destruir. Y el amor es Cristo. *Nada podéis hacer sin Mi* Jn 15:5. God inpires ever
+Nada se puede hacer sin amor, excepto destruir. Y el amor es Cristo. *Nada podéis hacer sin Mi* Jn 15:5. God inspires everything that is good
 
 ![img](https://pbs.twimg.com/media/GS2dHnQXwAAeZ4s?format=jpg&name=medium)
+
+[What Google AI (Gemini) says about Transient (Aug 2025)](https://gist.github.com/agocorona/80220a5b73521a5c69178eafe57b8f66)
 
 ## Introduction
 One of the dreams of software engineering is unrestricted composability.
