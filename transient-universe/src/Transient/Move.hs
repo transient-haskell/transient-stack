@@ -47,7 +47,7 @@
 module Transient.Move(
 
 -- * Running the Monad
-Cloud(..),runCloud, runCloudIO, runCloudIO',
+Cloud(..), runCloudIO, runCloudIO',
 
 -- * Node & Cluster Management
 -- $cluster
@@ -56,7 +56,7 @@ Node(..),
 Service(), createNodeServ, createNode, createWebNode,
 
 -- ** Joining the cluster
-Transient.Move.Internals.connect, connect', listen,
+connect', listen,
 -- Low level APIs
 addNodes, addThisNodeToRemote, shuffleNodes,
 --Connection(..), ConnectionData(..), defConnection,
@@ -66,13 +66,13 @@ getMyNode, getWebServerNode, getNodes, getEqualNodes, nodeList, isBrowserInstanc
 
 
 -- * Running Local Computations
-local, onAll, lazy, localFix, fixRemote, loggedc, lliftIO, localIO, 
+local, onAll, logged,loggedc, localIO, 
 
 -- * Moving Computations
-wormhole, teleport, copyData, fixClosure,
+wormhole, teleport, copyData,
 
 -- * Running at a Remote Node
-beamTo, forkTo, callTo, runAt, atRemote, setSynchronous, syncStream,
+ beamTo, forkTo,runAt, atRemote, setSynchronous, syncStream,
 
 -- * Running at Multiple Nodes
 clustered, mclustered, callNodes, callNodes', foldNet, exploreNet, exploreNetUntil,
@@ -93,22 +93,8 @@ setBuffSize, getBuffSize,
 api, HTTPMethod(..), HTTPHeaders(..), PostParams, noHTTP
 #endif
 ) where
-
+import Transient.Move.Defs
 import Transient.Move.Internals
+import Transient.Move.Logged
 import Transient.Mailboxes
 
--- $cluster
---
--- To join the cluster a node 'connect's to a well known node already part of
--- the cluster.
---
--- @
--- import Transient.Move (runCloudIO, lliftIO, createNode, connect, getNodes, onAll)
---
--- main = runCloudIO $ do
---     this   <- lliftIO (createNode "192.168.1.2" 8000)
---     master <- lliftIO (createNode "192.168.1.1" 8000)
---     connect this master
---     onAll getNodes >>= lliftIO . putStrLn . show
--- @
---

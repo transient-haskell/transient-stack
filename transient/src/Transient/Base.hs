@@ -238,7 +238,7 @@ TransIO, TransientIO
 , (**>), (<**), (<***)
 
 -- * Running the monad
-,keep, keep', stop, exit
+,keep, keep',keepCollect, stop, exit,exitFailure
 
 -- * Asynchronous console IO
 ,option,option1, input,input'
@@ -249,25 +249,25 @@ TransIO, TransientIO
 
 -- * State management
 ,setData, getSData, getData, delData, modifyData, modifyData', try, setState, getState, delState, newRState,getRState,setRState, modifyState
-,labelState, findState, killState
+,labelState, findState, removeState
 
 -- * Thread management
-, threads,addThreads, freeThreads, hookedThreads,oneThread, killChilds
+, threads, anyThreads, addThreads, freeThreads, hookedThreads,oneThread
 
 -- * backtracking
-,undo,onUndo,retry,back,onBack,forward,backPoint,onBackPoint,finish,onFinish
+,undo,onUndo,retry,back,onBack,forward,finish,onFinish,localBack -- ,backPoint,onBackPoint
 
 -- * Exceptions
 
-,onException, onException',whileException, cutExceptions, continue, catcht, throwt,exceptionPoint, onExceptionPoint
+,localExceptionHandlers, onException, onException', cutExceptions, continue, catcht, throwt -- ,exceptionPoint, onExceptionPoint
 
 -- * Utilities
-,genId
-,module Transient.Logged 
+,genId, tr, tr
 )
 
 where
 
 
 import    Transient.Internals
-import    Transient.Logged hiding (exec, wait)
+import    Transient.Console
+import System.Directory.Internal.Prelude (exitFailure)

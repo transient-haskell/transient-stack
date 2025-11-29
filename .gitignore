@@ -23,7 +23,15 @@ notes.txt
 notes.lhs
 dist
 *.js*
+*.dyn_hi
+*.dyn_o
+*.h
+*.cache
+*.lock
+dist*
 *.o
+*.so
+*.a
 *.hi
 .cabal-sandbox
 cabal.sanbox.config

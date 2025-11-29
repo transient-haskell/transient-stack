@@ -5,6 +5,7 @@
 {-# LANGUAGE OverloadedStrings,DeriveDataTypeable, FlexibleContexts, ScopedTypeVariables #-}
 import Transient.Internals
 import Transient.Logged hiding (exec)
+import Transient.Console
 import Transient.Move.Internals 
 import Transient.Move.Services
 import Transient.Parse
@@ -24,8 +25,6 @@ import qualified Data.Map as M
 import Control.Concurrent
 --import System.ByteOrder
 --import System.IO.Unsafe
-up = BS.unpack
-pk = BS.pack
 
 {-
 ideas: compile info in central node?
@@ -49,15 +48,11 @@ packageFinder mod=do
         packages <- findPackages mod
         setRState $ PackData $ list ++[(mod,packages)]
 -}
-backtrack :: Monad m => m a
-backtrack= return (error "backtrack should be used only in exceptions or backtracking")
 
-solver= do
-    return  []
-        `onException'`  
-           \(CompilationErrors errs)-> do 
-    -- mod <- getMailbox' ("new" ::String) :: TransIO  BS.ByteString
-    --deleteMailbox' ("new" :: String) (""::String)
+solver= return  [] `onException'`  solveErrors <> solver
+    where
+    solveErrors (CompilationErrors errs) = do 
+
                 case errs of
                  [] -> empty
                  CabalError _ _ _:_ -> backtrack
@@ -67,8 +62,7 @@ solver= do
                     liftIO $ print ("received",mod)
                     packages <-  findPackages (mod :: BS.ByteString)
                     newRState (1 :: Int)
-                    -- guardNotSolved
-                    --abduce <|> getMailbox' mod :: TransIO ()
+
                     pk <- return (packages !! 0) 
                            `onException'`  
                              \(CompilationErrors errs) -> do
@@ -99,20 +93,20 @@ solver= do
 
                                     tr ("EXC******************",packages !! (n-1), BS.takeWhile (/='/')mod')
 
-                                    if packages !! (n-1) /= BS.takeWhile (/='/')mod' then backtrack else do
+                                    if packages !! (n-1) /= BS.takeWhile (/='/') mod' then backtrack else do
                                         continue
                                         guard (n < length packages)<|> error ("exhausted modules for: " ++ up mod)
 
                                         setRState $ n +1
                                         return $ packages !! n
     
-                    (maybeLoadPackage mod pk) <> solver :: TransIO [BS.ByteString]
+                    (maybeLoadPackage mod pk) -- <> solver :: TransIO [BS.ByteString]
 
 
     
-guardNotSolved= do
-    Solved tf <- getRState <|> error "solved"
-    guard $ not tf
+-- guardNotSolved= do
+--     Solved tf <- getRState <|> error "solved"
+--     guard $ not tf
 
 type Dir= BS.ByteString
 
@@ -201,12 +195,12 @@ main2= keep $ do
     -- liftIO $ print r
 
     setState ("Transient.Internals" :: BS.ByteString)
-    -- r <- runCloud . callService hackageVersions $ up "transient-universe" :: TransIO Vers
+    -- r <- unCloud . callService hackageVersions $ up "transient-universe" :: TransIO Vers
     -- liftIO $ print ("hacageversion", r )
-    -- r <- runCloud . callService hackageVersions $ up "transient" :: TransIO Vers
+    -- r <- unCloud . callService hackageVersions $ up "transient" :: TransIO Vers
     -- liftIO $ print ("hacageversion2", r)
 
-    r <- mapM (runCloud . callService hackageVersions . up)["transient-universe", "transient"]
+    r <- mapM (unCloud . callService hackageVersions . up)["transient-universe", "transient"]
     liftIO $ print ("hacageversion2", r ::[Vers])
 
 newtype HTML= HTML BS.ByteString deriving (Show, Read)
@@ -221,34 +215,24 @@ main4= keep' $ do
                         \    Expected: ‘Data.Time.Clock.Internal.SystemTime’" 
     liftIO $ print r
 -}
-main3= keep' $ do
-    r <- withParseStream (return $ SMore "4\r\n\
-                \Wiki\r\n\
-                \5\r\n\
-                \pedia\r\n\
-                \E\r\n\
-                \ in\r\n\
-                \\r\n\
-                \chunks.\r\n\
-                \0\r\n\
-                \\r\n"
-                {-
-                \4\r\n\
-                \Wika\r\n\
-                \5\r\n\
-                \pedia\r\n\
-                \E\r\n\
-                \ in\r\n\
-                \\r\n\
-                \chunks.\r\n\
-                \0\r\n\
-                \\r\n" -})$  do
-                    r <-(dechunk |- many parseString)
-                    -- tDropUntilToken "\r\n"
-                    -- r2 <-  (dechunk |- many parseString)
-                    -- return  (r,r2)
-                    return r
-    liftIO $ print r
+-- main3= keep' $ do
+--     r <- withParseStream (return $ SMore "4\r\n\
+--                 \Wiki\r\n\
+--                 \5\r\n\
+--                 \pedia\r\n\
+--                 \E\r\n\
+--                 \ in\r\n\
+--                 \\r\n\
+--                 \chunks.\r\n\
+--                 \0\r\n\
+--                 \\r\n"
+    --             )$  do
+    --                 r <-(dechunk |- many parseString)
+    --                 -- tDropUntilToken "\r\n"
+    --                 -- r2 <-  (dechunk |- many parseString)
+    --                 -- return  (r,r2)
+    --                 return r
+    -- liftIO $ print r
 
 {-
 
@@ -305,33 +289,32 @@ main5= keep $ do
 
 
 
-main6= keep' $ do
-    f <- liftIO $ BS.readFile "sal"
-    r <- searchErr f
-    liftIO $ print r
+-- main6= keep' $ do
+--     f <- liftIO $ BS.readFile "sal"
+--     r <- searchErr f
+--     liftIO $ print r
 
 
 main= keep $ do
     option ("compile" :: String) "compile"
     file    <- input  (const  True) "file to compile: " 
-    ths     <- input' (Just 0) (const  True) "Number of jobs? (1) " ::  TransIO Int
-    options <- input' (Just "") (const True) "compilation options? "
+    options <- input' "" (const True) "compilation options? "
     liftIO $ print options
     setState $ Options (words options )
     setRState $ Solved False 
     build file 
 
 
+
 data CompilationError=  Module BS.ByteString | CompError BS.ByteString Int Int | CabalError BS.ByteString Int Int deriving (Show)
 
---newtype CompilationErrors= CompilationErrors [Either BS.ByteString (BS.ByteString,Int,Int)] deriving (Show)
 newtype CompilationErrors= CompilationErrors[CompilationError] deriving Show
 instance Exception CompilationErrors
 
 
 
 
-newtype Options=Options [String]
+newtype Options= Options [String]
 newtype Package= Package (M.Map String String)
 build :: String  -> TransIO ()
 build file = do
@@ -364,7 +347,7 @@ findPackages mod= do
         Pack packages <- callGoogle mod
         liftIO $ print ("callGoogle=",packages,mod)
         setState mod
-        packs <-runCloud $ mapM (callService' hackageVersions . up )  $ packages :: TransIO [Vers]
+        packs <-unCloud $ mapM (callService' hackageVersions . up )  $ packages :: TransIO [Vers]
         
         r <- return $ concatMap (\(Vers p) ->p)   packs
         liftIO $ print ("findPackages=",r) 
@@ -522,20 +505,21 @@ searchErr ers= catMaybes <$> do
 searchHackage :: BS.ByteString -> TransIO Vers
 searchHackage mod= do
         let (p1,p2)=  BS.span  (/= '.') mod
-        HPack packages <- runCloud $ callService hackage $ (up p1, up p2)
+        HPack packages <- unCloud $ callService hackage $ (up p1, up p2)
         liftIO $ putStr "package: " >> print  packages
         setState mod
         guard (not $ null packages) <|> error "no packages found"
-        runCloud $ callService hackageVersions $ up $ head packages :: TransIO Vers
+        unCloud $ callService hackageVersions $ up $ head packages :: TransIO Vers
     where
 
 
-    hackage= [("service","hackage"),("type","HTTP")
+    hackage= Service $ M.fromList
+            [("service","hackage"),("type","HTTP")
             ,("nodehost","hackage.haskell.org")
             ,("nodeport","80")
             ,("HTTPstr","GET /packages/search?terms=$1+$2 HTTP/1.1\r\nHost: $hostnode\r\n\r\n")]
 
-hackageVersions=
+hackageVersions= Service $ M.fromList
             [("service","hackageVersions"),("type","HTTP")
             ,("nodehost","hackage.haskell.org")
             ,("nodeport","80")
@@ -549,8 +533,9 @@ hackageVersions=
     --     Just x -> return x
 
 callGoogle :: BS.ByteString -> TransIO Pack
-callGoogle mod= runCloud $ callService google mod
-google= [("service","google"),("type","HTTP")
+callGoogle mod= unCloud $ callService google mod
+google= Service $ M.fromList
+        [("service","google"),("type","HTTP")
         ,("nodehost","www.google.com")
         ,("nodeport","80")
         ,("HTTPstr","GET /search?q=+$1+site:hackage.haskell.org HTTP/1.1\r\nHost: $hostnode\r\n\r\n" )]
@@ -603,7 +588,7 @@ newtype Pack= Pack [BS.ByteString] deriving (Read,Show,Typeable)
 instance Loggable Pack where
     serialize (Pack p)= undefined
     deserialize= do
-        Pack .reverse . sort . nub  <$>(many $ do
+      Pack .reverse . sort . nub  <$>(many $ do
         tDropUntilToken "hackage.haskell.org/package/" --"https://hackage.haskell.org/package/"
         --chainManyTill (BS.cons) anyChar (try $ tChar '&' <|> (do tChar '-' ; x <-anyChar ; guard $ isNumber x; return x)))
         r <- tTakeWhile (\c -> not (isNumber c) && c /= '&' && c /= '/') -- (\c -> c /= '/' && c/= '&' && c /= '\"')) -- (/= ' ')) -- (/=' '))

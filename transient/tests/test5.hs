@@ -93,6 +93,8 @@ withResource adquire release f= do
 
 tbracket adquire release = react  (bracket adquire release) (return ())
 
+atEnd = tbracket
+ 
 useResources rs= collect 2  rs  -- <|>  liftIO (forever (threadDelay maxBound) )
 
 main2=  keep $    job1

@@ -193,7 +193,7 @@ mkscell  name  expr= do
 
 
 scell :: JSString -> Expr Double -> Cell Double
-scell id  expr= Cell{ mk= \mv -> Widget $  do
+scell id  expr= Cell{ mk= \mv ->Widget $ do
                            r <- norender $ getParam (Just id) "text"  mv `fire` OnChange
                            mod <-  liftIO (readIORef rmodified) <|> return( M.empty)
                            liftIO $ writeIORef rmodified $ M.insert id  r mod
@@ -224,7 +224,7 @@ calc=  do
 
   setCloudState rvars  M.empty
 
-  onAll $ return() `onBack` (\(e::Loop) -> runCloud'  $ do localIO $ print "REMOVEVAR"; removeVar  e; local (forward Loop) )
+  onAll $ return() `onBack` (\(e::Loop) -> unCloud  $ do localIO $ print "REMOVEVAR"; removeVar  e; local (forward Loop) )
   exprs <- getCloudState rexprs <|> error "no exprs"
   onAll $ liftIO $ print "setCloudState rtries"
 

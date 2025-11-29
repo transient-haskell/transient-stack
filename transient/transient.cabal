@@ -1,5 +1,5 @@
 name: transient
-version: 0.7.0.0
+version: 0.9.0.2
 author: Alberto G. Corona
 extra-source-files:
     ChangeLog.md README.md
@@ -14,7 +14,7 @@ synopsis: composing programs with multithreading, events and distributed computi
 description: See <http://github.com/agocorona/transient>
              Distributed primitives are in the transient-universe package. Web primitives are in the axiom package.
 category: Control, Concurrency
-data-dir: ""
+
 
 flag debug
   description:  Enable debugging outputs
@@ -39,6 +39,9 @@ library
                      , mtl
                      , stm
                      , random
+                     , vector
+                     , TCache
+                     , signal
 
 
     exposed-modules: Transient.Backtrack
@@ -47,8 +50,9 @@ library
                      Transient.Mailboxes
                      Transient.Indeterminism
                      Transient.Internals
-                     Transient.Logged
                      Transient.Parse
+                     Transient.Console
+                     Transient.Loggable
 
 
 
@@ -56,8 +60,8 @@ library
     buildable: True
     default-language: Haskell2010
     hs-source-dirs: src .
-
-    ghc-options: 
+    ghc-options:   -O0 
+    cpp-options: 
 
     if flag(debug)
        cpp-options: -DDEBUG
@@ -78,9 +82,13 @@ test-suite test-transient
                      , bytestring    >= 0.10.6
 
                      -- libraries not bundled w/ GHC
+                     , transient == 0.9.0.2
                      , mtl
                      , stm
-                     , random == 1.1
+                     , random
+                     , vector
+                     , TCache
+                     , signal
 
 
 
@@ -90,4 +98,33 @@ test-suite test-transient
         base >4
     default-language: Haskell2010
     hs-source-dirs: tests src .
-    ghc-options:  -threaded -rtsopts
+    ghc-options:  -O0 
+
+executable test-transient1
+
+    if !impl(ghcjs >=0.1)
+        build-depends:
+                       base          >= 4.8.1  &&  < 5
+                     , containers    >= 0.5.6
+                     , transformers  >= 0.4.2
+                     , time          >= 1.5
+                     , directory     >= 1.2.2
+                     , bytestring    >= 0.10.6
+
+                     -- libraries not bundled w/ GHC
+                     , transient
+                     , mtl
+                     , stm
+                     , random
+                     , vector
+                     , TCache
+                     ,  signal
+
+
+
+    main-is: TestSuite.hs
+    build-depends:
+        base >4
+    default-language: Haskell2010
+    hs-source-dirs: tests src .
+    ghc-options: -prof -fprof-auto -rtsopts -with-rtsopts=-p

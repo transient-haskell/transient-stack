@@ -20,3 +20,4 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://get-ghcup.haskell.org | sh -s -
 
 # Configurar PATH de GHCup para Haskell
 ENV PATH="/root/.ghcup/bin:${PATH}"
+

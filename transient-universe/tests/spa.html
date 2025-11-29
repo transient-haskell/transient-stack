@@ -1,0 +1,860 @@
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Transient SPA Interface</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            margin: 0;
+            padding: 2em;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            color: #333;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+            overflow: hidden;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+        
+        .header {
+            background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+            color: white;
+            padding: 1rem;
+            text-align: center;
+            flex-shrink: 0;
+        }
+        
+        .header h1 {
+            margin: 0;
+            font-size: 1.8rem;
+            font-weight: 300;
+        }
+        
+        .content {
+            padding: 1rem;
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            min-height: 0;
+        }
+        
+        .url-input-section {
+            background: #f8f9fa;
+            padding: 1rem;
+            border-radius: 6px;
+            margin-bottom: 1rem;
+            flex-shrink: 0;
+        }
+        
+        .url-input-section label {
+            display: block;
+            margin-bottom: 0.5rem;
+            font-weight: 600;
+            color: #495057;
+            font-size: 0.9rem;
+        }
+        
+        .url-input {
+            display: flex;
+            gap: 0.75rem;
+            align-items: center;
+        }
+        
+        .url-input input[type="text"] {
+            flex: 1;
+            padding: 8px 12px;
+            border: 2px solid #e9ecef;
+            border-radius: 4px;
+            font-size: 14px;
+            transition: border-color 0.3s ease;
+        }
+        
+        .url-input input[type="text"]:focus {
+            outline: none;
+            border-color: #4facfe;
+            box-shadow: 0 0 0 2px rgba(79, 172, 254, 0.1);
+        }
+        
+        .url-input button {
+            padding: 8px 16px;
+            background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+            color: white;
+            border: none;
+            border-radius: 4px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.2s ease, box-shadow 0.2s ease;
+            white-space: nowrap;
+        }
+        
+        .url-input button:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 2px 8px rgba(79, 172, 254, 0.2);
+        }
+        
+        .panels {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr;
+            gap: 1rem;
+            flex: 1;
+            min-height: 200px; /* Ensure panels have enough vertical space for 3+ lines */
+        }
+        
+        .panel {
+            background: white;
+            border-radius: 6px;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.08);
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+        
+        .panel-header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 0.75rem 1rem;
+            font-weight: 600;
+            font-size: 0.9rem;
+            flex-shrink: 0;
+        }
+        
+        .panel-content {
+            padding: 1rem;
+            flex: 1;
+            overflow-y: auto;
+            min-height: 120px; /* Minimum height for 3 lines of content */
+        }
+        
+        .endpoint-form {
+            background: #f8f9fa;
+            padding: 1rem;
+            border-radius: 6px;
+            margin-bottom: 1rem;
+            border-left: 3px solid #4facfe;
+            flex-shrink: 0;
+        }
+        
+        .endpoint-form h3 {
+            margin-top: 0;
+            color: #495057;
+            font-size: 1rem;
+            margin-bottom: 0.75rem;
+        }
+        
+        .endpoint-form label {
+            display: block;
+            margin-bottom: 0.25rem;
+            font-weight: 600;
+            color: #495057;
+            font-size: 0.9rem;
+        }
+        
+        .endpoint-form input[type="text"] {
+            width: 100%;
+            padding: 6px 8px;
+            border: 1px solid #e9ecef;
+            border-radius: 4px;
+            font-size: 13px;
+            margin-bottom: 0.75rem;
+            transition: border-color 0.3s ease;
+        }
+        
+        .endpoint-form input[type="text"]:focus {
+            outline: none;
+            border-color: #4facfe;
+        }
+        
+        .endpoint-form input[type="text"]::placeholder {
+            color: #6c757d;
+            font-style: italic;
+            font-size: 12px;
+        }
+        
+        .endpoint-form button {
+            padding: 6px 12px;
+            background: #28a745;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            font-weight: 600;
+            font-size: 13px;
+            cursor: pointer;
+            transition: background-color 0.3s ease;
+        }
+        
+        .endpoint-form button:hover {
+            background: #218838;
+        }
+        
+        pre {
+            background: #f8f9fa;
+            padding: 1rem;
+            border-radius: 4px;
+            border: 1px solid #e9ecef;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+            font-size: 14px;
+            line-height: 1.4;
+            margin: 0;
+            min-height: 60px; /* Ensure at least 3 lines are visible */
+        }
+        
+        .request-link {
+            display: block;
+            padding: 0.75rem;
+            margin-bottom: 0.5rem;
+            background: #f8f9fa;
+            border-radius: 4px;
+            text-decoration: none;
+            color: #495057;
+            transition: background-color 0.3s ease;
+            border-left: 2px solid #4facfe;
+        }
+        
+        .request-link:hover {
+            background: #e9ecef;
+            text-decoration: none;
+            color: #495057;
+        }
+        
+        .request-link h3 {
+            margin: 0;
+            font-size: 0.9rem;
+            font-weight: 600;
+        }
+        
+        .request-link a {
+            color: #4facfe;
+            text-decoration: none;
+            font-weight: 500;
+            font-size: 0.9rem;
+        }
+        
+        .request-link a:hover {
+            text-decoration: underline;
+        }
+        
+        .no-actions {
+            text-align: center;
+            color: #6c757d;
+            font-style: italic;
+            padding: 1rem;
+            font-size: 0.9rem;
+        }
+        
+        .preview-url {
+            background: #e3f2fd;
+            padding: 0.75rem;
+            border-radius: 4px;
+            margin-top: 0.75rem;
+            border-left: 2px solid #2196f3;
+        }
+        
+        .preview-url h4 {
+            margin-top: 0;
+            color: #1976d2;
+            font-size: 0.9rem;
+            margin-bottom: 0.5rem;
+        }
+        
+        .preview-url pre {
+            background: white;
+            margin: 0;
+            font-weight: 500;
+            color: #1976d2;
+            font-size: 13px;
+            padding: 0.75rem;
+            line-height: 1.4;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="container">
+        <div class="header">
+            <h1>Transient Single Page Application Interface</h1>
+            <button onclick="window.showInfo()" style="background: rgba(255,255,255,0.2); border: 1px solid rgba(255,255,255,0.3); color: white; padding: 4px 8px; border-radius: 4px; cursor: pointer; margin-top: 0.5rem; font-size: 0.8rem;">ℹ️ Info</button>
+        </div>
+        
+        <div class="content">
+            <div class="url-input-section">
+                <label for="initialUrl">Endpoint URL or Curl Command:</label>
+                <div class="url-input">
+                    <input type="text" id="initialUrl" placeholder="Enter endpoint URL or paste curl command...">
+                    <button onclick="window.startFlow()">Start / Parse</button>
+                </div>
+            </div>
+
+            <div id="placeholder-container"></div>
+
+            <div class="panels">
+                <div class="panel">
+                    <div class="panel-header">response</div>
+                    <div class="panel-content">
+                        <pre id="response-json"></pre>
+                    </div>
+                </div>
+                <div class="panel">
+                    <div class="panel-header">followups</div>
+                    <div class="panel-content" id="request-forms"></div>
+                </div>
+                <div class="panel">
+                    <div class="panel-header">endpoints history</div>
+                    <div class="panel-content" id="endpoints-history"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="info-modal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 1000;">
+        <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: white; padding: 2rem; border-radius: 8px; max-width: 500px; width: 90%; max-height: 80vh; overflow-y: auto;">
+            <h2 style="margin-top: 0; color: #4facfe;">About This SPA</h2>
+            <p>This is a mockup of a single page application that makes use of the endpoints of your Transient applications. You can adapt and modify it for your needs.</p>
+            <p><strong>Key Features:</strong></p>
+            <ul>
+                <li>Interacts with Transient endpoints via RESTful JSON API</li>
+                <li>Supports curl command parsing for easy testing</li>
+                <li>Handles parameterized endpoints with automatic form generation</li>
+                <li>Maintains flow state through follow-up actions</li>
+            </ul>
+            <p><strong>Usage Notes:</strong></p>
+            <ul>
+                <li>You can alter the flow by memoizing the endpoint URLs and present them to the user whenever you need</li>
+                <li>You don't have to follow any particular order - the interface adapts to your endpoint structure</li>
+                <li>The JavaScript functions are well-documented for easy reuse and adaptation</li>
+            </ul>
+            <div style="background: #fff3cd; border-left: 3px solid #ffeeba; padding: 1rem; margin-top: 1rem; border-radius: 4px;">
+                <p style="margin-top: 0; font-weight: bold; color: #856404;">CORS Issue Note:</p>
+                <p style="margin: 0; font-size: 0.9rem;">If requests fail when running this file locally, it is likely due to your browser's CORS security policy. For local development, you may need to start your browser with web security disabled (e.g., <code>google-chrome --disable-web-security --user-data-dir="/tmp/chrome_dev"</code>).</p>
+            </div>
+            <button onclick="window.hideInfo()" style="background: #4facfe; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; margin-top: 1rem;">Close</button>
+        </div>
+    </div>
+
+    <script>
+        /**
+         * TRANSIENT SPA INTERFACE - JavaScript Documentation
+         */
+
+        let endpointsHistory = [];
+
+        // CORE FLOW AND FETCHING FUNCTIONS
+
+        // UI RENDERING AND HELPER FUNCTIONS
+
+        window.showInfo = function() {
+            try {
+                document.getElementById('info-modal').style.display = 'block';
+            } catch (e) {
+                console.error("showInfo failed:", e);
+                alert("Could not display info popup.");
+            }
+        }
+
+        window.hideInfo = function() {
+            document.getElementById('info-modal').style.display = 'none';
+        }
+
+        window.sendPostRequest = function(url) {
+            const bodyText = document.getElementById('post-body-editor').value;
+            let body;
+            try {
+                body = JSON.parse(bodyText);
+            } catch (e) {
+                body = bodyText;
+            }
+            
+            document.getElementById('placeholder-container').innerHTML = '';
+            fetchEndpoint(url, 'POST', body);
+        }
+
+        window.clearPlaceholder = function() {
+            document.getElementById('placeholder-container').innerHTML = '';
+        }
+
+        window.closeModal = function(element) {
+            element.closest('[style*="position: fixed"]').remove();
+        }
+
+        window.startFlow = function() {
+            const urlInput = document.getElementById('initialUrl').value;
+            if (!urlInput) return;
+
+            addToEndpointHistory(urlInput);
+
+            const placeholderContainer = document.getElementById('placeholder-container');
+            placeholderContainer.innerHTML = '';
+            document.getElementById('request-forms').innerHTML = '';
+
+            if (urlInput.trim().startsWith('curl ')) {
+                const parsed = parseCurlCommand(urlInput);
+                
+                if (parsed.method === 'POST' && parsed.body) {
+                    showPostRequestForm(parsed.url, parsed.body, parsed.headers);
+                } else {
+                    document.getElementById('initialUrl').value = parsed.url;
+                    window.startFlow(); // Recurse with just the URL
+                }
+                return;
+            }
+            
+            const url = urlInput;
+            const placeholders = url.match(/\$\w+/g);
+
+            if (placeholders) {
+                const form = document.createElement('form');
+                form.className = 'endpoint-form';
+                form.innerHTML = `<h3>Initial Parameters</h3>`;
+
+                const previewContainer = document.createElement('div');
+                previewContainer.style.marginTop = '1em';
+                previewContainer.innerHTML = '<h4>Generated Request URL:</h4>';
+                const previewElement = document.createElement('pre');
+                previewElement.id = 'generated-url-preview';
+                
+                form.oninput = () => {
+                    let previewUrl = url;
+                    let allFilled = true;
+                    
+                    // Solo seleccionar inputs que son parámetros (tienen name)
+                    const paramInputs = Array.from(form.querySelectorAll('input[type="text"]')).filter(input => input.name);
+                    console.log('Parameter inputs found:', paramInputs.length);
+                    
+                    paramInputs.forEach((input, index) => {
+                        const paramName = input.name;
+                        const value = input.value;
+                        const original = `$${paramName}`;
+                        const replacement = value ? encodeURIComponent(value) : original;
+                        
+                        console.log(`Parameter input ${index}:`, {paramName, value, original, replacement});
+                        
+                        const newUrl = previewUrl.replace(new RegExp(original.replace(/\$/g, '\\$'), 'g'), replacement);
+                        console.log('URL changed from:', previewUrl, 'to:', newUrl);
+                        previewUrl = newUrl;
+                        
+                        if (!value) {
+                            console.log(`Parameter ${paramName} is empty, setting allFilled to false`);
+                            allFilled = false;
+                        }
+                    });
+                    
+                    console.log('Final URL:', previewUrl, 'allFilled:', allFilled);
+                    previewElement.textContent = allFilled ? previewUrl : '';
+                    console.log('previewElement.textContent set to:', previewElement.textContent);
+                };
+
+                placeholders.forEach(placeholder => {
+                    const paramName = placeholder.substring(1);
+                    const input = document.createElement('input');
+                    input.type = 'text';
+                    input.name = paramName;
+                    input.placeholder = `enter a value for ${paramName}`;
+                    const label = document.createElement('label');
+                    label.textContent = paramName;
+                    label.appendChild(input);
+                    form.appendChild(label);
+                });
+
+                previewContainer.appendChild(previewElement);
+                form.appendChild(previewContainer);
+
+                const submitButton = document.createElement('button');
+                submitButton.type = 'button'; // Cambiar a type="button" para evitar submit automático
+                submitButton.textContent = 'Send Request';
+                submitButton.onclick = () => {
+                    const finalUrl = previewElement.textContent;
+                    console.log('Send Request button clicked, finalUrl:', finalUrl);
+                    
+                    if (finalUrl && !finalUrl.includes('$')) {
+                        console.log('Calling fetchEndpoint with:', finalUrl);
+                        // Limpiar el contenedor de placeholders antes de hacer la solicitud
+                        document.getElementById('placeholder-container').innerHTML = '';
+                        fetchEndpoint(finalUrl, 'GET');
+                    } else {
+                        console.log('Cannot send request - finalUrl:', finalUrl);
+                        alert('Please fill in all parameters.');
+                    }
+                };
+                form.appendChild(submitButton);
+
+                placeholderContainer.appendChild(form);
+                form.oninput();
+
+            } else {
+                fetchEndpoint(url, 'GET');
+            }
+        }
+
+        async function fetchEndpoint(url, method, body = null, headers = {}) {
+            console.log('fetchEndpoint called with:', {url, method, body, headers});
+            const responseJsonElement = document.getElementById('response-json');
+            try {
+                const options = {
+                    method: method,
+                    headers: {
+                        'Accept': 'application/json',
+                        'Content-Type': 'application/json',
+                        ...headers
+                    },
+                    mode: 'cors',
+                    credentials: 'include'
+                };
+                if (body) {
+                    options.body = typeof body === 'string' ? body : JSON.stringify(body);
+                }
+        
+                console.log('Making fetch request with options:', options);
+                const response = await fetch(url, options);
+                console.log('Fetch response received:', response.status, response.statusText);
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                const data = await response.json();
+                
+                let messages, requests;
+                
+                if (Array.isArray(data)) {
+                    if (data.length > 0 && data[0] && data[0].msg !== undefined) {
+                        messages = data.map(item => item.msg);
+                        requests = data.map(item => item.req);
+                    } else {
+                        messages = data;
+                        requests = null;
+                    }
+                } else if (data && data.msg !== undefined) {
+                    messages = [data.msg];
+                    requests = [data.req];
+                } else {
+                    messages = [data];
+                    requests = null;
+                }
+                
+                responseJsonElement.textContent = JSON.stringify(messages, null, 2);
+                renderRequestForms(requests);
+        
+            } catch (error) {
+                console.error('Fetch error:', error);
+                responseJsonElement.textContent = `An error occurred:\n\n${error.message}\n\nThis might be a CORS issue. Check the browser console for more details, or see the info popup (ℹ️) for advice on local development.`
+            }
+        }
+
+
+        function addToEndpointHistory(endpoint, requestInfo = null) {
+            let entry = { url: endpoint };
+            
+            if (endpoint.startsWith('curl ')) {
+                const urlMatch = endpoint.match(/(https?:\/\/[^\s]+)/);
+                if (urlMatch) {
+                    entry.url = urlMatch[1];
+                }
+            }
+            
+            // Si tenemos información completa de la solicitud, guardarla
+            if (requestInfo) {
+                entry.method = requestInfo.method || 'GET';
+                entry.body = requestInfo.body || null;
+                entry.headers = requestInfo.headers || null;
+            }
+            
+            // Evitar duplicados basados en URL
+            const existingIndex = endpointsHistory.findIndex(item => item.url === entry.url);
+            if (existingIndex === -1) {
+                endpointsHistory.push(entry);
+            } else {
+                // Actualizar la entrada existente con nueva información si está disponible
+                if (requestInfo) {
+                    endpointsHistory[existingIndex] = entry;
+                }
+            }
+            
+            renderEndpointsHistory();
+        }
+
+        function renderEndpointsHistory() {
+            const container = document.getElementById('endpoints-history');
+            container.innerHTML = '';
+
+            if (endpointsHistory.length === 0) {
+                container.innerHTML = '<div class="no-actions"><p>No endpoints visited yet</p></div>';
+                return;
+            }
+
+            endpointsHistory.forEach((entry, index) => {
+                const linkContainer = document.createElement('div');
+                linkContainer.className = 'request-link';
+                linkContainer.style.display = 'flex';
+                linkContainer.style.alignItems = 'center';
+                linkContainer.style.marginBottom = '0.5rem';
+                linkContainer.style.padding = '0.5rem';
+                linkContainer.style.background = '#f8f9fa';
+                linkContainer.style.borderRadius = '4px';
+
+                const endpointText = document.createElement('span');
+                endpointText.textContent = extractEndpointName(entry.url);
+                endpointText.style.flex = '1';
+                endpointText.style.fontFamily = 'monospace';
+                endpointText.style.fontSize = '0.9rem';
+                
+                const executeButton = document.createElement('button');
+                executeButton.textContent = 'Edit';
+                executeButton.style.marginLeft = '0.5rem';
+                executeButton.style.padding = '2px 8px';
+                executeButton.style.fontSize = '0.8rem';
+                executeButton.style.background = '#4facfe';
+                executeButton.style.color = 'white';
+                executeButton.style.border = 'none';
+                executeButton.style.borderRadius = '3px';
+                executeButton.style.cursor = 'pointer';
+                
+                executeButton.onclick = () => {
+                    // Simplemente poner la URL en el campo inicial y llamar a startFlow
+                    document.getElementById('initialUrl').value = entry.url;
+                    window.startFlow();
+                    window.scrollTo({ top: 0, behavior: 'smooth' });
+                    return false;
+                };
+
+                linkContainer.appendChild(endpointText);
+                linkContainer.appendChild(executeButton);
+                container.appendChild(linkContainer);
+            });
+        }
+        
+        function parseCurlCommand(curl) {
+            const result = {
+                url: '',
+                method: 'GET',
+                headers: {},
+                body: null
+            };
+
+            const urlMatch = curl.match(/(https?:\/\/[^\s]+)/);
+            if (urlMatch) {
+                result.url = urlMatch[0];
+            }
+
+            const methodMatch = curl.match(/-X\s*"?(\w+)"?/);
+            if (methodMatch) {
+                result.method = methodMatch[1].toUpperCase();
+            }
+
+            const headerRegex = /-H\s*'([^']*)'/g;
+            let headerMatch;
+            while ((headerMatch = headerRegex.exec(curl)) !== null) {
+                const [key, value] = headerMatch[1].split(/:\s*/, 2);
+                result.headers[key] = value;
+            }
+
+            const bodyMatch = curl.match(/-d\s*'([^']*)'|"-d\s*\"([^\"]*)\"/);
+            if (bodyMatch) {
+                result.body = bodyMatch[1] || bodyMatch[2];
+                if (result.method === 'GET') {
+                    result.method = 'POST';
+                }
+            }
+            
+            return result;
+        }
+
+        function extractEndpointName(url) {
+            try {
+                const urlObj = new URL(url);
+                const pathSegments = urlObj.pathname.split('/').filter(segment => segment);
+                return pathSegments.length > 0 ? pathSegments[0] : urlObj.pathname;
+            } catch (e) {
+                const parts = url.split('/').filter(segment => segment);
+                return parts.length > 1 ? parts[parts.length - 2] : url;
+            }
+        }
+
+        function renderRequestForms(req) {
+            const container = document.getElementById('request-forms');
+            container.innerHTML = '';
+
+            if (!req) {
+                container.innerHTML = '<div class="no-actions"><p>Flow complete. No further actions.</p></div>';
+                return;
+            }
+
+            const requests = Array.isArray(req) ? req : [req];
+
+            requests.forEach((request, index) => {
+                if (!request) return;
+                
+                let requestUrl, requestMethod = 'GET', requestBody = null, requestHeaders = null, fullRequestInfo = null;
+                
+                if (typeof request === 'string') {
+                    requestUrl = request;
+                    fullRequestInfo = { method: 'GET', url: requestUrl };
+                } else if (request.requrl) {
+                    requestUrl = request.requrl;
+                    requestMethod = request.reqtype || 'GET';
+                    requestBody = request.reqbody || null;
+                    requestHeaders = request.reqheaders || null;
+                    fullRequestInfo = { method: requestMethod, url: requestUrl, headers: requestHeaders, body: requestBody };
+                } else if (request.url) {
+                    requestUrl = request.url;
+                    requestMethod = request.method || 'GET';
+                    requestBody = request.body || null;
+                    requestHeaders = request.headers || null;
+                    fullRequestInfo = { method: requestMethod, url: requestUrl, headers: requestHeaders, body: requestBody };
+                } else {
+                    return;
+                }
+                
+                addToEndpointHistory(requestUrl, fullRequestInfo);
+                
+                const linkContainer = document.createElement('div');
+                linkContainer.className = 'request-link';
+                linkContainer.style.display = 'flex';
+                linkContainer.style.alignItems = 'center';
+                linkContainer.style.marginBottom = '0.5rem';
+                linkContainer.style.padding = '0.5rem';
+                linkContainer.style.background = '#f8f9fa';
+                linkContainer.style.borderRadius = '4px';
+
+                const endpointText = document.createElement('span');
+                endpointText.textContent = extractEndpointName(requestUrl);
+                endpointText.style.flex = '1';
+                endpointText.style.fontFamily = 'monospace';
+                endpointText.style.fontSize = '0.9rem';
+                
+                const actionButton = document.createElement('button');
+                actionButton.textContent = requestMethod === 'POST' ? 'Edit POST' : 'Execute';
+                actionButton.style.marginLeft = '0.5rem';
+                actionButton.style.padding = '2px 8px';
+                actionButton.style.fontSize = '0.8rem';
+                actionButton.style.background = '#4facfe';
+                actionButton.style.color = 'white';
+                actionButton.style.border = 'none';
+                actionButton.style.borderRadius = '3px';
+                actionButton.style.cursor = 'pointer';
+                
+                actionButton.onclick = () => {
+                    if (requestMethod === 'POST' && requestBody) {
+                        showPostRequestForm(requestUrl, requestBody, requestHeaders);
+                    } else {
+                        document.getElementById('initialUrl').value = requestUrl;
+                        window.startFlow();
+                    }
+                    window.scrollTo({ top: 0, behavior: 'smooth' });
+                    return false;
+                };
+                
+                const detailsButton = document.createElement('button');
+                detailsButton.textContent = 'Details';
+                detailsButton.style.marginLeft = '0.5rem';
+                detailsButton.style.padding = '2px 6px';
+                detailsButton.style.fontSize = '0.7rem';
+                detailsButton.style.background = '#6c757d';
+                detailsButton.style.color = 'white';
+                detailsButton.style.border = 'none';
+                detailsButton.style.borderRadius = '3px';
+                detailsButton.style.cursor = 'pointer';
+                detailsButton.onclick = () => {
+                    showRequestDetails(fullRequestInfo);
+                };
+
+                linkContainer.appendChild(endpointText);
+                linkContainer.appendChild(actionButton);
+                linkContainer.appendChild(detailsButton);
+                container.appendChild(linkContainer);
+            });
+        }
+
+        function showPostRequestForm(url, body, headers = null) {
+            const placeholderContainer = document.getElementById('placeholder-container');
+            placeholderContainer.innerHTML = '';
+            
+            const formContainer = document.createElement('div');
+            formContainer.className = 'post-request-form';
+            formContainer.style.marginBottom = '2rem';
+            formContainer.style.padding = '1rem';
+            formContainer.style.background = '#f8f9fa';
+            formContainer.style.borderRadius = '4px';
+            formContainer.style.border = '1px solid #e9ecef';
+            
+            formContainer.innerHTML = `
+                <h3>POST Request to: ${url}</h3>
+                <p><strong>Request Body:</strong></p>
+                <textarea id="post-body-editor" style="width: 100%; height: 120px; font-family: monospace; margin-bottom: 1rem;">${typeof body === 'string' ? body : JSON.stringify(body, null, 2)}</textarea>
+                <div>
+                    <button onclick="window.sendPostRequest('${url}')" style="padding: 0.5rem 1rem; background: #4facfe; color: white; border: none; border-radius: 4px; cursor: pointer;">Send POST Request</button>
+                    <button onclick="window.clearPlaceholder()" style="padding: 0.5rem 1rem; background: #6c757d; color: white; border: none; border-radius: 4px; cursor: pointer; margin-left: 0.5rem;">Cancel</button>
+                </div>
+            `;
+            
+            placeholderContainer.appendChild(formContainer);
+            document.getElementById('request-forms').innerHTML = '';
+        }
+
+        function showRequestDetails(requestInfo) {
+            const modalOverlay = document.createElement('div');
+            modalOverlay.style.position = 'fixed';
+            modalOverlay.style.top = '0';
+            modalOverlay.style.left = '0';
+            modalOverlay.style.width = '100%';
+            modalOverlay.style.height = '100%';
+            modalOverlay.style.backgroundColor = 'rgba(0,0,0,0.7)';
+            modalOverlay.style.display = 'flex';
+            modalOverlay.style.justifyContent = 'center';
+            modalOverlay.style.alignItems = 'center';
+            modalOverlay.style.zIndex = '1000';
+            
+            const modalContent = document.createElement('div');
+            modalContent.style.background = 'white';
+            modalContent.style.padding = '2rem';
+            modalContent.style.borderRadius = '8px';
+            modalContent.style.maxWidth = '80%';
+            modalContent.style.maxHeight = '80%';
+            modalContent.style.overflow = 'auto';
+            
+            modalContent.innerHTML = `
+                <h3>Complete Request Details</h3>
+                <pre style="background: #f8f9fa; padding: 1rem; border-radius: 4px; overflow: auto; max-height: 300px;">
+${JSON.stringify(requestInfo, null, 2)}
+                </pre>
+                <div style="margin-top: 1rem; text-align: right;">
+                    <button onclick="window.closeModal(this)"
+                            style="padding: 0.5rem 1rem; background: #6c757d; color: white; border: none; border-radius: 4px; cursor: pointer;">
+                        Close
+                    </button>
+                </div>
+            `;
+            
+            modalOverlay.appendChild(modalContent);
+            document.body.appendChild(modalOverlay);
+            
+            modalOverlay.onclick = (e) => {
+                if (e.target === modalOverlay) {
+                    modalOverlay.remove();
+                }
+            };
+        }
+
+
+        // INITIALIZATION
+        document.addEventListener('DOMContentLoaded', () => {
+            const urlParams = new URLSearchParams(window.location.search);
+            const endpoint = urlParams.get('endpoint');
+            if (endpoint) {
+                document.getElementById('initialUrl').value = endpoint;
+                window.startFlow();
+            }
+            renderEndpointsHistory();
+        });
+    </script>
+
+</body>
+</html>

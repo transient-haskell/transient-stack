@@ -43,7 +43,7 @@ import System.IO.Unsafe
 
 main= do
      let numNodes = 3
-     keep' . runCloud $ do
+     keep' . unCloud $ do
               runTestNodes [2000 .. 2000 + numNodes - 1]
               r <- mclustered $ local $ do
                       ev <- newEVar

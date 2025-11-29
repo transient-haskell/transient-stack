@@ -152,11 +152,11 @@ waitEventsEnd mx= waitEvents mx `onException'` \(SomeException _) -> empty
 optionAt= do
   local $ option  "at" "execute in another node"
   node <- local $ do
-    host <- input' (Just "localhost") (const True) "hostname of the node. (Must be reachable, default:localhost)? "
+    host <- input' "localhost" (const True) "hostname of the node. (Must be reachable, default:localhost)? "
     port <- input  (const True) "port of the node? "
     liftIO $ createNode host port
   do
-    localIO $ writeIORef lineprocessmode False
+    -- localIO $ writeIORef lineprocessmode False
 
     inp <- local $ inputf False "input1" (show node)  Nothing (const True)  
     (runAt node  $ local $ do 

@@ -1,5 +1,5 @@
 name: transient-universe
-version: 0.6.0.0
+version: 0.7.0.4
 cabal-version: >=1.10
 build-type: Simple
 license: MIT
@@ -26,7 +26,7 @@ library
     
     if !impl(ghcjs >=0.1)
         exposed-modules:
-            Transient.Move.Services.Executor
+            -- Transient.Move.Services.Executor
 
     if impl(ghcjs >=0.1)
         build-depends:
@@ -41,13 +41,15 @@ library
         build-depends:
             base64-bytestring,
             HTTP -any,
+            mime-types,
             TCache >= 0.12,
             case-insensitive -any,
             directory -any,
             filepath -any,
             hashable -any,
+            hashtables,
             iproute -any,
-            network >=2.8.0.0 && < 3.0.0.0,
+            network >= 3.0,
             network-info -any,
             network-uri -any,
             vector -any,
@@ -55,33 +57,34 @@ library
             process -any,
             random -any,
             text -any,
-            aeson -any
+            aeson -any,
+            data-default,
+            syb
             --primitive < 0.6.4.0
             -- entropy <= 0.3.6, 
     build-depends:
-            old-time
-            
+            transient,
+
+            old-time            
 
 
     exposed-modules:
         Transient.Move
         Transient.MapReduce
+        Transient.Move.Defs
         Transient.Move.Internals
+        Transient.Move.Logged
         Transient.Move.Utils
+        Transient.Move.JSON
+        Transient.Move.Web
         Transient.Move.Services
-        Transient.Move.PubSub
-    build-depends:
-        base >4 && <5,
-        bytestring -any,
-        containers,
-        mtl -any,
-        stm -any,
-        time -any,
-        transformers -any,
-        transient >= 0.7.0.0
+        Transient.Move.IPFS
+        Transient.Move.Job
+        -- Transient.Move.PubSub
+
     default-language: Haskell2010
     hs-source-dirs: src .
-    ghc-options:  
+    ghc-options:  -w -O0 
 
 executable monitorService
 
@@ -89,7 +92,7 @@ executable monitorService
         build-depends:
             transformers -any,
             containers,
-            transient >= 0.7.0.0,
+            transient,
             transient-universe,
             process,
             directory,
@@ -97,73 +100,74 @@ executable monitorService
             
         hs-source-dirs: app/server/Transient/Move/Services
         main-is: MonitorService.hs
-    else
-        hs-source-dirs: app/client/Transient/Move/Services
-        main-is: void.hs
-    build-depends:
-        base >4 && <5
+    -- else
+    --     hs-source-dirs: app/client/Transient/Move/Services
+    --     main-is: void.hs
+    -- build-depends:
+    --     base >4 && <5
 
 
     default-language: Haskell2010
-    ghc-options:  -threaded -rtsopts
+    ghc-options: -w  -O0 
     
 
-executable executor
-    if !impl(ghcjs >=0.1)
-        build-depends:
-            containers,
-            transformers -any,
-            transient >= 0.7.0.0,
-            transient-universe,
-            process >= 1.6.4.0,
-            directory,
-            bytestring, 
-            aeson,
-            time
+-- executable executor
+--     if !impl(ghcjs >=0.1)
+--         build-depends:
+--             containers,
+--             transformers -any,
+--             transient >= 0.9.0.0,
+--             transient-universe,
+--             process >= 1.6.4.0,
+--             directory,
+--             bytestring, 
+--             aeson,
+--             time
             
-        hs-source-dirs: app/server/Transient/Move/Services
-        main-is: executor.hs
-    else
-        hs-source-dirs: app/client/Transient/Move/Services
-        main-is: void.hs
-    build-depends:
-        base >4 && <5
+--         hs-source-dirs: app/server/Transient/Move/Services
+--         main-is: executor.hs
+--     else
+--         hs-source-dirs: app/client/Transient/Move/Services
+--         main-is: void.hs
+--     build-depends:
+--         base >4 && <5
 
 
-    default-language: Haskell2010
-    ghc-options:  -threaded -rtsopts
+--     default-language: Haskell2010
+--     ghc-options:  -threaded -rtsopts
 
-executable controlServices
-    if !impl(ghcjs >=0.1)
-        build-depends:
-            containers,
-            transformers -any,
-            transient >= 0.7.0.0,
-            transient-universe,
-            process >= 1.6.4.0,
-            directory,
-            bytestring, 
-            aeson,
-            time
+-- executable controlServices
+--     if !impl(ghcjs >=0.1)
+--         build-depends:
+--             containers,
+--             transformers -any,
+--             transient >= 0.8.0.0,
+--             transient-universe,
+--             process >= 1.6.4.0,
+--             directory,
+--             bytestring, 
+--             aeson,
+--             time
             
-        hs-source-dirs: app/server/Transient/Move/Services
-        main-is: controlServices.hs
-    else
-        hs-source-dirs: app/client/Transient/Move/Services
-        main-is: void.hs
-    build-depends:
-        base >4 && <5
+--         hs-source-dirs: app/server/Transient/Move/Services
+--         main-is: controlServices.hs
+--     else
+--         hs-source-dirs: app/client/Transient/Move/Services
+--         main-is: void.hs
+--     build-depends:
+--         base >4 && <5
 
 
-    default-language: Haskell2010
-    ghc-options:  -threaded -rtsopts
+--     default-language: Haskell2010
+--     ghc-options:  -threaded -rtsopts
 
 executable test-transient1
 
     if !impl(ghcjs >=0.1)
         build-depends:
             mtl -any,
-            transient >= 0.7.0.0,
+            transient,
+            transient-universe,
             random -any,
             text -any,
             containers -any,
@@ -172,7 +176,8 @@ executable test-transient1
             stm -any,
             base64-bytestring,
             HTTP -any,
-            network >=2.8.0.0 && < 3.0.0.0,
+            mime-types,
+            network >= 3.0,
             transformers -any,
             process -any,
             network-info -any,
@@ -185,7 +190,9 @@ executable test-transient1
             case-insensitive -any,
             hashable -any,
             aeson,
-            old-time
+            old-time,
+            data-default
+            
             
             
     main-is: TestSuite.hs
@@ -193,7 +200,7 @@ executable test-transient1
         base >4
     default-language: Haskell2010
     hs-source-dirs: tests src .
-    ghc-options: -threaded -rtsopts -fno-ignore-asserts
+    ghc-options: -w -O0 
 
 
 test-suite test-transient
@@ -201,7 +208,8 @@ test-suite test-transient
     if !impl(ghcjs >=0.1)
         build-depends:
             mtl -any,
-            transient >= 0.7.0.0,
+            transient,
+            transient-universe,
             random -any,
             text -any,
             containers -any,
@@ -210,7 +218,8 @@ test-suite test-transient
             stm -any,
             base64-bytestring,
             HTTP -any,
-            network >=2.8.0.0 && < 3.0.0.0,
+            mime-types,
+            network >= 3.0,
             transformers -any,
             process -any,
             network-info -any,
@@ -223,11 +232,63 @@ test-suite test-transient
             case-insensitive -any,
             hashable -any,
             aeson,
-            old-time
+            old-time,
+            data-default
+
     type: exitcode-stdio-1.0
     main-is: TestSuite.hs
     build-depends:
         base >4
     default-language: Haskell2010
     hs-source-dirs: tests src .
-    ghc-options: -threaded -rtsopts -fno-ignore-asserts
+    ghc-options: -w -O0
+
+-- executable test5
+--         build-depends:
+--             containers,
+--             transformers -any,
+--             transient >= 0.8.0.0,
+--             transient-universe,
+--             process >= 1.6.4.0,
+--             directory,
+--             bytestring, 
+--             aeson,
+--             time,
+--             mtl,
+--             vector,
+--             TCache,
+--             data-default,
+--             syb,
+--             random
+            
+--         hs-source-dirs: tests
+--         main-is: test5.hs
+    
+--         build-depends:
+--             base >4 && <5
+
+-- executable flow
+--         build-depends:
+--             containers,
+--             transformers -any,
+--             transient >= 0.8.0.0,
+--             transient-universe,
+--             process >= 1.6.4.0,
+--             directory,
+--             bytestring, 
+--             aeson,
+--             time,
+--             mtl,
+--             vector,
+--             TCache,
+--             old-time,
+--             syb,
+--             data-default
+            
+            
+--         hs-source-dirs: tests
+--         main-is: flow.hs
+    
+--         build-depends:
+--             base >4 && <5
+--         ghc-options: -w -O0

@@ -267,7 +267,7 @@ fail3requestNew=  do
     localIO $ print ("LINE=",r :: String )
 
     where
-    retry6 retries (CloudException node _ _ )= runCloud $ do
+    retry6 retries (CloudException node _ _ _)= unCloud $ do
          localIO $ print ("tried to execute in", node)
          n <- onAll $ liftIO $ atomicModifyIORef retries $ \n -> (n+1,n+1)
          localIO $ print ("NUMBER OF RETRIES",n)
@@ -315,7 +315,7 @@ many1=  do
         return ()
         
         where
-        retry1 n' retries (CloudException node _ _ )=  do
+        retry1 n' retries (CloudException node _ _ _)=  do
              liftIO $ print ("tried to execute in", node)
              n <- liftIO $ atomicModifyIORef retries $ \n -> (n+1,n+1)
              liftIO $ print ("NUMBER OF RETRIES",n)

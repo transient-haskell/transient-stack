@@ -18,7 +18,7 @@ rmaster = unsafePerformIO $ newIORef Nothing
 heartbeatTimeout= 10000000 :: Int
 
 
-cunique= local . unique . runCloud
+cunique= local . unique . unCloud
 
 heartBeat raftNodes = cunique $ do
    localIO $ do
@@ -38,7 +38,7 @@ raft raftNodes  request= do
 process raftNodes request= do
   let half=  length raftNodes` div` 2 :: Int
   resps <- local $ collect' half 0.1 (fromIntegral heartbeatTimeout)
-             $  runCloud $ cluster raftNodes request
+             $  unCloud $ cluster raftNodes request
 
   if length resps > half then return resps else empty
 
@@ -72,7 +72,7 @@ runRaftNodes ports= do
 
 
 
-main= keep $ runCloud $ do
+main= keep $ unCloud $ do
      runRaftNodes [4000..4005]
      raftNodes <- local getNodes
      local $ option "input" "input"

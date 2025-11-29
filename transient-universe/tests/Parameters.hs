@@ -28,7 +28,7 @@ parameters= unsafePerformIO $  newIORef  $ M.empty
 -- | Parameters can be changed during the execution and are read by the application to modify his behaviour. `optimize`change the parameters in order
 -- to maximize an expression defined by the programmer. this expression may include latency, troughput, memory usage etc.
 --
--- To optimize the function, it uses a monte-carlo method that `optimize` a unser defined expression that 
+-- To optimize the function, it uses a monte-carlo method that `optimize` a user defined expression that 
 -- evaluate the performance.
 --
 -- Parameters can change buffer sizes, number of threads, number of instances. It depends on the programmer.
@@ -60,7 +60,7 @@ getParameterNR n v= do
 -- The next iteration will start as soon as the previous has finished so it is
 -- necessary to introduce a delay which may be variable and subject also to optimizations
 -- Take into acount that `getParameter` abort any previous subsequent task in order to execute the continuation witht he new parameter.
--- `optimize` will reset the parameter if the perturbed parameter vale gives less performance than the previous 
+-- `optimize` will reset the parameter if the perturbated parameter vale gives less performance than the previous 
 
 -- > main= keep $  optimizeProcess <|> process
 -- > optimizeProcess= optimize $ do
@@ -112,7 +112,7 @@ optimizeProcess= optimize $ liftIO $ do
     t' <- getCPUTime
     let ticks= fromIntegral $ (t'-t) `div`  1000000000
     nthreads <- getParameterNR "number of threads" 20
-    let rr=  (r' - r)  `div`  ticks `div` (nthreads +1)
+    let rr=  (r' - r) `div`  ticks  `div` (nthreads +1)
     print ("counter",r'-r,ticks,rr, nthreads, rr)
     return $  rr
 

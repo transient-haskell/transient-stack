@@ -16,6 +16,7 @@
 module Transient.TLS(initTLS, initTLS') where
 #ifndef ghcjs_HOST_OS
 import           Transient.Internals
+import           Transient.Move.Defs
 import           Transient.Move.Internals
 import           Transient.Backtrack
 import           Transient.Parse
@@ -119,7 +120,7 @@ maybeClientTLSHandshake hostname sock input = do
         --modifyState $ \(Just c) -> Just  c{connData= Just $ TLSNode2Node $ unsafeCoerce ctx}
         conn <- getSData <|> error "TLS: no socket connection"
         liftIO $ writeIORef (connData conn) $  Just $ TLSNode2Node $ unsafeCoerce ctx
-        tctx <- makeParseContext $ TLS.recvData ctx  >>= return . BL.fromChunks . (:[])
+        tctx <- makeParseContextFromStream $ TLS.recvData ctx  >>= return . BL.fromChunks . (:[])
         -- let tctx= ParseContext (TLS.recvData ctx >>= return . SMore . BL.fromChunks . (:[]))
         --                        mempty (unsafePerformIO $ newIORef False)
         modify $ \st -> st{parseContext= tctx}

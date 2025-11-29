@@ -12,30 +12,37 @@
 --
 -----------------------------------------------------------------------------
 {-# LANGUAGE CPP, ScopedTypeVariables #-}
-module Transient.Move.Utils (initNode,initNodeDef, initNodeServ, inputNodes, simpleWebApp, initWebApp
-, onServer, onBrowser, atServer, atBrowser, runTestNodes, showURL)
+module Transient.Move.Utils (initNode,initNodes, initWebApp,initNodeDef, initNodeServ, addService, inputNodes
+, onServer, onBrowser, atServer, atBrowser, showURL, getURL)
  where
 
 --import Transient.Base
 import Transient.Internals
-import Transient.Logged
+import Transient.Move.Logged
+import Transient.Console
 import Transient.Move.Internals
+import Transient.Move.Defs
+import Transient.Move.Web
 import Control.Applicative
+import Control.Monad
 import Control.Monad.State
 import Data.IORef
 import System.Environment
 import System.IO.Error
 import Data.Typeable
 import Data.List((\\), isPrefixOf)
-import qualified Data.ByteString.Char8 as BS
+import qualified Data.ByteString.Lazy.Char8 as BS
 import Control.Exception hiding(onException)
 import System.IO.Unsafe
+import System.Directory.Internal.Prelude (exitFailure)
 
+{-# NOINLINE rretry #-}
+rretry :: IORef Bool
 rretry= unsafePerformIO $ newIORef False
 
 -- | ask in the console for the port number and initializes a node in the port specified
 -- It needs the application to be initialized with `keep` to get input from the user.
--- the port can be entered in the command line with "<program> -p  start/<PORT>"
+-- the port can be entered in the command line with "<program> -p  start/<HOSTNAME>/<PORT>"
 --
 -- A node is also a web server that send to the browser the program if it has been
 -- compiled to JavaScript with ghcjs. `initNode` also initializes the web nodes.
@@ -60,20 +67,23 @@ rretry= unsafePerformIO $ newIORef False
 --
 initNode :: Loggable a => Cloud a -> TransIO a
 initNode app= do
-   node <- getNodeParams 
-
+   node <- getNodeParams
    rport <- liftIO $ newIORef $ nodePort node
    node' <- return node `onException'` ( \(e :: IOException) -> do
-             if (ioeGetErrorString e ==  "resource busy") 
+             if ioeGetErrorString e ==  "resource busy"
               then do
                  liftIO $ putStr "Port busy: " >> print (nodePort node)
                  retry <- liftIO $ readIORef rretry
-                 if retry then do liftIO $ print "retrying with next port" ;continue else empty
+                 if retry then do liftIO $ print "retrying with next port" ;continue 
+                          else exitLeft $ show (nodePort node) <>": port busy"
+                 delNodes [node]
                  port <- liftIO $ atomicModifyIORef rport $ \p -> (p+1,p+1)
                  return node{nodePort= port}
-                 
-              else return node )
-   return () !> ("NODE", node')
+
+              else backtrack)
+   ns <- getNodes    
+   tr ("nodes",ns)      
+   liftIO $ print ("trying port", node')
    initWebApp node' app
 
 
@@ -85,37 +95,54 @@ getNodeParams  =
               empty
 #else
         do
-          oneThread $ option "start" "re/start node"
+         --  oneThread $ 
+          option "start" "re/start node"
 
-          host <- input' (Just "localhost") (const True) "hostname of this node. (Must be reachable, default:localhost)? "
-          retry <-input' (Just "n") (== "retry") "if you want to retry with port+1 when fail, write 'retry': "
+          host  <-input' "localhost" (const True) "hostname of this node. (Must be reachable, default:localhost)? "
+          retry <-input' "noretry" (== "retry") "if you want to retry with higher port numbers when the port is busy, write 'retry'"
           when (retry == "retry") $ liftIO $ writeIORef rretry True
           port <- input  (const True) "port to listen? "
-          liftIO $ createNode host port
+          createNode host port
          <|> getCookie
+
     where
+
+
     getCookie= do
-        if isBrowserInstance then return() else do
-          option "cookie" "set the cookie"
-          c <- input (const True) "cookie: "
-          liftIO $ writeIORef rcookie  c
-        empty
+      if isBrowserInstance then return () else do
+         option "cookie" "set the cookie"
+         c <- input (const True) "cookie: "
+         liftIO $ writeIORef rcookie  c
+      empty
 #endif
-    
+
 initNodeDef :: Loggable a => String -> Int -> Cloud a -> TransIO a
 initNodeDef host port app= do
-   node <- def <|> getNodeParams -- <|> maybeRetry
+   node <- def <|> getNodeParams
    initWebApp node app
    where
    def= do
         args <- liftIO  getArgs
         if null args then liftIO $ createNode host port else empty
 
+-- Add a service
+addService :: Service -> Cloud ()
+addService s= local $ do
+   node <- getMyNode
+   let node'= node{nodeServices= s:nodeServices node}
+   setMyNode node'
+   nodes <- getNodes
+   setNodes $ node' : tail nodes
+
+
+
+
+
 initNodeServ :: Loggable a => Service -> String -> Int -> Cloud a -> TransIO a
 initNodeServ services host port app= do
    node <- def <|> getNodeParams
    let node'= node{nodeServices=[services]}
-   initWebApp node' $  app
+   initWebApp node' app
    where
    def= do
         args <- liftIO  getArgs
@@ -124,33 +151,34 @@ initNodeServ services host port app= do
 -- | ask for nodes to be added to the list of known nodes. it also ask to connect to the node to get
 -- his list of known nodes. It returns empty.
 -- to input a node, enter "add" then the host and the port, the service description (if any) and "y" or "n"
--- to either connect to that node and synchronize their lists of nodes or not.
+-- to either connect to that node and synchronize their lists of nodes with the new node or not. 
 --
 -- A typical sequence of initiation of an application that includes `initNode` and `inputNodes` is:
 --
--- > program -p start/host/8000/add/host2/8001/n/add/host3/8005/y
+-- > program -p start/host/8000/add/host2/8001/n/add/host3/8005/n
 --
 -- "start/host/8000" is read by `initNode`. The rest is initiated by `inputNodes` in this case two nodes are added.
 -- the first of the two is not connected to synchronize their list of nodes. The second does.
-inputNodes :: Cloud empty
-inputNodes= onServer $ do 
-  local $ abduce >> labelState (BS.pack "inputNodes")
+inputNodes :: Loggable empty => Cloud empty
+inputNodes= onServer $ do
+  r <- onAll genNewId
+  tr ("inputNodes",r)
+--   local $ abduce >> labelState (BS.pack "inputNodes")
   listNodes <|> addNew
+
   where
   addNew= do
-          local $ do
-                 option "add"  "add a new node"
-                 return ()
+          local $ option "add"  "add a new node"
           host      <- local $ do
                           r <- input (const True) "Hostname of the node (none): "
                           if r ==  "" then stop else return r
 
           port      <- local $ input (const True) "port? "
-          serv      <- local $ nodeServices <$> getMyNode 
-          services  <- local $ input' (Just serv) (const True) ("services? ("++ show serv ++ ") ")
+          serv      <- local $ nodeServices <$> getMyNode
+          services  <- local $ input' serv (const True) ("services? ("++ show serv ++ ") ")
 
           connectit <- local $ input (\x -> x=="y" || x== "n") "connect to the node to interchange node lists? (n) "
-            
+
 
           nnode <- localIO $ createNodeServ host port  services
           if connectit== "y" then connect'  nnode
@@ -159,34 +187,22 @@ inputNodes= onServer $ do
                                addNodes [nnode]
           empty
 
-  listNodes=  do
-          local $ option "nodes" "list nodes"
-          local $ do
-             nodes <- getNodes
-             liftIO $ putStrLn "list of nodes known in this node:"
-             liftIO $ mapM  (\(i,n) -> do putStr (show i); putChar('\t'); print n) $ zip [0..] nodes
-          empty
-     
--- | show the URL that may be called to access that functionality within a program 
-showURL= onAll$ do 
-       Closure closRemote  <- getSData <|>  return (Closure 0 )--get myclosure
-       --get remoteclosure
-       log <- getLog --get path 
-       n <- getMyNode
-       liftIO $ do
-           putStr  "'http://"
-           putStr $ nodeHost n
-           putStr ":"
-           putStr $show $ nodePort n
-           putStr "/"
-           putStr $ show 0
-           putStr "/"
-           putStr $ show  closRemote
-           putStr "/"
-           putStr $ show $ fulLog log
-           putStrLn "'"
+  listNodes= local $  do
+         option "nodes" "list nodes"
+         nodes <- getNodes
+         liftIO $ putStrLn "list of nodes known in this node:"
+         liftIO $ mapM  (\(i,n) -> do putStr (show i); putChar '\t'; print n) $ zip [0..] nodes
+         empty
 
-       
+-- | init the node and- the list of available nodes before calling the distributed computation.AdditionalOperators
+-- `getNodes` bring the list of nodes. The computation is executed when the option "go" is selected either in the console
+-- or the command lone
+initNodes :: Loggable a => Cloud a -> TransIO a
+initNodes proc= initNode $ inputNodes <|> do
+   local $ option "go" "execute the distributed computation"
+   proc
+
+
 -- | executes the application in the server and the Web browser.
 -- the browser must point to http://hostname:port where port is the first parameter.
 -- It creates a wormhole to the server.
@@ -209,14 +225,17 @@ simpleWebApp port app = do
    keep $ initWebApp node app
    return ()
 
+
+
+
 -- | use this instead of simpleWebApp when you have to do some initializations in the server prior to the
 -- initialization of the web server
-initWebApp :: Loggable a => Node -> Cloud a -> TransIO a
+initWebApp :: (Loggable a) => Node -> Cloud a -> TransIO a
 initWebApp node app=  do
-
     conn <- defConnection
     liftIO $ writeIORef (myNode conn)  node
     setNodes  [node]
+    setState conn
     serverNode <- getWebServerNode  :: TransIO Node
     mynode     <- if isBrowserInstance
                     then  do
@@ -224,20 +243,28 @@ initWebApp node app=  do
                         return node
                     else return serverNode
 
-    runCloud' $ do
-        listen mynode <|> return()
-        serverNode <- onAll getWebServerNode
-        wormhole serverNode  app
-   
+    do
 
-         
+        (listen mynode >> empty) <|>  firstEndpoint <|> return()
+        
+        abduce  -- to allow onFinish and onWaitthreads to fire
+
+        unCloud $ wormhole serverNode $ do 
+#ifndef ghcjs_HOST_OS
+            local optionEndpoints <|> 
+#else
+              local empty  <|>
+#endif
+              app
+
+
+{-
 -- | run N nodes (N ports to listen) in the same program. For testing purposes.
--- It add them to the list of known nodes, so it is possible to perform `clustered` operations with them.
 runTestNodes ports= do
     nodes <- onAll $ mapM (\p -> liftIO $ createNode "localhost" p) ports
     onAll $ addNodes nodes
-    foldl (<|>) empty (map listen1 nodes) <|> return()
-    where 
+    foldl (<|>) empty (map listen1 nodes) <|> return ()
+    where
     listen1 n= do
       listen n
       onAll $ do
@@ -246,3 +273,4 @@ runTestNodes ports= do
         conn <- getState <|> error "runTestNodes error"
         liftIO $ writeIORef (myNode conn)  n
 
+-}
