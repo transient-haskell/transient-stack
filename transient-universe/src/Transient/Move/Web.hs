@@ -15,7 +15,8 @@
 
 #ifndef ghcjs_HOST_OS
 
-module Transient.Move.Web  (minput,moutput,public,published,showURL,ToHTTPReq(..),POSTData(..),HTTPReq(..),
+
+module Transient.Move.Web  (minput,moutput,public,published,showURL,getURL,ToHTTPReq(..),POSTData(..),HTTPReq(..),
 AsJSON(..),getSessionState,setSessionState,newSessionState,rawHTTP,serializeToJSON,deserializeJSON,
  IsCommand,optionEndpoints,getCookie,setCookie) where
 
@@ -95,19 +96,23 @@ instance Semigroup HTTPReq where
       (c <> c')
       (d <> d')
 
--- Multiple input. It accept a console option as well as  a GET or POST web request at the point where it 
--- is inserted
+-- | Multiple input. It accepts a console option as well as a GET or POST web request at the point where it
+-- is inserted.
 --
--- minput is fully composable with other minput and/or other transient primitives
+-- `minput` is fully composable with other `minput` calls and/or other transient primitives.
 --
 -- The first parameter is the identifier of the endpoint. It is used to identify the endpoint in the URL as well
--- as in the console. 
+-- as in the console.
 --
--- The second parameter is the message that will be sent to the client. It could be a string, or any JSON object
+-- The second parameter is the message that will be sent to the client. It can be a string, or any JSON object.
 --
--- It is the main way for interacting with users and programs which do not share the same base code.
--- Otherwise a transient program distributed among different nodes, including web nodes, would use `runAt` and other
--- distributed primitives
+-- It is the main way to interact with users and programs which do not share the same base code.
+-- Otherwise, a transient program distributed among different nodes, including web nodes, would use `runAt` and other
+-- distributed primitives..
+--
+-- Since minput can be composed with itself and other transient primitives, the expression could wait for more than one minput request/response
+--
+-- For example  `minput "term1" "enter "
 minput :: (Loggable a, ToHTTPReq a,ToJSON b,Typeable b) => String -> b -> Cloud a
 minput ident msg' = response
   where
@@ -124,7 +129,7 @@ minput ident msg' = response
         ctx@(Context idcontext _) <-  do
           mc <- getData
           case mc of
-            Nothing -> return $ Context 0 (M.empty)
+            Nothing -> return $ Context 0 M.empty
             Just (Context 0 x) ->  do
               ctx <- Context <$>  (unCloud $ logged genSessionId) <*> return x
               tr ("CONTEXR from 0",ctx)
@@ -184,7 +189,7 @@ minput ident msg' = response
           setState ctx
 
           r <-
-            if typeOf response /= typeOf (undefined :: Cloud ())
+            if typeOf response /= typeOf (ofType :: Cloud ())
               then do
                 inputParse deserialize $ BS.unpack msg
 
@@ -223,7 +228,7 @@ minput ident msg' = response
             -- ty <- liftIO $ readIORef $ connData conn
             case cdata of
               Just Self -> do
-                receiveIt conn (Just $ BC.pack ident) idSession
+                endpointWait  (Just $ BC.pack ident) idSession
                 delState IsCommand
                 tr "SELF XXX"
 
@@ -252,7 +257,7 @@ minput ident msg' = response
                 -- store the msg and the url and the alias
                 -- se puede simular solo con los datos actuales
 
-                receiveIt conn (Just $ BC.pack ident) idSession
+                endpointWait  (Just $ BC.pack ident) idSession
                 tr "after receive"
                 delState IsCommand
                 delRState InitSendSequence
@@ -260,7 +265,7 @@ minput ident msg' = response
           else do
             -- the program has just restarted and recovered and this endpoint is active waiting for requests.
             -- Perhaps a request waked up that endpoint
-            receiveIt conn (Just $ BC.pack ident) idSession
+            endpointWait  (Just $ BC.pack ident) idSession
             delState IsCommand
             tr ("else",ident)
             -- logged will deserialize the request parameters
@@ -365,33 +370,53 @@ published k=  local $ do
       return ()
 
 newtype Endpoints= Endpoints (M.Map BS.ByteString HTTPReq)
-getEndpoints= getRState <|> error "NO ENDPOINT state: use optionEndpoints" -- return (Endpoints M.empty)
+getEndpoints= getRState <|> return (Endpoints M.empty) -- |error "NO ENDPOINT state: use optionEndpoints" -- return (Endpoints M.empty)
 
 -- | show the URL that may be called to access that functionality within a program 
-showURL= do
-       mprev <- getState
-       (sess,clos) <- case mprev of
-                         Nothing -> return (0,"0")
-                         Just prev -> liftIO $ do
-                           mprevClos <- atomically $ readDBRef prev
-                           case mprevClos of
-                            Just prevClos -> return $ (localSession prevClos,localClos prevClos)
-                            Nothing -> return (0,"0")
+showURL= getURL >>= liftIO . print
 
-       log <- getLog --get path 
-       n <- getMyNode
-       liftIO $ do
-           putStr  "'http://"
-           putStr $ nodeHost n
-           putStr ":"
-           putStr $show $ nodePort n
-           putStr "/"
-           putStr $ show clos
-           putStr "/S"
-           putStr $ show sess
-           putStr "/"
-           BS.putStr $  toLazyByteString $ partLog log
-           putStrLn "'"
+-- | Get the URL string for the current computation location
+getURL :: TransIO String
+getURL = do
+  mprev <- getState
+  (sess, clos) <- case mprev of
+    Nothing -> return (0, BC.pack "0")
+    Just prev -> liftIO $ do
+      mprevClos <- atomically $ readDBRef prev
+      case mprevClos of
+        Just prevClos -> return (localSession prevClos, localClos prevClos)
+        Nothing -> return (0, BC.pack "0")
+  
+  log <- getLog  -- get path
+  n <- getMyNode
+  let logBytes = toLazyByteString (partLog log)
+  return $ concat
+    [ "http://"
+    , nodeHost n
+    , ":"
+    , show (nodePort n)
+    , "/"
+    , BC.unpack clos
+    , "/S"
+    , show sess
+    , "/"
+    , BC.unpack (BL.toStrict logBytes)
+    ]
+ 
+ -- | extract the URL of a data object within the computation.
+ -- if the log has been saved and the computation completed, the computation will be restored to give his value
+-- cloudRef x= do
+--   prevsession <- local getSession
+--   r <- onAll getURL
+--   local $ return x
+--   session <- local getSession
+--   guard $ session== prevsession
+--   return r
+  
+  
+
+
+
 
 {-
 give URL for a new session or the current session?
@@ -410,13 +435,13 @@ optionEndpoints = do
 
   let murl = M.lookup ident  endpts
   case murl of
-    Nothing ->  liftIO $ do putStr $ "No such endpoint: " ; print ident
-    Just req -> printURL req
+    Nothing ->  liftIO $ do putStr  "No such endpoint: " ; print ident
+    Just req -> liftIO $ putStrLn "\nYou can invoque this endpoint with:" >> printURL req
   empty
   where
-  printURL req= liftIO $ putStrLn $ "\n" <> (BS.unpack $ ("curl " <>
+  printURL req= liftIO $ putStrLn $ "\n" <> BS.unpack (("curl " <>
                     (if reqtype req== GET then mempty else ("-H 'content-type: application/json' -XPOST -d " <>
-                       "\"" <> reqbody req) <> "\" ")) <> requrl req )
+                       "\"" <> reqbody req) <> "\" ")) <> requrl req)
 
 -- | add the chunked fragments of the beguinning '[', the comma separator and the end ']' of the JSON packet for a set of `minput` statements
 -- that are sent in parallel (for example, with the alterenative operator)
@@ -522,7 +547,7 @@ output= sendFragment . encode
 
 -- | It is  used as the last response in a flow
 moutput :: ToJSON a => a -> Cloud ()
-moutput= local . output
+moutput = local . output
 
 --  | Send a JSON fragment
 sendFragment :: BS.ByteString -> TransIO ()
@@ -536,6 +561,8 @@ sendFragment tosend = do
                 -- for HTTP 1.0 no chunked encoding:
                 -- msend conn $ str "HTTP/1.0 200 OK\r\nContent-Length: " <> str(show l) <> str "\r\n\r\n" <> tosend
                 -- mclose conn
+
+                
   checkComposeJSON conn
   msend conn $ toHex l <> "\r\n" <> tosend <> "\r\n"
 
@@ -560,7 +587,7 @@ newSessionState x = local $ do
   setState ctx
 
 -- | set a session value of the given type that last across all the Web navigation of a given user
-setSessionState :: (MonadState EventF m, Loggable a) => a -> m ()
+setSessionState :: (MonadState TranShip m, Loggable a) => a -> m ()
 setSessionState x = do
   modifyData'
     (\(Context n map) -> Context n $ M.insert (show $ typeOf x) (toLazyByteString $ serialize x) map)
