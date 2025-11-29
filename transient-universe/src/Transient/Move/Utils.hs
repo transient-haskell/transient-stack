@@ -12,8 +12,8 @@
 --
 -----------------------------------------------------------------------------
 {-# LANGUAGE CPP, ScopedTypeVariables #-}
-module Transient.Move.Utils (initNode,initNodeDef, initNodeServ, addService, inputNodes, simpleWebApp, initWebApp
-, onServer, onBrowser, atServer, atBrowser, showURL)
+module Transient.Move.Utils (initNode,initNodes, initWebApp,initNodeDef, initNodeServ, addService, inputNodes
+, onServer, onBrowser, atServer, atBrowser, showURL, getURL)
  where
 
 --import Transient.Base
@@ -24,6 +24,7 @@ import Transient.Move.Internals
 import Transient.Move.Defs
 import Transient.Move.Web
 import Control.Applicative
+import Control.Monad
 import Control.Monad.State
 import Data.IORef
 import System.Environment
@@ -41,7 +42,7 @@ rretry= unsafePerformIO $ newIORef False
 
 -- | ask in the console for the port number and initializes a node in the port specified
 -- It needs the application to be initialized with `keep` to get input from the user.
--- the port can be entered in the command line with "<program> -p  start/<PORT>"
+-- the port can be entered in the command line with "<program> -p  start/<HOSTNAME>/<PORT>"
 --
 -- A node is also a web server that send to the browser the program if it has been
 -- compiled to JavaScript with ghcjs. `initNode` also initializes the web nodes.
@@ -69,16 +70,20 @@ initNode app= do
    node <- getNodeParams
    rport <- liftIO $ newIORef $ nodePort node
    node' <- return node `onException'` ( \(e :: IOException) -> do
-             if (ioeGetErrorString e ==  "resource busy")
+             if ioeGetErrorString e ==  "resource busy"
               then do
                  liftIO $ putStr "Port busy: " >> print (nodePort node)
                  retry <- liftIO $ readIORef rretry
-                 if retry then do liftIO $ print "retrying with next port" ;continue else exitLeft $ show (nodePort node) <>": port busy"
+                 if retry then do liftIO $ print "retrying with next port" ;continue 
+                          else exitLeft $ show (nodePort node) <>": port busy"
+                 delNodes [node]
                  port <- liftIO $ atomicModifyIORef rport $ \p -> (p+1,p+1)
                  return node{nodePort= port}
 
-              else return node )
-   return () -- !> ("NODE", node')
+              else backtrack)
+   ns <- getNodes    
+   tr ("nodes",ns)      
+   liftIO $ print ("trying port", node')
    initWebApp node' app
 
 
@@ -94,10 +99,10 @@ getNodeParams  =
           option "start" "re/start node"
 
           host  <-input' "localhost" (const True) "hostname of this node. (Must be reachable, default:localhost)? "
-          retry <-input' "n" (== "retry") "if you want to retry with higher port numbers when the port is busy, write 'retry'"
+          retry <-input' "noretry" (== "retry") "if you want to retry with higher port numbers when the port is busy, write 'retry'"
           when (retry == "retry") $ liftIO $ writeIORef rretry True
           port <- input  (const True) "port to listen? "
-          liftIO $ createNode host port
+          createNode host port
          <|> getCookie
 
     where
@@ -137,7 +142,7 @@ initNodeServ :: Loggable a => Service -> String -> Int -> Cloud a -> TransIO a
 initNodeServ services host port app= do
    node <- def <|> getNodeParams
    let node'= node{nodeServices=[services]}
-   initWebApp node' $  app
+   initWebApp node' app
    where
    def= do
         args <- liftIO  getArgs
@@ -146,16 +151,18 @@ initNodeServ services host port app= do
 -- | ask for nodes to be added to the list of known nodes. it also ask to connect to the node to get
 -- his list of known nodes. It returns empty.
 -- to input a node, enter "add" then the host and the port, the service description (if any) and "y" or "n"
--- to either connect to that node and synchronize their lists of nodes or not.
+-- to either connect to that node and synchronize their lists of nodes with the new node or not. 
 --
 -- A typical sequence of initiation of an application that includes `initNode` and `inputNodes` is:
 --
--- > program -p start/host/8000/add/host2/8001/n/add/host3/8005/y
+-- > program -p start/host/8000/add/host2/8001/n/add/host3/8005/n
 --
 -- "start/host/8000" is read by `initNode`. The rest is initiated by `inputNodes` in this case two nodes are added.
 -- the first of the two is not connected to synchronize their list of nodes. The second does.
 inputNodes :: Loggable empty => Cloud empty
 inputNodes= onServer $ do
+  r <- onAll genNewId
+  tr ("inputNodes",r)
 --   local $ abduce >> labelState (BS.pack "inputNodes")
   listNodes <|> addNew
 
@@ -187,7 +194,13 @@ inputNodes= onServer $ do
          liftIO $ mapM  (\(i,n) -> do putStr (show i); putChar '\t'; print n) $ zip [0..] nodes
          empty
 
-
+-- | init the node and- the list of available nodes before calling the distributed computation.AdditionalOperators
+-- `getNodes` bring the list of nodes. The computation is executed when the option "go" is selected either in the console
+-- or the command lone
+initNodes :: Loggable a => Cloud a -> TransIO a
+initNodes proc= initNode $ inputNodes <|> do
+   local $ option "go" "execute the distributed computation"
+   proc
 
 
 -- | executes the application in the server and the Web browser.
@@ -230,23 +243,20 @@ initWebApp node app=  do
                         return node
                     else return serverNode
 
-    unCloud $ do
-        listen mynode <|> listenContsFromNodes <|> return ()
-      --   onAll $ topState >>= showThreads
+    do
 
-        serverNode <- onAll getWebServerNode
+        (listen mynode >> empty) <|>  firstEndpoint <|> return()
+        
+        abduce  -- to allow onFinish and onWaitthreads to fire
 
-        onAll abduce  -- to allow onFinish and onWaitthreads to fire
-        wormhole' serverNode $ do
-
+        unCloud $ wormhole serverNode $ do 
 #ifndef ghcjs_HOST_OS
-                 local  optionEndpoints
+            local optionEndpoints <|> 
 #else
-                 local empty
-#endif   
-                   <|> app -- ;(minput "" "end" :: Cloud())
-      where
-      listenContsFromNodes= onAll $ firstCont  >>= receive1
+              local empty  <|>
+#endif
+              app
+
 
 {-
 -- | run N nodes (N ports to listen) in the same program. For testing purposes.

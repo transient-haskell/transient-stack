@@ -256,8 +256,8 @@ findInNodes service =  do
       head1 x= head x
       hasService  service node= not $ null $ filter (\s -> lookupService "service" s== lookupService "service" service) $ nodeServices node
 
--- >>> :t  head $ nodeServices(undefined :: Node) 
--- head $ nodeServices(undefined :: Node) :: (Package, Program)
+-- >>> :t  head $ nodeServices(ofType :: Node) 
+-- head $ nodeServices(ofType :: Node) :: (Package, Program)
 --
 
 -- nodeServices :: Node -> Service
@@ -331,11 +331,10 @@ authorizeService ident service=   do
      identsBanned       <- liftIO $ readIORef ridentsBanned
      servicesBanned     <- liftIO $ readIORef rServicesBanned
 
-     return $ if (null friends || ident `elem` friends)
+     return $ (null friends || ident `elem` friends)
         && (null services || service `elem` services)
         && (null identsBanned || ident `notElem` identsBanned)
         && (null servicesBanned || service `notElem` servicesBanned)
-      then True  else False
   where
   notElem a b= not $ elem a b
 
@@ -345,8 +344,8 @@ runEmbeddedService servname serv =  do
    node <- localIO $ do
           port <- freePort
           createNodeServ "localhost" (fromIntegral port) [servname]
-   listen node
-   wormhole' (notused 4) $ loggedc $ do
+   onAll $ listen node
+   wormhole (notused 4) $ loggedc $ do
       x <- local $ return (notused 0)
       r <- onAll $ unCloud (serv x) <** modify (\s -> s{execMode= Remote}) --setData Remote
       local $ return r
@@ -397,8 +396,8 @@ killRemoteJob node thid= callService' node (KillRemoteJob thid)
 
 killRemoteJobIt :: KillRemoteJob -> Cloud ()
 killRemoteJobIt (KillRemoteJob thid)= local $ do
-      st <- findState match =<<  topState
-      liftIO $ killBranch' st
+      st <- head <$> (findState match =<<  topState)
+      liftIO $ killBranch st
       where
       match st= do
          (_,lab) <-liftIO $ readIORef $ labelth st
@@ -455,7 +454,7 @@ callService' node params =  loggedc $ do
           setData emptyLog
           local $ return ()
 
-          r <- wormhole' node $  do
+          r <- wormhole node $  do
 
              local $ return  params
 
@@ -563,7 +562,7 @@ runService' servDesc defPort servAll proc=  do
 
        onAll $ liftIO $ writeIORef selfServices servAll
        serverNode <- initNodeServ servDesc
-       wormhole' serverNode $ inputNodes <|> proc >> empty >> return ()
+       wormhole serverNode $ inputNodes <|> proc >> empty >> return ()
       --  return () !> "ENTER SERVALL"
        onAll $ symbol $ BS.pack "e/"
        servAll
@@ -608,9 +607,8 @@ runService' servDesc defPort servAll proc=  do
 
           inputAuthorizations <|> return ()
 
-          -- listen mynode <|> return ()
-          listen mynode <|> onAll (firstCont >>= receive1) <|> return ()
-          onAll $ liftIO $ print "LISTEN"
+          onAll $ listen mynode <|> firstEndpoint
+          -- onAll $ liftIO $ print "LISTEN"
           return serverNode
 
           where
@@ -751,7 +749,7 @@ controlNodeService node=  send <|> receive
             liftIO $ putStr "Controlling node " >> print nname
             -- liftIO $ writeIORef  lineprocessmode True
             oldprompt <- liftIO $ atomicModifyIORef rprompt $ \oldp -> ( nname++ "> ",oldp)
-            cbs <- liftIO $ atomicModifyIORef rcb $ \cbs -> ([],cbs) -- remove local node options
+            cbs <- liftIO $ modifyMVar rcallbacks $ \cbs -> return ([],cbs) -- remove local node options
             setState (oldprompt,cbs)                                             -- store them
 
 
@@ -766,7 +764,7 @@ controlNodeService node=  send <|> receive
             -- liftIO $ writeIORef lineprocessmode False
             liftIO $ putStrLn "end controlling remote node"
             (oldprompt,cbs) <- getState
-            liftIO $ writeIORef rcb cbs -- restore local node options
+            liftIO $ modifyMVar rcallbacks $ const $ return (cbs,()) -- restore local node options
             liftIO $ writeIORef rprompt  oldprompt
 
       log = do
@@ -800,7 +798,10 @@ controlNode node= send <|> receive
             liftIO $ putStr "Controlling node " >> print nname
 
             oldprompt <- liftIO $ atomicModifyIORef rprompt $ \oldp -> ( nname++ "> ",oldp)
-            cbs <- liftIO $ atomicModifyIORef rcb $ \cbs -> ([],cbs) -- remove local node options
+            -- TODO FIX
+            liftIO $ modifyMVar rcallbacks $ \all -> return (filter consoleCallback all,())
+
+            cbs <- liftIO $ modifyMVar rcallbacks $ \cbs -> return ([],cbs) -- remove local node options
             setState (oldprompt,cbs)                                             -- store them
 
 
@@ -814,7 +815,7 @@ controlNode node= send <|> receive
             -- liftIO $ writeIORef lineprocessmode False
             liftIO $ putStrLn "end controlling remote node"
             (oldprompt,cbs) <- getState
-            liftIO $ writeIORef rcb cbs -- restore local node options
+            liftIO $ modifyMVar rcallbacks $ const $ return (cbs,()) -- restore local node options
             liftIO $ writeIORef rprompt  oldprompt
 
       log = do
@@ -824,7 +825,7 @@ controlNode node= send <|> receive
 
                  putStr "\n\n------------- LOG OF NODE: " >> print node >> putStrLn ""
                  mapM_ BS.putStrLn $ BS.lines log
-                 putStrLn   "------------- END OF LOG"
+                 putStrLn "------------- END OF LOG"
 
       inputs= do
           line <- local $ inputf False "input"  "" Nothing (const True)
@@ -1002,7 +1003,7 @@ replace a b s@(x:xs) =
 
 show1 :: (Show a, Typeable a) => a -> String
 show1 x | typeOf x == typeOf (""::String)= unsafeCoerce x
-        | typeOf x == typeOf (undefined::BS.ByteString)= BS.unpack $ unsafeCoerce x
+        | typeOf x == typeOf (ofType ::BS.ByteString)= BS.unpack $ unsafeCoerce x
           | otherwise= show x
 
 #endif
