@@ -56,6 +56,7 @@ import System.IO
 import Data.ByteString.Builder
 
 import GHC.Generics
+import Data.Hashable
 
 #ifndef ghcjs_HOST_OS
 -- import Network
@@ -98,13 +99,11 @@ import qualified GHCJS.Foreign.Callback                 as CB
 
 #endif
 
-
+import Control.Monad
 import Control.Monad.State
 import Control.Monad.Fail
 import Control.Exception hiding (onException,try)
 import Data.Maybe
---import Data.Hashable
-
 
 import System.IO.Unsafe
 import Control.Concurrent.STM as STM
@@ -112,7 +111,7 @@ import Control.Concurrent.MVar
 
 import Data.Monoid
 import qualified Data.Map as M
-import Data.List (partition,union,(\\),length, nubBy,isPrefixOf) -- (nub,(\\),intersperse, find, union, length, partition)
+import Data.List (partition, nub, union,(\\),length, nubBy,isPrefixOf) -- (nub,(\\),intersperse, find, union, length, partition)
 --import qualified Data.List(length)
 import Data.IORef
 
@@ -198,6 +197,9 @@ instance Applicative Cloud where
               return $ f x
 
 -}
+
+instance Read Connection where
+  readsPrec _ str = let [(x,r')] = reads str in [(fromJust . fst . lazy . runTransient $ mconnect x,r')]
 
 type UPassword = BS.ByteString
 
@@ -320,13 +322,13 @@ runCloudIO' (Cloud mx) = keep' mx
 onAll :: TransIO a -> Cloud a
 onAll = Cloud
 
--- | only executes if the result is demanded. It is useful when the conputation result is only used in
--- the remote node, but it is not serializable. All the state changes executed in the argument with
--- `setData` `setState` etc. are lost
-lazy :: TransIO a -> Cloud a
-lazy mx = onAll $ do
-  st <- get
-  return $ fromJust $ unsafePerformIO $ runStateT (runTrans mx) st >>= return . fst
+-- -- | only executes if the result is demanded. It is useful when the conputation result is only used in
+-- -- the remote node, but it is not serializable. All the state changes executed in the argument with
+-- -- `setData` `setState` etc. are lost
+-- lazy :: TransIO a -> Cloud a
+-- lazy mx = onAll $ do
+--   st <- get
+--   return $ fromJust $ unsafePerformIO $ runStateT (runTrans mx) st >>= return . fst
 
 -- | executes a non-serilizable action in the remote node, whose result can be used by subsequent remote invocations
 -- fixRemote mx = do
@@ -339,16 +341,13 @@ lazy mx = onAll $ do
 -- -- Also, non serializable statements before it will not be re-executed
 -- fixClosure = atRemote $ local $ async $ return ()
 
--- log the result a cloud computation. Like `loogged`, this erases all the log produced by computations
+-- | Log the result a cloud computation. Like `loogged`, this erases all the log produced by computations
 -- inside and substitute it for that single result when the computation is completed.
 loggedc :: Loggable a => Cloud a -> Cloud a
 loggedc (Cloud mx) = logged mx
 
 
-
-
--- | the `Cloud` monad has no `MonadIO` instance since the value must be `Loggable`
--- to work right. `lliftIO= local . liftIO`
+-- | the `Cloud` monad has no `MonadIO` instance since the value must be `Loggable` and MonadIO can not express this contraint. `localIO= local . liftIO`
 localIO :: Loggable a => IO a -> Cloud a
 localIO = local . liftIO
 
@@ -356,31 +355,42 @@ localIO = local . liftIO
 beamTo :: Node -> Cloud ()
 beamTo node = wormhole node teleport
 
--- | execute in the remote node a processMessage with the same execution state
+-- | execute in the remote node with the same execution state and continues in the local node
 forkTo :: Node -> Cloud ()
 forkTo node = beamTo node <|> return ()
 
--- | open a wormhole to another node and executes an action on it.
--- currently by default it keep open the connection to receive additional requests
--- and responses (streaming)
+-- | Opens a wormhole to another node and executes an action there. The result is returned to the calling node
+-- By default, the connection remains open for streaming additional requests and responses.
 callTo :: Loggable a => Node -> Cloud a -> Cloud a
-callTo node remoteProc = wormhole' node $ atRemote remoteProc
+callTo node remoteProc = wormhole node $ atRemote remoteProc
 
--- lift a computation, which accept a TransIO parameter, like, for example, `threads`, `collect` etc, to the Cloud monad
+-- | When distributed computations execute concurrent actions, this prefix is needed. This happens in applicatives or `(<>)`. Distributed concurrent computation should be sandboxed and his results should be stored.
+concurrent :: Loggable a => Cloud a -> Cloud a
+concurrent cl=   do
+    onAll $ endpoint Nothing
+    local $ sandboxData (ofType :: PrevClos)
+                      $ sandboxData (ofType ::M.Map Int (IORef (DBRef LocalClosure)))
+                      $ unCloud cl
+
+-- NOTE: erroneous since it deletes the data before the return of a remote invocation it must be after it
+-- concurrent= error "CONCURRENT: pending"
+
+-- | used for lifting primitives that are concurrent in the TransIO monad to perform
+-- concurrent distributed computations like `collect`
+liftConcurrent :: Loggable b => (TransIO a -> TransIO b) -> Cloud a -> Cloud b
+liftConcurrent f x= concurrent $ liftCloud f x
+
+-- | lift a TransIO computation which accept a TransIO parameter, like, for example, `threads` etc, to the Cloud monad. Just in case this ope
 liftCloud :: Loggable b => (TransIO a -> TransIO b) -> Cloud a -> Cloud b
-liftCloud f x = local $ f (unCloud x)
+liftCloud f (Cloud x) = Cloud $ do
+    log <- getLog
+    if not $ recover log then f x else x >> empty
+    -- do NOT work without concurrent in concurrent since any furter invocation to any endpoint in the remote node will be sliently stopped
+    -- because the emptyu after x. it is necessary to filter any endpoint withing the expression.
 
--- #ifndef ghcjs_HOST_OS
 
--- -- | A connectionless version of callTo for long running remote calls
--- callTo' :: (Show a, Read a, Typeable a) => Node -> Cloud a -> Cloud a
--- callTo' node remoteProc = do
---   mynode <- local $ getNodes >>= return . Prelude.head
---   beamTo node
---   r <- remoteProc
---   beamTo mynode
---   return r
--- #endif
+
+
 
 -- | Within a connection to a node opened by `wormhole`, it run the computation in the remote node and return
 -- the result back to the original node.
@@ -414,7 +424,7 @@ atRemote proc =  do
 -- currently by default it keep open the connection to receive additional requests
 -- and responses (streaming)
 runAt :: Loggable a => Node -> Cloud a -> Cloud a
-runAt node remoteProc = wormhole' node $ atRemote remoteProc
+runAt node remoteProc = wormhole node $ atRemote remoteProc
 
 -- | run a single thread with that action for each connection created.
 -- When the same action is re-executed within that connection, all the threads generated by the previous execution
@@ -432,24 +442,22 @@ single f = do
   cutExceptions
   Connection {closChildren = rmap} <- getSData <|> error "single: only works within a connection"
   mapth <- liftIO $ readIORef rmap
-  id <- liftIO $ f `seq` makeStableName f >>= return . hashStableName
+  id <- liftIO $ hashStableName <$> makeStableName f
 
   case M.lookup id mapth of
-    Just tv -> liftIO $ killBranch' tv
+    Just tv -> liftIO $ killBranch tv
     Nothing -> return ()
 
   tv <- get
-  f <** do
-    id <- liftIO $ makeStableName f >>= return . hashStableName
-    liftIO $ modifyIORef rmap $ \mapth -> M.insert id tv mapth
+  f <** do liftIO $ modifyIORef rmap $ \mapth -> M.insert id tv mapth
 
 -- | run an unique continuation for each connection in that place of the computation. The first thread that execute `unique` is
 -- executed for that connection. The rest are ignored.
 unique :: TransIO a -> TransIO a
 unique f = do
-  Connection {closChildren = rmap} <- getSData <|> error "unique: only works within a connection. Use wormhole"
+  Connection {closChildren = rmap} <- getSData <|> error "unique: only works within a connection"
   mapth <- liftIO $ readIORef rmap
-  id <- liftIO $ f `seq` makeStableName f >>= return . hashStableName
+  id <- liftIO $ hashStableName <$> makeStableName f
 
   let mx = M.lookup id mapth
   case mx of
@@ -462,12 +470,12 @@ unique f = do
 -- | A wormhole opens a connection with another node anywhere in a computation.
 -- `teleport` uses this connection to translate the computation back and forth between the two nodes connected.
 -- If the connection fails, it search the network for suitable relay nodes to reach the destination node.
-wormhole :: Loggable b => Node -> Cloud b -> Cloud b
-wormhole node comp = do
+wormholeRelay :: Loggable b => Node -> Cloud b -> Cloud b
+wormholeRelay node comp = do
     onAll $
         onException $ \e@(ConnectionError "no connection" nodeerr) ->
            when (nodeerr == node) $ do unCloud $ findRelay node; continue
-    wormhole' node comp
+    wormhole node comp
     where
         findRelay node = do
             relaynode <- exploreNetUntil $ do
@@ -480,16 +488,15 @@ wormhole node comp = do
 
 
 -- | wormhole without searching for relay nodes.
-wormhole' :: Loggable a => Node -> Cloud a -> Cloud a
-wormhole' node (Cloud comp) =  local $  do
-
+wormhole :: Loggable a => Node -> Cloud a -> Cloud a
+wormhole node (Cloud comp) =  local $  do
     moldconn <- getData :: TransIO (Maybe Connection)
-    -- tr "wormhole"
-    labelState "wormhole" -- <> BC.pack (show node)
+    -- TODO evitar que se generen varios wormholes
+    -- if this wormhole exist, usarlo
+
+    labelState $ "wormhole " <> BC.pack (nodeHost node <> ":"<> show (nodePort node))
     log <- getLog
-
     if not $ recover log
-
       then do
         abduce
         my <- getMyNode
@@ -501,44 +508,45 @@ wormhole' node (Cloud comp) =  local $  do
             setData conn{connData=   rself}
             comp
           else do
-            (prevprevclos,conn,r) <-  
-                          sandboxData (undefined :: ClosToRespond) $
-                          sandboxData (undefined :: Connection) $ do 
+            (prevprevclos,idconn,r) <-
+                 sandboxData (ofType :: ClosToRespond) $
+                 sandboxData (ofType :: Connection)   $ do
+                  -- newRemoteClosureEnv
 
-              delData $ ClosToRespond dbClos0
+                  ps <- gets parseContext
+                  conn <- mconnect node
+                  modify $ \s -> s{parseContext=ps}
+                  -- assert (Just node== (unsafePerformIO $ readIORef $ remoteNode conn)) $ return()
+                  -- tr "wormhole after connect"
 
-              -- tr "before mconnect"
-              ps <- gets parseContext
-              conn <- mconnect node
-              modify $ \s -> s{parseContext=ps}
-              -- assert (Just node== (unsafePerformIO $ readIORef $ remoteNode conn)) $ return()
-              -- tr "wormhole after connect"
+                  liftIO $ writeIORef (remoteNode conn) $ Just node
+                  -- tr("WORMHOLE",node)
+                  setData conn {synchronous = maybe False synchronous moldconn, calling = True}
 
-              liftIO $ writeIORef (remoteNode conn) $ Just node
-              -- tr("WORMHOLE",node)
-              setData conn {synchronous = maybe False synchronous moldconn, calling = True}
+                  prevprevclos <- getState <|> noExState "teleport"
+                  r <- comp
+                  delState $ ClosToRespond dbClos0
 
-              -- unCloud $ endpoint Nothing
-              prevprevclos <- getState <|> error "teleport: no execution state data"
-              r <- comp
+                  return (prevprevclos :: PrevClos,idConn conn,r)
+            -- 
+            -- let PrevClos rprev _ hasTeleport = prevprevclos
+            when (preservePath prevprevclos) $ do setState prevprevclos; void $ setLastClosureForConnection idconn $ dbref prevprevclos
+            -- if preservePath prevprevclos
+            --   then do setState prevprevclos; void $ setLastClosureForConnection idconn $ dbref prevprevclos
+            --   else setLastClosureForConnection idconn dbClos0
+            return r
 
-              return (prevprevclos :: PrevClos,idConn conn,r)
-                
-            let PrevClos rprev _ isapp = prevprevclos
-            when isapp $ do setState prevprevclos; void $ setLastClosureForConnection conn rprev 
-            return r 
-            
-         
 
-    else do
+
+      else do
         tr "wormhole recover"
         let conn = fromMaybe (error "wormhole: no connection in remote node") moldconn
-        setData $ conn {calling = False}
-        -- unCloud $ endpoint Nothing
+        setData $ conn{calling = False}
+        -- setLastClosureForConnection (idConn conn) dbClos0
         -- The remote computation should'nt execute alternative computations afterwards (problemsol 12)
         comp  <|> (modify (\s -> s {execMode = Remote}) >> empty)
 
-  
+
 
 
 -- | set synchronous remote invocations 
@@ -597,57 +605,62 @@ teleport :: Cloud ()
 teleport =  do -- local $ do
 
   modify $ \s -> s {execMode = if execMode s == Remote then Remote else Parallel}
-  endpoint Nothing
 
-  local $ do
-    -- unCloud $ endpoint Nothing
-
-    PrevClos prevClosDBRef _ _<- getData `onNothing` error "teleport: no execution state" -- return (PrevClos  0 "0" False)
-    tr ("PREVCLOS",prevClosDBRef)
-
-    conn@Connection {idConn = idConn, connData = contype, synchronous = synchronous} <-
+  conn@Connection {idConn = idConn, connData = contype, synchronous = synchronous} <-
               getData
                 `onNothing` error "teleport: No connection defined: use wormhole"
-    tr ("connection",idConn,"teleport REMOTE NODE", fmap  nodePort $ unsafePerformIO $ readIORef $ remoteNode conn, idConn  )
+  tr ("connection",idConn,"teleport REMOTE NODE", calling conn, fmap  nodePort $ unsafePerformIO $ readIORef $ remoteNode conn, idConn  )
+  case lazy $ readIORef contype of
+     Just Self -> return ()
+     _ -> onAll $ endpoint Nothing
+  tr ("after endpoint")
 
 
-        --  labelState  "teleport"
+  local $ do
+
+    -- executed in run mode and in recover mode when "e" is in the log
 
     log <- getLog
-    abduce <|> do when(recover log) $ modify (\s -> s {execMode = Remote}); empty
+    -- notify to the calling teleport when no remaining threads are running in the remote node
+    when (recover log && not (calling conn)) $ setNotifyFinishToCallingNode conn
 
-    
     when (not $ recover log) $ do
+
+        -- executed in run mode only
         ty <- liftIO $ readIORef contype
         case ty of
           -- when a node call itself, there is no need for socket communications
           Just Self -> do
             modify $ \s -> s {execMode = Parallel} -- setData  Parallel
-            -- wormhole does abduce now
-            -- abduce
+
             -- call himself
             tr "SELF"
             liftIO $ do
               remote <- readIORef $ remoteNode conn
               writeIORef (myNode conn) $ fromMaybe (error "teleport: no connection?") remote
           _ ->  do
-            -- tr ("teleport remote call", idConn)
+            -- r <- endpoint Nothing
+            -- tr ("after endpoint",r)
+            -- PrevClos prevClosDBRef _ _<- getData `onNothing` error "teleport: no execution state" -- return (PrevClos  0 "0" False)
+            -- tr ("PREVCLOS",prevClosDBRef)
             remoteClosDBRef <-
                   do
                   ClosToRespond ref <- getState
-                  tr ("after ClosToRespond",ref)
+                  tr ("after ClosToRespond",ref)   -- it is the respose to a previous teleport
                   delState $ ClosToRespond ref
                   return ref
                 <|> do
                   tr ("getting closure for idConn",idConn)
-                  ref <- getIndexState idConn
-                  tr ("after getClosureForConnection",ref)
+                  ref <- getLastClosureForConnection idConn
+                  tr ("after getClosureForConnection",ref)   --new request to a node already called before
                   return ref
                 <|> do
                   tr "return 0 0"
                   return dbClos0
 
-            
+            PrevClos prevClosDBRef _ _<- getData `onNothing` noExState "teleport" -- return (PrevClos  0 "0" False)
+            -- updateLastClosureForConnection idConn prevClosDBRef
+            tr ("PREVCLOS",prevClosDBRef)
             -- calcula el log entre la ultima closure almacenada localmente (prevclos) y el punto que el nodo ya ha recibido (closremote) 
             prevlog <- noTrans $ getClosureLogFrom prevClosDBRef remoteClosDBRef
             tr ("PARTLOG", partLog log)
@@ -662,21 +675,47 @@ teleport =  do -- local $ do
             -- let idSession = localSession lc
             let (sessRemote,closRemote)= getSessClosure remoteClosDBRef
             let (idSession,clos) = getSessClosure prevClosDBRef
+
+            -- onFinish $ const $ tr "TELEPORT ONFINISH"
+
             msend conn $ toLazyByteString $ serialize $ SMore $ ClosureData closRemote sessRemote clos idSession tosend
-            -- tr ("RECEIVER NODE", unsafePerformIO $ readIORef $ remoteNode conn, idConn )
-            -- receive1 lc<
-            -- receive conn Nothing idSession
-            -- tr ("CALLING",calling conn)
-            -- when (not $ calling conn) $ modify $ \s -> s {execMode = Remote}
-            -- unCloud $ endpoint Nothing
-            empty  
 
+            -- subsequent paquets sent to this remote closure will address this closure directly since it has been created
+            -- updateLastClosureForConnection idConn prevClosDBRef
 
-receiveIt :: Connection -> Maybe B.ByteString -> Int -> TransIO ()
-receiveIt conn mclos idSession = do
-  tr ("RECEIVE FROM",unsafePerformIO $ readIORef $ remoteNode conn)
-  (lc, log) <- setCont mclos idSession
-  receive1 lc
+            r <- abduce <|> do when (recover log) $ modify (\s -> s {execMode = Remote}); empty
+            tr ("BEFORE EMPTY",r)
+            empty
+
+-- notify to the calling teleport when no remaining threads are running in the remote node
+setNotifyFinishToCallingNode :: Connection -> TransIO ()
+setNotifyFinishToCallingNode conn = do
+    -- check if it is my node TODO
+    mctr <- getData
+    PrevClos prevClosDBRef _ _<- getData `onNothing` noExState "teleport" -- return (PrevClos  0 "0" False)
+
+    case mctr of
+      Nothing -> tr "NO CLOS TO RESPOND"
+      Just (ClosToRespond ref) -> do
+        tr ("SETTING ONFINISH for remote",ref)
+
+        onFinish $ const $ do
+          -- remove the EVar waiting for messages from the remote node
+          -- PrevClos prevClosDBRef _ _<- getData `onNothing` error "teleport: no execution state" -- return (PrevClos  0 "0" False)
+          tr ("ONFINISH IN TELEPORT",prevClosDBRef)
+
+          -- lc <- liftIO $ atomically $ readDBRef prevClosDBRef `onNothing` error "teleport: no prevclos"
+          -- tr ("prevClosDBRefs",prevClosDBRef)
+          -- cleanEVar $ fromJust $ localEvar lc
+
+          let (sessRemote,closRemote)= getSessClosure ref
+          tr ("TRIGGERING  ONFINISH in teleport from to",prevClosDBRef,ref,"closremote=",closRemote)
+          when (closRemote /= "0") $ do
+            log <- getLog
+            when (not $ recover log) $ do
+              tr ("TELEPORT ONFINISH SEND TO",prevClosDBRef,ref, recover log)
+              msend conn $ toLazyByteString $ serialize $ SLast $ ClosureData closRemote sessRemote "0" 0 mempty
+
 
 
 
@@ -696,13 +735,28 @@ reportBack = onException $ \(e :: SomeException) -> do
   let msg = SError $ toException $ ErrorCall $ show $ show $ CloudException node sess clos $ show e
   msend conn $ toLazyByteString $ serialize (msg :: StreamData NodeMSG) -- !> "MSEND"
 
--- | copy a session data variable from the local to the remote node.
--- If there is none set in the local node, The parameter is the default value.
--- In this case, the default value is also set in the local node.
-copyData def = do
-  r <- local getSData <|> return def
-  onAll $ setData r
-  return r
+
+-- | Set a state value in all the nodes participating in a cloud computation. This state data can be read and 
+-- updated locally with other state primitives in each node, but only `setCloudState` set it in all the nodes
+setCloudState :: Loggable b => b -> Cloud ()
+setCloudState x = do
+  -- assure that every computation restore fron a log pass trough this
+  r <- local $ do
+      modifyState' (\prevclos -> prevclos{preservePath=True}) $ noExState "setCloudState"
+      return x
+  onAll $ setState r
+
+-- broadcastState= x
+--   where 
+--   x= do
+--     r <- local $ do
+--       modifyState' (\prevclos -> prevclos{preservePath=True}) $ error "setCloudState: no execution state"
+--       getState <|> error ( "no such state: " <> typeOf (t x))
+--     onAll $ setState r
+
+--   t :: TransIO a -> a
+--   t= undefined
+
 
 -- | execute a Transient action in each of the nodes connected.
 --
@@ -730,11 +784,45 @@ clustered proc = callNodes (<|>) empty proc
 mclustered :: (Monoid a, Loggable a) => Cloud a -> Cloud a
 mclustered proc = callNodes (<>) mempty proc
 
+
+
+-- |   Applies a function to all the known nodes that share the same services, accumulating the results using a specified operator.
+-- See `callNodes'` for a detailed explanation
+
+-- callNodes :: (Loggable a, Loggable a2) => (Cloud a2 -> Cloud a -> Cloud a) -> Cloud a -> Cloud a2 -> Cloud a
+callNodes :: (Loggable a1, Loggable a2) => (Cloud a2 -> Cloud a1 -> Cloud a1) -> Cloud a1 -> Cloud a2 -> Cloud a1
 callNodes op init proc = loggedc $ do
   nodes <- local getEqualNodes
   callNodes' nodes op init proc
 
-callNodes' nodes op init proc = loggedc $ Prelude.foldr op init $ Prelude.map (\node -> runAt node proc) nodes
+{- |
+  Applies a function to a list of nodes, accumulating the results using a specified operator.
+
+  The function 'proc' is applied to each node in the 'nodes' list using 'runAt', which executes the function in the context of the given node.
+  The results of these applications are then accumulated using the binary operator 'op', starting with the initial value 'init'.
+  The entire operation is wrapped in 'loggedc' to provide logging capabilities.
+
+  @nodes@: A list of nodes to be processed.
+  @op@: A binary operator used to accumulate the results.  It should take two arguments: the result of processing a node and the current accumulated value, and return the updated accumulated value.
+  @init@: The initial value for the accumulation.
+  @proc@: The action to be executed in each node.  Each result (if any) returned will be combined with the accumulated value using 'op'.
+
+  Example:
+
+  > callNodes' [node1, node2, node3] (+) 0 $ do ...
+
+  This example executes the do ... action in each node in the list '[node1, node2, node3]'.
+  The results are then summed together, starting with an initial value of 0.
+  The final result is the sum of the values returned by 'getValue' for each node.
+  Following the design of Transient and the applicative operator wich is used in the definition of (+), no result will be returned by `callNodes`
+  until all the nodes return at least one result, and each new result of a node will return a new sum.
+
+  > callNodes' [node1, node2, node3] (<|>) 0 $ do ...
+
+  In this other case, the alternative operator <|> dictates that each result will be returned individually. 
+-}
+callNodes' :: (Loggable a1, Loggable a2) => [Node] -> (Cloud a2 -> Cloud a1 -> Cloud a1) -> Cloud a1 -> Cloud a2 -> Cloud a1
+callNodes' nodes op init proc = loggedc $ foldr (op . (`runAt` proc)) init nodes
 
 -----
 #ifndef ghcjs_HOST_OS
@@ -828,15 +916,16 @@ msend con bs = do
   c <- liftIO $ readIORef $ connData con'
 
   case c of
-      Just (TLSNode2Node ctx) -> liftIO $
+      Just (TLSNode2Node ctx) -> liftIO $ (do
         modifyMVar_ blocked $
           const $ do
             tr "TLS SEND"
             sendTLSData ctx $ toLazyByteString $ int64Dec $ BS.length bs
             sendTLSData ctx bs
             TOD time _ <- getClockTime
-            return $ Just time
-      Just (Node2Node _ sock _) -> liftIO $
+            return $ Just time) `catch` \(e ::SomeException) -> return ()
+
+      Just (Node2Node _ sock _) -> liftIO $ (do
         modifyMVar_ blocked $
           const $ do
             let l = toLazyByteString $ int64Dec $ BS.length bs
@@ -844,21 +933,19 @@ msend con bs = do
             tr ("NODE2NODE SEND")
             SBSL.sendAll sock  $ l <> bs
             TOD time _ <- getClockTime
-            return $ Just time
-      Just (HTTP2Node _ sock _ _) -> liftIO $
-        modifyMVar_ blocked $
-          const $ do
+            return $ Just time) `catch` \(e ::SomeException) -> return ()
+
+      Just (HTTP2Node _ sock _ _) -> liftIO $ modifyMVar_ blocked (const $ do
             tr "HTTP2NODE SEND"
             SBSL.sendAll sock $ bs -- <> "\r\n"
             TOD time _ <- getClockTime
-            return $ Just time
-      Just (HTTPS2Node ctx) -> liftIO $
-        modifyMVar_ blocked $
-          const $ do
+            return $ Just time) `catch` \(e ::SomeException) -> return ()
+
+      Just (HTTPS2Node ctx) -> liftIO $ modifyMVar_ blocked (const $ do
             tr "HTTPS2NODE SEND"
             sendTLSData ctx $ bs -- <> "\r\n"
             TOD time _ <- getClockTime
-            return $ Just time
+            return $ Just time) `catch` \(e ::SomeException) -> return ()
       Just (Node2Web sconn) -> do
         tr "NODE2WEB"
         -- {-withMVar blocked $ const $ -} WS.sendTextData sconn $ serialize r -- BS.pack (show r)    !> "websockets send"
@@ -869,7 +956,7 @@ msend con bs = do
 
           WS.sendTextData sconn bs -- !> ("N2N SEND", bd)
           -- tr "AFTER SEND"
-      Just Self -> return () -- error "connection to the same node shouldn't happen, file  a bug please"
+      Just Self -> return () 
       _ -> error "msend out of connection context: use wormhole to connect"
 
 
@@ -1113,15 +1200,16 @@ parallelReadHandler conn = do
   where
 
     extractPacket = do
-      tr "extractPacket"
       -- s <- giveParseString
       -- sandbox $ do
       --   s <-tTake 3
       --   tr ("ttake",s)
       len <- int <|>  nomore
+      tr ("extractPacket",len)
+
       tr ("LEN",len)
       str <- tTake (fromIntegral len)
-      tr ("MREAD  <-------<-------", unsafePerformIO $ readIORef $ remoteNode conn, str)
+      tr ("MREAD  <-------<-------", lazy $ readIORef $ remoteNode conn, str)
       TOD t _ <- liftIO $ getClockTime
       liftIO $ modifyMVar_ (isBlocked conn) $ const $ Just <$> return t
 
@@ -1284,9 +1372,9 @@ mconnect1 (node@(Node host port _ services)) = do
   -- tr ("NEED TLS", needTLS)
   (conn, parseContext) <-  --  fromJust <$> (connectNode2Node host port needTLS)
     checkSelf node
-      <|> timeout 1000000 (connectNode2Node host port needTLS)
-      <|> timeout 1000000 (connectWebSockets host port needTLS)
-      <|> timeout 1000000 (checkRelay needTLS)
+      <|> timeout1 1000000 (connectNode2Node host port needTLS)
+      <|> timeout1 1000000 (connectWebSockets host port needTLS)
+      <|> timeout1 1000000 (checkRelay needTLS)
       <|> throw (ConnectionError "no connection" node)
 
   -- tr "before end connection"
@@ -1326,8 +1414,10 @@ mconnect1 (node@(Node host port _ services)) = do
 
           return (conn, noParseContext)
 
-    timeout t proc = do
-      r <- syncProd $ collect' 1 t proc
+
+
+    timeout1 t proc = do
+      r <- syncCollect 1 t proc
       case r of
         [] -> tr "TIMEOUT EMPTY" >> empty -- !> "TIMEOUT EMPTY"
         mr : _ -> case mr of
@@ -1356,7 +1446,7 @@ mconnect1 (node@(Node host port _ services)) = do
       --input <-  liftIO $ SBSL.getContents sock
       -- let pcontext= ParseContext (do mclose c; return SDone) input (unsafePerformIO $ newIORef False)
 
-      pcontext <- makeParseContext $ SBSL.recv sock 4096
+      pcontext <- makeParseContextFromStream $ SBSL.recv sock 4096
 
       conn' <-
         if isNothing cdata' -- lost connection, reconnect
@@ -1392,7 +1482,7 @@ mconnect1 (node@(Node host port _ services)) = do
             _ -> ("", BS.pack host, port)
           h = BS.unpack h'
 
-      if (isLocal host || h == host && p == port)
+      if isLocal host || h == host && p == port
         then connectSockTLS h p needTLS
         else do
           let connect =
@@ -1524,52 +1614,53 @@ getFirstLineResp = do
     getCode = parseString
     getMessage = tTakeUntilToken ("\r\n")
 
-makeParseContext rec = liftIO $ do
-  done <- newIORef False
-  let receive = liftIO $ do
-        -- tr "receive"
-        d <- readIORef done
-        -- tr ("receive done", d)
-        if d
-          then return SDone
-          else
-            ( do
-                r <- rec
-                -- tr ("receive, r=", r)
-                if BS.null r
-                  then liftIO $ do writeIORef done True; return SDone
-                  else return $ SMore r
-            )
-              `catch` \(SomeException e) -> do
-                liftIO $ writeIORef done True
-                putStr "Parse: "
-                print e
-                return SDone
+-- makeParseContextFromStream :: MonadIO m => IO BL.ByteString -> m ParseContext
+-- makeParseContextFromStream rec = liftIO $ do
+--   done <- newIORef False
+--   let receive = liftIO $ do
+--         -- tr "receive"
+--         d <- readIORef done
+--         -- tr ("receive done", d)
+--         if d
+--           then return SDone
+--           else
+--             ( do
+--                 r <- rec
+--                 -- tr ("receive, r=", r)
+--                 if BS.null r
+--                   then liftIO $ do writeIORef done True; return SDone
+--                   else return $ SMore r
+--             )
+--               `catch` \(SomeException e) -> do
+--                 liftIO $ writeIORef done True
+--                 putStr "Parse: "
+--                 print e
+--                 return SDone
 
-  return $ ParseContext receive mempty done
-#else
-  
-mconnect1 (node@(Node host port (Just pool) _))= do
-     conn <- getSData <|> error "connect: listen not set for this node"
-     if nodeHost node== "webnode"
-      then  do
-                        liftIO $ writeIORef (connData conn)  $ Just Self
-                        return  conn
-      else do
-        ws <- connectToWS host $ PortNumber $ fromIntegral port
---                                                           !> "CONNECTWS"
-        liftIO $ writeIORef (connData conn)  $ Just (Web2Node ws)
+--   return $ ParseContext receive mempty done
 
---                                                           !>  ("websocker CONNECION")
-        let parseContext =
-                      ParseContext (error "parsecontext not available in the browser")
-                        "" (unsafePerformIO $ newIORef False)
 
-        chs <- liftIO $ newIORef M.empty
-        let conn'= conn{closChildren= chs}
-        liftIO $ modifyMVar_ pool $  \plist -> return $ conn':plist
- 
-        return  conn'
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 #endif
 
 
@@ -1756,8 +1847,8 @@ getBuffSize =
   (do getSData >>= return . bufferSize) <|> return 8192
 
 -- | Setup the node to start listening for incoming connections.
-listen :: Node -> Cloud ()
-listen (node@(Node _ port _ _)) = onAll $ do
+listen :: Node -> TransIO ()
+listen node@(Node _ port _ _) =  do
   labelState "listen"
 
   -- onException $ \(ConnectionError msg node) -> empty
@@ -1793,12 +1884,13 @@ listen (node@(Node _ port _ _)) = onAll $ do
 
   addNodes [node']
   setRState (JobGroup M.empty) --used by resetRemote
-  ex <- exceptionPoint :: TransIO (BackPoint SomeException)
-  setData ex
+  -- ex <- exceptionPoint :: TransIO (BackPoint SomeException)
+  -- setData ex
+
 
   mlog <- listenNew (show port) conn <|> listenResponses :: TransIO (StreamData NodeMSG)
   execLog mlog
-  
+
 
 chunked tosend= do
     let l= fromIntegral $ BS.length tosend
@@ -1847,6 +1939,7 @@ listenOn port = do
 
 listenNew port conn' = do
   sock <- liftIO $ listenOn port
+
   tr "LISTEN ON"
   liftIO $ do
     let bufSize = bufferSize conn'
@@ -1855,33 +1948,33 @@ listenNew port conn' = do
 
   -- wait for connections. One thread per connection
   liftIO $ do putStr "Connected to port: "; print port
+
+  onException $ \(e :: SomeException) -> empty -- do get >>= liftIO . killBranch; empty
+
   (sock, addr) <- waitEvents $ NS.accept sock
-  tr "LISTENNEW"
-  --  loc <- liftIO $ readMVar $ localClosures conn'
-  --  tr ("LEN LOC",M.size loc)
+  -- onException $ \ThreadKilled -> empty
+
+  tr ("LISTENNEW",addr)
+
   chs <- liftIO $ newIORef M.empty
-  --   case addr of
-  --     NS.SockAddrInet port host -> liftIO $ print("connection from", port, host)
-  --     NS.SockAddrInet6  a b c d -> liftIO $ print("connection from", a, b,c,d)
+
   noNode <- liftIO $ newIORef Nothing
   id1 <- genPersistId
   tr ("idConn-->", id1)
-  --  cls <- liftIO $ newMVar M.empty
   let conn = conn' {idConn = fromIntegral id1, closChildren = chs, remoteNode = noNode {-,localClosures=cls-}}
 
   input <- liftIO $ SBSL.getContents sock
   -- tr "INPUT"
-
   let nod = unsafePerformIO $ liftIO $ createNode "incoming connection" 0
    in modify $ \s ->
-        s
-          { execMode = Serial,
+        s{ execMode = Serial,
             parseContext =
-              ( ParseContext
+               ParseContext
+
                   (liftIO $ NS.close sock >> throw (ConnectionError "connection closed" nod))
                   input
                   (unsafePerformIO $ newIORef False) :: ParseContext
-              )
+
           }
 
 
@@ -2072,7 +2165,7 @@ listenNew port conn' = do
                   Just (HTTP2Node port sock addr _) -> (Just $ HTTP2Node port sock addr httpHeaders, ())
                   Just (TLSNode2Node ctx) -> (Just $ HTTPS2Node ctx, ())
                   Just (HTTPS2Node ctx) -> (Just $ HTTPS2Node ctx, ())
-                  _ -> error $ "line 2258: " <> show (cdata)
+                  _ -> error $ "line 2258: " <> show cdata
               pool <- liftIO $ newMVar [conn]
               let node = Node "httpnode" 0 (Just pool) [Service $ M.fromList [("httpnode", "")]]
               addNodes [node]
@@ -2087,7 +2180,7 @@ listenNew port conn' = do
               -- httpreq :: HTTPHeaders <- getState <|> error "no state"
               -- tr ("HEADERS",headers)
               tr ("string to parse", s)
-              return $ SLast $ ClosureData remoteClosure s1 thisClosure s2 $ lazyByteString s
+              return $ SMore $ ClosureData remoteClosure s1 thisClosure s2 $ lazyByteString s
   where
 
     shortClosParams body= do
@@ -2366,7 +2459,7 @@ resetRemote ident = do
           Just Nothing -> error $ "closure not found: " ++ show closr
           Just (Just cont) -> do
             -- topState >>= showThreads
-            liftIO $ killBranch' cont
+            liftIO $ killBranch cont
             return ()
 
 execLog :: StreamData NodeMSG -> TransIO ()
@@ -2381,7 +2474,7 @@ execLog mlog = Transient $ do
       case fromException e of
         Just (ErrorCall str) -> do
           case read str of
-            (e@(CloudException _ s1 closl err)) -> do
+            e@(CloudException _ s1 closl err) -> do
               processMessage s1 closl (error "session: should not be used") (error "closr: should not be used") (Left e) True
     SDone -> runTrans (back $ ErrorCall "SDone") >> return Nothing -- TODO remove closure?
     SMore (ClosureData s1 closl s2 closr log) -> processMessage closl s1 closr s2 (Right log) False
@@ -2397,13 +2490,11 @@ execLog mlog = Transient $ do
 -- - 'Bool' - A flag indicating whether the target closure should be deleted.
 --
 -- The function performs various actions based on the input parameters, such as restoring a closure, executing a closure, and handling errors.
-processMessage :: SessionId -> IdClosure -> SessionId -> IdClosure -> (Either CloudException Builder) -> Bool -> StateIO (Maybe ())
+processMessage :: SessionId -> IdClosure -> SessionId -> IdClosure -> Either CloudException Builder -> Bool -> StateIO (Maybe ())
 processMessage s1 closl s2 closr mlog deleteClosure = do
       tr ("processMessage", mlog)
-      conn <- getData `onNothing` error "Listen: myNode not set"
+      conn <- getData `onNothing` error "Listen: myNode not set, use initNode"
       tr ("processMessage REMOTE NODE", unsafePerformIO $ readIORef $ remoteNode conn, idConn conn )
-
-
 
       let dbref = getDBRef $ kLocalClos s1 closl
       tr ("lookup", dbref)
@@ -2425,30 +2516,60 @@ processMessage s1 closl s2 closr mlog deleteClosure = do
               throw err
           return Nothing
         Just LocalClosure {localCont = Nothing} -> do
-          tr "localcont nothihg"
           tr "RESTORECLOSuRE"
-          restoreClosure s1 $ BC.unpack closl
+          -- restoreClosure s1 $ BC.unpack closl 
+          (log',closreg) <- getClosureLog s1 $  BC.unpack closl
           tr "AFTER RESTORECLOS"
-          processMessage s1 closl s2 closr mlog deleteClosure
-
-        -- execute the closure
-        Just LocalClosure {localClos = closLocal, localMvar = mv, localEvar = Just ev, localCont = Just cont} -> do
-          tr "localcont found"
-          when (synchronous conn) $ liftIO $ void (tryPutMVar mv ()) -- for syncronous streaming
+          -- when (synchronous conn) $ liftIO $ void (tryPutMVar mv ()) -- for syncronous streaming
           case mlog of
-            Right log -> do
-              tr "before writeevar"
-              runTrans $
-                if deleteClosure
-                  then lastWriteEVar ev $ Right (SLast log, s2, closr, conn)
-                  else writeEVar     ev $ Right (SMore log, s2, closr, conn)
+            Right log -> sendToClosure (log' <> log) s2 closr conn deleteClosure closreg
             Left except -> do
-              runTrans $ writeEVar ev $ Left except
-              empty
+              tr  ("receive:",except)
+              runTrans $ writeEVar (fromJust $ localEvar closreg) $ Left except
+              -- empty
 
 
 
           return Nothing
+          -- processMessage s1 closl s2 closr mlog deleteClosure
+
+        -- execute the closure
+
+        Just closreg@LocalClosure {localClos = closLocal, localMvar = mv, localEvar = Just ev, localCont = Just cont} -> do
+          tr "localcont found"
+          when (synchronous conn) $ liftIO $ void (tryPutMVar mv ()) -- for syncronous streaming
+          case mlog of
+            Right log -> sendToClosure log s2 closr conn deleteClosure closreg
+              -- tr "before writeevar"
+              -- runTrans $
+              --   if deleteClosure
+              --     then writeEVar ev $ Right (SLast log, s2, closr, conn)
+              --     else writeEVar ev $ Right (SMore log, s2, closr, conn)
+            Left except -> do
+              tr  ("receive:",except)
+              runTrans $ writeEVar (fromJust $ localEvar closreg) $ Left except
+              -- empty
+
+
+
+          return Nothing
+
+
+
+
+sendToClosure log s2 closr conn deleteClosure LocalClosure {localClos = closLocal, localMvar = mv, localEvar = Just ev, localCont = Just cont} = do  
+    tr "before writeevar"
+    runTrans $
+      if deleteClosure
+        then writeEVar ev $ Right (SLast log, s2, closr, conn)
+        else writeEVar ev $ Right (SMore log, s2, closr, conn)
+
+
+
+
+
+
+
 
 
 
@@ -2708,11 +2829,11 @@ emptyPool = liftIO $ newMVar []
 createNodeServ :: NS.HostName -> Int -> [Service] -> IO Node
 createNodeServ h p svs = return $ Node h p Nothing svs
 
-createNode :: NS.HostName -> Int -> IO Node
-createNode h p = createNodeServ h p []
+createNode :: MonadIO m => NS.HostName -> Int -> m Node
+createNode h p = liftIO $ createNodeServ h p []
 
-createWebNode :: IO Node
-createWebNode = do
+createWebNode :: MonadIO m => m Node
+createWebNode = liftIO $ do
   pool <- emptyPool
   port <- randomIO
   return $ Node "webnode" port (Just pool) [Service $ M.fromList [("webnode", "")]]
@@ -2750,7 +2871,7 @@ getMyNodeMaybe = do
 getNodes :: MonadIO m => m [Node]
 getNodes = liftIO $ readTVarIO nodeList
 
--- | get the nodes that have the same service definition that the calling node
+-- | Get the nodes that have the same service definition than the calling node
 getEqualNodes = do
   nodes <- getNodes
 
@@ -2777,21 +2898,44 @@ addNodes nodes = liftIO $ do
   -- the local node should be the first
   tr "addNodes"
   nodes' <- mapM fixNode nodes
-  atomically $ mapM_ insert nodes'
+  atomically $ do
+    prevnodes <- readTVar nodeList
+    newnodes  <- insert [] nodes' prevnodes
+    writeTVar nodeList  newnodes
   where
-    insert node = do
-      prevnodes <- readTVar nodeList -- !> ("ADDNODES", nodes)
-      let mn = filter (== node) prevnodes
-
-      case mn of
-        [] ->  writeTVar nodeList $ (prevnodes) ++ [node]
-        [n] -> do
-          let nservices = nubBy (\s s' ->  s ==  s') $ nodeServices node ++ nodeServices n
-          writeTVar nodeList $ ((prevnodes) \\ [node]) ++ [n {nodeServices = nservices}]
+    -- existing  newnotprocessed prevnodesnotprocessed
+    insert ins  nodes []= return $ reverse ins ++  nodes
+    insert ins  nodes (node':prevnodes)= do
+      case filter (==node') nodes of
+        [] ->  insert (node':ins)  nodes prevnodes
+        [node] -> do
+          let mixservices = nub $ nodeServices node ++ nodeServices node'
+          let newnode= node'{nodeServices = mixservices}
           unsafeIOToSTM $ do
             cs' <- if isJust (connection node) then readMVar $ fromJust $ connection node else return []
-            modifyMVar (fromJust $ connection n) $ \cs -> return (cs' ++ cs, ())
-        _ -> error $ "duplicated node: " ++ show node
+            modifyMVar (fromJust $ connection newnode) $ \cs -> return (cs' ++ cs, ())
+          insert (newnode:ins) (nodes \\ [node]) prevnodes
+
+
+    -- insert [] ns= return $ res ++ ns
+    -- insert res (node:nodes) (node':prevnodes) = do
+    --   mixnode <- if node/= node' then  return node else do
+    --     let mixservices = nub $ nodeServices node ++ nodeServices node'
+    --     let newnode= node'{nodeServices = mixservices}
+    --     unsafeIOToSTM $ do
+    --         cs' <- if isJust (connection node) then readMVar $ fromJust $ connection node else return []
+    --         modifyMVar (fromJust $ connection newnode) $ \cs -> return (cs' ++ cs, ())
+    --     return newnode
+    --   insert (mixnode:res) nodes prevnodes
+      -- case mn of
+      --   [] ->  writeTVar nodeList $ prevnodes ++ [node]
+      --   [n] -> do
+      --     let nservices = nubBy (\s s' ->  s ==  s') $ nodeServices node ++ nodeServices n
+      --     writeTVar nodeList $ ((prevnodes) \\ [node]) ++ [n {nodeServices = nservices}]
+      --     unsafeIOToSTM $ do
+      --       cs' <- if isJust (connection node) then readMVar $ fromJust $ connection node else return []
+      --       modifyMVar (fromJust $ connection n) $ \cs -> return (cs' ++ cs, ())
+      --   _ -> error $ "duplicated node: " ++ show node
 
 --writeTVar nodeList $  (prevnodes \\ nodes') ++ nodes'
 
@@ -2859,15 +3003,16 @@ setConnectionIn node = do
   return node {connection = Just ref}
 
 
--- | Add a node (first parameter) to the cluster using a node that is already
--- part of the cluster (second parameter).  The added node starts listening for
--- incoming connections and the rest of the computation is executed on this
--- newly added node.
-connect :: Node -> Node -> Cloud ()
+-- -- | Add a node (first parameter) to the cluster using a node that is already
+-- -- part of the cluster (second parameter).  The added node starts listening for
+-- -- incoming connections and the rest of the computation is executed on this
+-- -- newly added node.
+-- connect :: Node -> Node -> Cloud ()
+-- #ifndef ghcjs_HOST_OS
+-- connect node remotenode = do
+--   listen node <|> return ()
+--   connect' remotenode
 #ifndef ghcjs_HOST_OS
-connect node remotenode = do
-  listen node <|> return ()
-  connect' remotenode
 
 -- | Reconcile the list of nodes in the cluster using a remote node already
 -- part of the cluster. Reconciliation end up in each node in the cluster
@@ -2965,14 +3110,16 @@ foldNet op init action = atServer $ do
           tr ("NODES to explore", nodes)
           let nodesToExplore = Prelude.tail nodes \\ (node : nodesexclude)
           callNodes' nodesToExplore op init $
-            exploreNetExclude (union (node : nodesexclude) nodes)
+            exploreNetExclude ((node : nodesexclude) `union` nodes)
 
         getNodes' = getEqualNodes -- if isBrowserInstance then  return <$>getMyNode  -- getEqualNodes
-        -- else (++) <$>  getEqualNodes <*> getWebNodes
+        -- else   getEqualNodes <> getWebNodes
 
+-- | execute in all nodes discoverable and mappend all the results 
 exploreNet :: (Loggable a, Monoid a) => Cloud a -> Cloud a
 exploreNet = foldNet mappend mempty
 
+-- | execute in all nodes discoverable and return every result in a stream
 exploreNetUntil :: (Loggable a) => Cloud a -> Cloud a
 exploreNetUntil = foldNet (<|>) empty
 
@@ -3081,36 +3228,41 @@ loopClosures= do
 -- | Restore the continuation recursively from the most recent alive closure.
 --  Retrieves the log and continuation from a closure identified by the Session ID (`idSession`) and the closure ID (`clos`).
 -- If the closure with the given ID is not found in the database, an error is raised.
--- getClosureLog :: Int -> BS.ByteString -> StateIO (Builder, EventF)
+-- getClosureLog :: Int -> BS.ByteString -> StateIO (Builder, TranShip)
 getClosureLog idSession "0" = do
   tr ("getClosureLog", idSession, 0)
 
-  clos <- liftIO $ atomically $ (readDBRef $ getDBRef $ kLocalClos 0 $ BC.pack "0") `onNothing` error "closure 0 not found in DB"
-  let cont = fromMaybe (error "please run firstCont before") $ localCont clos
-  return ( mempty, cont)
+  clos <- liftIO $ atomically $ readDBRef (getDBRef $ kLocalClos 0 $ BC.pack "0") `onNothing` error "closure 0 not found in DB"
+  return (mempty,clos)
+  -- let cont = fromMaybe (error "please run firstCont before") $ localCont clos
+  -- return ( mempty, cont)
 
 getClosureLog idSession clos = do
   tr ("getClosureLog", idSession, clos)
-  closReg <- liftIO $ atomically $ (readDBRef $ getDBRef $ kLocalClos idSession $ BC.pack clos) `onNothing` error ("closure not found in DB:" <> show (idSession,clos))
-  prev <- liftIO $ atomically $ readDBRef (prevClos closReg) `onNothing` error "prevClos not found"
+  closReg <- liftIO $ atomically $ readDBRef (getDBRef $ kLocalClos idSession $ BC.pack clos) `onNothing` error ("closure not found in DB:" <> show (idSession,clos))
+  prev    <- liftIO $ atomically $ readDBRef (prevClos closReg) `onNothing` error "prevClos not found"
   case localCont closReg of
     Nothing -> do
-      (prevLog, cont) <- getClosureLog (localSession prev) (BC.unpack $ localClos prev)
+      (prevLog, clos) <- getClosureLog (localSession prev) (BC.unpack $ localClos prev)
       let locallogclos = localLog closReg
       tr ("PREVLOG",  prevLog)
       tr ("LOCALLOG",  locallogclos)
       tr ("SUM",  prevLog <> locallogclos)
-      return (prevLog <> locallogclos, cont)
+      return (prevLog <> locallogclos, clos)
     Just cont -> do
       tr ("JUST",idSession,clos)
-      return (mempty, cont)
+      return (mempty, closReg)
+
+      -- return (mempty, cont)
 
 
 
 -- | Retrieves the log from a closure (identified by prevclos) to send to the closure of a remote node (identified by remclos). the prevclos is the segment already saved in LocalClousure register in order to reconstruct the stack in the remote node necessary for continuing the execution. To this sequence is necessary to sum the current fragment that has not yet already commited
 -- If the closure with the given ID is not found, an error is raised.
 getClosureLogFrom :: DBRef LocalClosure -> DBRef LocalClosure -> StateIO Builder
-getClosureLogFrom prevclos remclos=do
+getClosureLogFrom prevclos remclos
+  | prevclos==dbClos0 = return mempty
+  | otherwise = do
   prevReg <- liftIO $ atomically $ readDBRef prevclos `onNothing` error ("closure not found in DB:" <> keyObjDBRef prevclos)
   tr ("getClosureLogFrom", prevclos, remclos)
 
@@ -3131,25 +3283,23 @@ getClosureLogFrom prevclos remclos=do
 -- The closure is identified by the connection ID (`idSession`) and the closure ID (`clos`).
 -- The function retrieves the log and continuation from the closure, and sets up the execution context to continue from that point.
 -- If the closure with the given ID is not found in the database, an error is raised.
-restoreClosure :: Int -> String -> StateIO ()
-restoreClosure _ "0" = return ()
-restoreClosure idSession clos  = do
-  tr ("restoreclosure", idSession, clos)
-  (log, cont) <- getClosureLog idSession clos
-  -- cont is the nearest continuation above which is loaded and running
-  -- log contains what is necessary to recover the continuation that we want to restore
-  let mf = mfData cont
-  let logbase = fromMaybe emptyLog $ unsafeCoerce $ M.lookup (typeOf emptyLog) mf
-      lb = partLog logbase
-  -- let log'=  LD $ lb <> log
+-- restoreClosure :: Int -> String -> StateIO ()
+-- restoreClosure _ "0" = return ()
+-- restoreClosure idSession clos  = do
+--   tr ("restoreclosure", idSession, clos)
+--   (log, cont) <- getClosureLog idSession clos
+--   -- cont is the nearest continuation above which is loaded and running
+--   -- log contains what is necessary to recover the continuation that we want to restore
+--   let mf = mfData cont
+--   let logbase = fromMaybe emptyLog $ unsafeCoerce $ M.lookup (typeOf emptyLog) mf
+--       lb = partLog logbase
 
-  -- tr ("TOTAL LOG", log')
 
-  let mf' = M.insert (typeOf emptyLog) (unsafeCoerce $ logbase {recover = True {-,fromCont=False -}}) mf
+--   let mf' = M.insert (typeOf emptyLog) (unsafeCoerce $ logbase {recover = True {-,fromCont=False -}}) mf
 
-  let parses = toLazyByteString  log
-  let cont' = cont {parseContext = (parseContext cont) {buffer = parses}, mfData = mf'}
-  tr ("SET parseString",  log)
-  modify (\s -> s{execMode=Remote})
-  void $ liftIO $  runStateT (runCont () cont') cont' `catch` exceptBack cont'
+--   let parses = toLazyByteString  log
+--   let cont' = cont {parseContext = (parseContext cont) {buffer = parses}, mfData = mf'}
+--   tr ("SET parseString",  log)
+--   modify (\s -> s{execMode=Remote})
+--   void $ liftIO $  runCont () cont -- runStateT (runCont () cont') cont' `catch` backExceptIO cont'
 

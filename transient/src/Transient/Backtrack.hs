@@ -54,7 +54,7 @@ onUndo, undo, retry, undoCut,
 
 -- * Finalization Primitives
 -- $finalization
-onFinish, onFinish', finish, noFinish
+onFinish, finish
 ) where
 
 import Transient.Internals

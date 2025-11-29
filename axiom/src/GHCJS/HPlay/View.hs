@@ -170,16 +170,16 @@ instance Loggable JSString
 
 toJSString :: (Show a, Typeable a) => a -> JSString
 toJSString x =
-  if typeOf x == typeOf (undefined :: String )
+  if typeOf x == typeOf (ofType :: String )
   then pack $ unsafeCoerce x
   else pack$ show x
 
 fromJSString :: (Typeable a,Read a) => JSString -> a
 fromJSString s = x
    where
-     x | typeOf x == typeOf (undefined :: JSString) =
+     x | typeOf x == typeOf (ofType :: JSString) =
          unsafeCoerce x            --  !> "unsafecoerce"
-       | typeOf x == typeOf (undefined :: String) =
+       | typeOf x == typeOf (ofType :: String) =
          unsafeCoerce $ pack$ unsafeCoerce x            -- !!> "packcoerce"
        | otherwise = read $ unpack s            -- !> "readunpack"
 
@@ -199,7 +199,7 @@ getValue = undefined
 getName = undefined
 #endif
 
-elemBySeq :: (MonadState EventF m, MonadIO m) => JSString -> m (Maybe Elem)
+elemBySeq :: (MonadState TranShip m, MonadIO m) => JSString -> m (Maybe Elem)
 #ifdef ghcjs_HOST_OS
 elemBySeq id = do
   mid <- getData
@@ -244,7 +244,7 @@ withElem id f= do
 
 
 type ElemID= JSString
-newtype Widget a=  Widget{ norender :: TransIO a} deriving(MonadIO, Applicative, Alternative, MonadState EventF,Num)
+newtype Widget a=  Widget{ norender :: TransIO a} deriving(MonadIO, Applicative, Alternative, MonadState TranShip,Num)
 
 
   
@@ -272,8 +272,8 @@ instance Monad Widget where
 
 
 setEventContW :: Widget a -> (a -> Widget b) -> JSString -> StateIO ()
-setEventContW  x f id = modify $ \EventF {mfSequence = seq, fcomp = fs, .. }
-                           -> EventF {mfSequence = seq
+setEventContW  x f id = modify $ \TranShip {mfSequence = seq, fcomp = fs, .. }
+                           -> TranShip {mfSequence = seq
                                      , fcomp = unsafeCoerce (rend f id) :  fs
                                      , .. }   !> "setEventContW"
       where
@@ -345,8 +345,8 @@ span1 id1 rend= Perch $ \e -> do
 
 
 -- resetEventContW mx  =
---    modify $ \EventF { fcomp = fs, .. }
---           -> EventF { xcomp = case mx of
+--    modify $ \TranShip { fcomp = fs, .. }
+--           -> TranShip { xcomp = case mx of
 --                         Nothing -> empty
 --                         Just x  -> unsafeCoerce (head fs) x
 --                     , fcomp = tailsafe fs
@@ -563,9 +563,9 @@ readParam (Just x1) = r
 
  maybeRead str= do
    let typeofx = typeOf x
-   if typeofx == typeOf  ( undefined :: String)     then
+   if typeofx == typeOf  ( ofType :: String)     then
            return . Validated $ unsafeCoerce str            -- !!> ("maybread string " ++ str)
-   else if typeofx == typeOf(undefined :: JSString) then
+   else if typeofx == typeOf(ofType :: JSString) then
            return . Validated $ unsafeCoerce $ pack  str
    else case reads $ str  of          --            -- !!> ("read " ++ str) of
               [(x,"")] ->  return $ Validated x            -- !!> ("readsprec" ++ show x)
@@ -607,7 +607,7 @@ validate  w val=  do
 {-#NOINLINE rprefix #-}
 rprefix= unsafePerformIO $ newIORef 0
 #ifdef ghcjs_HOST_OS
-genNewId ::  (MonadState EventF m, MonadIO m) => m  JSString
+genNewId ::  (MonadState TranShip m, MonadIO m) => m  JSString
 genNewId=  do
       -- r <- liftIO $ atomicModifyIORef rprefix (\n -> (n+1,n))
       n <- genId
@@ -620,7 +620,7 @@ genNewId=  do
 --       let nid= toJSString $  ('n':show (n-1))
 --       return nid
 #else
-genNewId ::  (MonadState EventF m, MonadIO m) => m  JSString
+genNewId ::  (MonadState TranShip m, MonadIO m) => m  JSString
 genNewId= return $ pack ""
 
 --getPrev ::  StateIO  JSString
@@ -630,7 +630,7 @@ genNewId= return $ pack ""
 
 
 -- | get the next ideitifier that will be created by genNewId
-getNextId :: MonadState EventF  m  =>  m JSString
+getNextId :: MonadState TranShip  m  =>  m JSString
 getNextId=  do
       n <- gets mfSequence
 
@@ -689,7 +689,7 @@ setRadio ch v = Widget $ Transient $ do
       Nothing -> return ""
       Just e  -> liftIO $ getProp e "checked"
   
-  let str = if typeOf v == typeOf(undefined :: String)
+  let str = if typeOf v == typeOf(ofType :: String)
                    then unsafeCoerce v else show v
   addSData
       ( finput id "radio" (toJSString str)  ch Nothing `attrs` [("name",name)] :: Perch)
@@ -698,7 +698,7 @@ setRadio ch v = Widget $ Transient $ do
   where 
   read1 x=r 
     where
-    r= if typeOf r== typeOf (undefined :: String) then unsafeCoerce x 
+    r= if typeOf r== typeOf (ofType :: String) then unsafeCoerce x 
           else read x 
 
 setRadioActive :: (Typeable a, Eq a, Show a,Read a) =>
@@ -739,7 +739,7 @@ setCheckBox :: (Typeable a , Show a) =>
 setCheckBox checked' v= Widget . Transient $ do
   n  <- genNewId
   me <- elemBySeq n
-  let showv= toJSString (if typeOf v == typeOf (undefined :: String)
+  let showv= toJSString (if typeOf v == typeOf (ofType :: String)
                              then unsafeCoerce v
                              else show v)
 
@@ -798,8 +798,8 @@ getParamS look type1 mvalue= do
     let nvalue x =  case x of
           Nothing -> mempty
           Just v  ->
-              if (typeOf v== typeOf (undefined :: String)) then  pack(unsafeCoerce v)
-              else if typeOf v== typeOf (undefined :: JSString) then unsafeCoerce v
+              if (typeOf v== typeOf (ofType :: String)) then  pack(unsafeCoerce v)
+              else if typeOf v== typeOf (ofType :: JSString) then unsafeCoerce v
               else toJSString $ show v             -- !!> "show"
 
     -- setData HasElems
@@ -894,7 +894,7 @@ setSelectedOption n v= setOption1 n v True
 setOption1 :: (Typeable a, Eq a, Show a) =>
       a -> Perch -> Bool ->  Widget  (MFOption a)
 setOption1 nam  val check= Widget . Transient $ do
-    let n = if typeOf nam == typeOf(undefined :: String)
+    let n = if typeOf nam == typeOf(ofType :: String)
                    then unsafeCoerce nam
                    else show nam
 
@@ -979,7 +979,7 @@ wlink _ _= empty
 #endif
 
 show1 :: (Typeable a,Show a) => a -> String
-show1 x | typeOf x== typeOf (undefined :: String) = unsafeCoerce x
+show1 x | typeOf x== typeOf (ofType :: String) = unsafeCoerce x
         | otherwise= show x
 
 data Path= Path [JSString]
@@ -1360,7 +1360,7 @@ instance  IsEvent  BrowserEvent  where
          return ()            -- !!> "end action"
 
 
-addSData :: (MonadState EventF m,Typeable a ,Monoid a) => a -> m ()
+addSData :: (MonadState TranShip m,Typeable a ,Monoid a) => a -> m ()
 addSData y=  do
   x <- getData `onNothing` return  mempty
   setData (x <> y)
@@ -1575,7 +1575,7 @@ runBody w= do
   return ma
 
 
--- newtype AlternativeBranch= Alternative EventF deriving Typeable
+-- newtype AlternativeBranch= Alternative TranShip deriving Typeable
 
 -- | executes the computation and  add the effect of "hanging" the generated rendering from the one generated by the
 -- previous `render` sentence, or from the body of the document, if there isn't any. If an event happens within
@@ -1793,7 +1793,7 @@ option x v=  wlink x (toElem v) <++ " "
 data UpdateMethod= Append | Prepend | Insert deriving Show
 
 -- | set the tag where subsequent `render` calls will place HTML-DOM element
-setRenderTag :: MonadState EventF m => JSString -> m ()
+setRenderTag :: MonadState TranShip m => JSString -> m ()
 setRenderTag id=  modifyData' (\(IdLine level _) -> IdLine level   id) (IdLine 0 id) >> return () 
 
 

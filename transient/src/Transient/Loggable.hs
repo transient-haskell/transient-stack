@@ -111,14 +111,14 @@ instance Loggable Integer
 instance   (Typeable a, Loggable a) => Loggable [a]  where
     serialize []= byteString "[]"
     serialize s@(x:xs)
-              | typeOf x== typeOf (undefined :: Char) = serialize $ BS.pack (unsafeCoerce s)
+              | typeOf x== typeOf (ofType :: Char) = serialize $ BS.pack (unsafeCoerce s)
               | otherwise = byteString "[" <> serializeNoString x <> serialize' xs
           where
           serialize' []= byteString "]"
           serialize' (x:xs)= byteString "," <> serializeNoString x <>  serialize' xs
 
           serializeNoString x
-            | typeOf x== typeOf (undefined :: String) =
+            | typeOf x== typeOf (ofType :: String) =
                         byteString "\""
                         <> serialize (BS.pack (unsafeCoerce x))
                         <> byteString "\""
@@ -128,14 +128,18 @@ instance   (Typeable a, Loggable a) => Loggable [a]  where
       where
       ty :: TransIO [a] -> [a]
       ty = undefined
-      r= if typeOf (ty r) /= typeOf (undefined :: String)
-              then tChar '[' *> commaSep deserialize <* tChar ']'
+      r= if typeOf (ty r) /= typeOf (ofType :: String)
+              then (tChar '[' *> commaSep deserialize <* tChar ']')
               else
-                do
-                  sandbox' $ tChar '\"'
-                  s <- getParseBuffer
-                  withGetParseString $ \s -> maybe empty return (deserializePure s)
-                 <|> (unsafeCoerce . BS.unpack <$> deserialize)
+                
+                  do sandbox(tChar ']') ; return  (unsafeCoerce "")
+                 <|> do
+                  -- either is a string in with " "
+                        sandbox' $ tChar '\"'
+                        -- s <- getParseBuffer
+                        withGetParseString $ \s -> maybe empty return (deserializePure s)
+                 <|> 
+                  (unsafeCoerce . BS.unpack <$> deserialize)
 
 -- instance   (Typeable a, Loggable a) => Loggable [a]  where
 --     serialize :: (Typeable a, Loggable a) => [a] -> Builder

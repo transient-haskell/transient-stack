@@ -252,14 +252,14 @@ TransIO, TransientIO
 ,labelState, findState, removeState
 
 -- * Thread management
-, threads, anyThreads, addThreads, freeThreads, hookedThreads,oneThread, killChilds
+, threads, anyThreads, addThreads, freeThreads, hookedThreads,oneThread
 
 -- * backtracking
-,undo,onUndo,retry,back,onBack,forward,backPoint,onBackPoint,finish,onFinish,onFinish',localBack
+,undo,onUndo,retry,back,onBack,forward,finish,onFinish,localBack -- ,backPoint,onBackPoint
 
 -- * Exceptions
 
-,localExceptionHandlers, onException, onException', cutExceptions, continue, catcht, throwt,exceptionPoint, onExceptionPoint
+,localExceptionHandlers, onException, onException', cutExceptions, continue, catcht, throwt -- ,exceptionPoint, onExceptionPoint
 
 -- * Utilities
 ,genId, tr, tr
