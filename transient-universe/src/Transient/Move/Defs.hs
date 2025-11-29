@@ -47,53 +47,46 @@ newtype Cloud a = Cloud {unCloud :: TransIO a}
   deriving
     ( AdditionalOperators,
       Functor,
-      -- Semigroup,
-      -- Monoid,
+      Semigroup,
+      Monoid,
       Alternative,
-      -- Applicative,
+      Applicative,
       MonadFail,
       Monad,
       Num,
       Fractional,
-      MonadState EventF
+      MonadState TranShip
     )
 
+
+-- instance Monoid a => Monoid (Cloud a) where
+--   mappend = (<>) 
+--   mempty= return mempty
+
+-- instance Semigroup a => Semigroup (Cloud a) where
+--   a <> b= (<>) <$> a <*> b
+  
 -- instance Applicative Cloud where
+--   pure :: a -> Cloud a
 --   pure x = Cloud $ return x
---   Cloud f <*> Cloud g = local $ f <*> g
-instance Monoid a => Monoid (Cloud a) where
-  mappend = (<>) 
-  mempty= return mempty
-
-instance Semigroup a => Semigroup (Cloud a) where
-  a <> b= (<>) <$> a <*> b
   
-instance Applicative Cloud where
-  pure :: a -> Cloud a
-  pure x = Cloud $ return x
-  
-  (<*>) :: Cloud (a -> b) -> Cloud a -> Cloud b
-  Cloud f <*> Cloud g = Cloud $ sandboxData (undefined :: PrevClos) 
-                              $ sandboxData (undefined :: M.Map Int Closure) 
-                              $ do
-        tr "ISAPP"
-        -- modifyState' (\(PrevClos dbr _ _) -> PrevClos dbr False True) (PrevClos dbClos0 False True)
-        f <*> g
-
--- instance Alternative Cloud where
---   empty= Cloud empty
---   Cloud f <|> Cloud g = Cloud -- $ sandboxData (undefined :: PrevClos) 
---                               -- $ sandboxData (undefined :: M.Map Int Closure) 
+--   (<*>) :: Cloud (a -> b) -> Cloud a -> Cloud b
+--   Cloud f <*> Cloud g = Cloud $ sandboxData (ofType :: PrevClos) 
+--                               $ sandboxData (ofType :: M.Map Int Closure) 
 --                               $ do
---         tr "ISALTRER"
+--         tr "ISAPP"
 --         -- modifyState' (\(PrevClos dbr _ _) -> PrevClos dbr False True) (PrevClos dbClos0 False True)
---         f <|> g
+--         f <*> g
+
+
 
 -- | previous local checkpointed closure in the execution flow
-data PrevClos = PrevClos{dbref:: DBRef LocalClosure, hadTeleport :: Bool, isApplicative :: Bool}
+data PrevClos = PrevClos{dbref:: DBRef LocalClosure, preservePath :: Bool, isApplicative :: Bool}
 
 -- | last remote closure in a teleport waiting for responses in the execution flow
 newtype ClosToRespond= ClosToRespond (DBRef LocalClosure) -- {remSession :: SessionId, remClosure :: IdClosure}
+
+
 
 type IdClosure = BC.ByteString
 type SessionId = Int
@@ -156,19 +149,19 @@ data Connection = Connection
     isBlocked :: Blocked,
     calling :: Bool,
     synchronous :: Bool,
-    -- local localClosures with his continuation and a blocking MVar
-    -- another MVar with the children created by the closure
-    -- also has the id of the remote closure connected with
-
 
     -- for each remote closure that points to local closure 0,
     -- a new container of child processMessagees
     -- in order to treat them separately
     -- so that 'killChilds' do not kill unrelated processMessagees
     -- used by `single` and `unique`
-    closChildren :: IORef (M.Map Int EventF)
+    closChildren :: IORef (M.Map Int TranShip)
   }
   deriving (Typeable)
+
+instance Show Connection where
+  show x= show $ lazy $ readIORef $ remoteNode x
+
 
 -- last usage+ blocking semantics for sending
 type Blocked = MVar (Maybe Integer)
@@ -214,7 +207,7 @@ data LocalClosure = LocalClosure
     localClos :: IdClosure,
     localMvar :: MVar (),
     localEvar :: Maybe (EVar (Either CloudException (StreamData Builder, SessionId, IdClosure, Connection))),
-    localCont :: Maybe EventF
+    localCont :: Maybe TranShip
   }
 
 kLocalClos idSess clos = BC.unpack clos <> "-" <> show idSess

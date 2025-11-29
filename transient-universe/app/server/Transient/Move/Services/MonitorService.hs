@@ -41,6 +41,7 @@ import Data.Monoid
 import Unsafe.Coerce
 import System.IO.Unsafe
 import Data.IORef
+import Data.Default
 import qualified Data.Map as M
 -- import GHC.Conc
 import Data.Maybe(fromMaybe)

@@ -56,7 +56,7 @@ Node(..),
 Service(), createNodeServ, createNode, createWebNode,
 
 -- ** Joining the cluster
-Transient.Move.Internals.connect, connect', listen,
+connect', listen,
 -- Low level APIs
 addNodes, addThisNodeToRemote, shuffleNodes,
 --Connection(..), ConnectionData(..), defConnection,
@@ -66,7 +66,7 @@ getMyNode, getWebServerNode, getNodes, getEqualNodes, nodeList, isBrowserInstanc
 
 
 -- * Running Local Computations
-local, onAll, lazy, logged,loggedc, localIO, 
+local, onAll, logged,loggedc, localIO, 
 
 -- * Moving Computations
 wormhole, teleport, copyData,

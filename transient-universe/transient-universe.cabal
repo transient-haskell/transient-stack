@@ -47,6 +47,7 @@ library
             directory -any,
             filepath -any,
             hashable -any,
+            hashtables,
             iproute -any,
             network >= 3.0,
             network-info -any,
@@ -58,8 +59,7 @@ library
             text -any,
             aeson -any,
             data-default,
-            syb,
-            hashable
+            syb
             --primitive < 0.6.4.0
             -- entropy <= 0.3.6, 
     build-depends:
@@ -81,15 +81,7 @@ library
         Transient.Move.IPFS
         Transient.Move.Job
         -- Transient.Move.PubSub
-    build-depends:
-        base >4 && <5,
-        bytestring -any,
-        containers,
-        mtl -any,
-        stm -any,
-        time -any,
-        transformers -any,
-        transient >= 0.9.0.0
+
     default-language: Haskell2010
     hs-source-dirs: src .
     ghc-options:  -w -O0 
@@ -108,11 +100,11 @@ executable monitorService
             
         hs-source-dirs: app/server/Transient/Move/Services
         main-is: MonitorService.hs
-    else
-        hs-source-dirs: app/client/Transient/Move/Services
-        main-is: void.hs
-    build-depends:
-        base >4 && <5
+    -- else
+    --     hs-source-dirs: app/client/Transient/Move/Services
+    --     main-is: void.hs
+    -- build-depends:
+    --     base >4 && <5
 
 
     default-language: Haskell2010
