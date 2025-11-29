@@ -6,6 +6,17 @@
 {-# HLINT ignore "Use head" #-}
 {-# LANGUAGE KindSignatures #-}
 {-# LANGUAGE DeriveDataTypeable #-}
+{-# LANGUAGE DeriveFunctor #-}
+{-# LANGUAGE InstanceSigs #-}
+{-# LANGUAGE MonadComprehensions #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE FunctionalDependencies #-}
+{-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE TypeApplications #-}
+
+
+
+
 
 {- cabal:
         build-depends:
@@ -29,6 +40,7 @@
                      , aeson
                      , data-default
                      , deepseq
+                     , signal
 
 
 
@@ -62,7 +74,7 @@ import           Transient.EVars
 import           Transient.Mailboxes
 import           Transient.Move.Internals
 import           Transient.Move.Utils
-import           Transient.MapReduce
+import           Transient.MapReduce hiding (Ref)
 import           Transient.Move.Web
 import           Transient.Move.IPFS
 import           Transient.Move.Job
@@ -71,9 +83,11 @@ import           System.Info
 import           Control.Concurrent
 import           Data.IORef
 import           Data.List
+import           Data.Functor
 import qualified Data.ByteString.Lazy.Char8 as BS
 import qualified Data.ByteString.Char8 as BC
 import Data.ByteString.Builder
+import System.Signal
 
 import qualified Data.TCache.DefaultPersistence as TC
 import qualified Data.TCache.Defs  as TC
@@ -82,6 +96,7 @@ import Data.TCache.IndexQuery
 
 import System.IO.Unsafe
 import Data.Typeable
+-- import Type.Reflection (SomeTypeRep(..),someTypeRep)
 import Control.Exception hiding (onException)
 
 import qualified Data.Map as M
@@ -95,6 +110,7 @@ import Data.String
 import GHC.Generics
 import Data.Default
 import Data.Char
+import Data.Monoid
 import System.CPUTime (getCPUTime)
 -- import Control.DeepSeq
 
@@ -105,7 +121,7 @@ import System.CPUTime (getCPUTime)
 import qualified Data.Vector as V
 import Transient.Parse (tChar)
 import Transient.Base (tr)
-import Transient.Internals (LifeCycle(DeadParent))
+import Transient.Internals 
 import System.Random
 import Data.TCache (syncCache, getDBRef)
 import System.Directory.Internal.Prelude (exitFailure)
@@ -121,8 +137,9 @@ import qualified Data.TCache.DefaultPersistence as TCache
 -- import Control.DeepSeq
 import Transient.Move.Internals (runAt)
 import Data.TCache.Defs (Status(DoNotExist))
+import Data.Bits (Bits(xor))
 
-import Data.Data
+
 -- import Debug.Trace
 
 -- mainrerun = keep $ rerun "config" $ do
@@ -154,7 +171,7 @@ necesario identificar en la request un identificativo de flow= idConn del que cr
 cuestión de cont/evar para recibir:
    cada contexto de conexion tiene una evar
    si
-      choose [1..n]
+      choose[1..n]
       runAt node $ wathever
    crea instancias que están esperando mensajes y todas ellas reciben. no es correcto
      una opcion es no reutilizar los ev (es lo que habia en teleport) y lanzar lastWriteEVar SDone si habia ev
@@ -239,7 +256,7 @@ closCheckpoint = noTrans $ do
 
 -}
 
--- getClosureLog :: Int -> Int -> StateIO (LogData, EventF)
+-- getClosureLog :: Int -> Int -> StateIO (LogData, TranShip)
 -- getClosureLog idConn 0= do
 --    liftIO $ print ("getClosureLog",0)
 
@@ -285,7 +302,7 @@ en cualquier caso no guarda estado.
 Pero es necesario que esa closure sea accesible cuando está en localClosures de otra conexion
 hay que pasar conexion y closure o un map name- datos necesarios para continuar o reiniciar una closure
 global localClosures?
- tenemos Data closnumber EventF
+ tenemos Data closnumber TranShip
  tiene que ser un map global idcon-closnumber  cont o (mvar,evar,cont)
  en que queda localClosures?
    closures no deberia depender de la conexion ya que se puede reconectar.
@@ -377,8 +394,8 @@ como evitar
 
 
 data HI=HI deriving (Read,Show,Typeable,Eq)
-data HELLO=HELLO deriving (Read,Show,Typeable,Eq)
-data WORLD=WORLD deriving (Read,Show,Typeable,Eq)
+data HELLO=HELLO deriving (Read,Show,Typeable,Eq,Ord)
+data WORLD=WORLD deriving (Read,Show,Typeable,Eq,Ord)
 data PRE=PRE deriving (Read,Show,Typeable)
 data POSTT= POSTT deriving (Read,Show,Typeable)
 data PRE1=PRE1 deriving (Read,Show,Typeable)
@@ -494,8 +511,8 @@ mainexp= keep' $ do
      liftIO $ print r
 
 -- setEventCont2 :: TransIO a -> (a -> TransIO b) -> StateIO ()
--- setEventCont2 x f  = modify $ \EventF { fcomp = fs, .. }
---                            -> EventF { xcomp = x
+-- setEventCont2 x f  = modify $ \TranShip { fcomp = fs, .. }
+--                            -> TranShip { xcomp = x
 --                                      , fcomp =  unsafeCoerce (\x -> tr "here2" >> f x) :  fs
 --                                      , .. }
 
@@ -527,7 +544,7 @@ mainsync= keep $ do
 
 
 mainback1= keep $  do
-  return () `onBack` \Navigation -> forward Navigation
+  onBack1 $  \Navigation -> forward Navigation
 
   r0 <- inputNav (Just "1111") (const True) "one"
   r1 <- inputNav (Just False) (const True) "two"   :: TransIO Bool
@@ -548,52 +565,52 @@ mainback1= keep $  do
 
 
 
-mainalter= keep $ unCloud $ do
-  proc <|> restore1 <|> save
+-- mainalter= keep $ unCloud $ do
+--   proc <|> restore1 <|> save
 
-  where
-  proc= do
-    sal "HELLO" <|> (local abduce >> sal "WORLD")
-    showLog
+--   where
+--   proc= do
+--     sal "HELLO" <|> (local abduce >> sal "WORLD")
+--     showLog
 
-  sal x= do
-    logged setc
-    lprint x
+--   sal x= do
+--     logged setc
+--     lprint x
 
-(</>) x y= Transient $ do
-    mx <- runTrans x
+-- (</>) x y= Transient $ do
+--     mx <- runTrans x
 
-    was <- gets execMode
+--     was <- gets execMode
 
-    if was == Remote
+--     if was == Remote
 
-      then return Nothing
-      else case mx of
-            Nothing ->   runTrans  y
+--       then return Nothing
+--       else case mx of
+--             Nothing ->   runTrans  y
 
-            _ -> return mx
-
-
-mainsimple= keep $  initNode $ do
-  -- firstCont
-  -- logged $ logged $ do
-  proc2 <|> restore1 <|> save
+--             _ -> return mx
 
 
-  where
-  proc2= do
-    logged $ option "p" "process"
-    r <-loggedc $ loggedc $ do
-          logged setc
-          logged $ return HELLO -- liftIO $ print "PARSE ERROR"; error "PARSE ERROR" :: TransIO HELLO 
-    localIO $ print r
+-- mainsimple= keep $  initNode $ do
+--   -- firstCont
+--   -- logged $ logged $ do
+--   proc2 <|> restore1 <|> save
 
-    r <- loggedc $ loggedc $ do
-            logged setc
-            logged $ return (HI ,THAT)
-    localIO $ print r
 
-    showLog
+--   where
+--   proc2= do
+--     logged $ option "p" "process"
+--     r <-loggedc $ loggedc $ do
+--           logged setc
+--           logged $ return HELLO -- liftIO $ print "PARSE ERROR"; error "PARSE ERROR" :: TransIO HELLO 
+--     localIO $ print r
+
+--     r <- loggedc $ loggedc $ do
+--             logged setc
+--             logged $ return (HI ,THAT)
+--     localIO $ print r
+
+--     showLog
 
 mainexcept= keep $ initNode $ do
   r <-  local $ return "WORLD" `onException'` \(SomeException e) ->do
@@ -622,14 +639,18 @@ invocation s= liftIO $ do
     proc <- readIORef salutation
     proc s
 
-maininvoc= keep' $ installation <|> do
-  async (invocation "Alberto") <|> async (putStrLn "some other text") <|> async (invocation "Pepe")
-  liftIO $ print "something has been called in parallel"
+mainzzxz= keep' $ installation <|> invocations
+
   where
+
   installation= do
     s <- react onSalutation $ return ()
     liftIO $ putStr "hello "
     liftIO $ putStrLn s
+
+  invocations= do
+    async (invocation "Alberto") <|> async (putStrLn "some other text") <|> async (invocation "Pepe")
+    liftIO $ print "something has been called in parallel"
 
 -- foreign import ccall  ungetc :: Char -> Void Ptr  -> IO ()
 
@@ -660,12 +681,10 @@ mainraw= do
 
 {-# NOINLINE ref #-}
 ref= unsafePerformIO $ newIORef Nothing
-runCont1 x= get >>= \(EventF{fcomp=f}) -> runTrans $ unsafeCoerce f x
+runCont1 x= get >>= \(TranShip{fcomp=f}) -> runTrans $ unsafeCoerce f x
 
 
-mainsaad= do
-  r <- keep'  $ return ()
-  print r
+
 
 maincont= runTransient $ do
   liftIO $ print "HELLO"
@@ -676,20 +695,782 @@ maincont= runTransient $ do
   liftIO $ print r
 
 
-mainasas= keep $ do
-  r <- threads 0 $ choose [1..10 :: Int]
-  tr r
 
-mainasda= keep' $ do
-  res <- withParseString (BS.pack "go") $
-                   (Just <$> ((,) <$> parseString <*> giveParseString)) <|> return Nothing
-  liftIO $ print (res )
+
+
+-- mainssss= keep  $ inn <|> do
+--   option "go" "go"
+--   abduce
+--   where
+--   inn= do
+--     option1 "g" "g"
+--     -- input (const True)  "enter" :: TransIO String
+
+--     return()
+
+-- abduce1 :: TransIO ()
+-- abduce1= Transient $ do
+--   -- c <- get
+--   c <- hang 
+--   liftIO $ forkIO $ void $ runContCleanup c ()
+--   return Nothing
+
+-- async1 mx= do
+--    abduce1
+--    liftIO  mx
+
+-- choose1 :: [a] -> TransIO a
+-- choose1 =  foldr ((<||>) . return) empty
+
+-- main= keep $ do
+--   option "g" "go"
+--   traceAllThreads
+--   mv <- liftIO $ newMVar ()
+--   exclusive1 mv $ const $ do
+--       tr "HELLO"
+--       empty
+--   tr "WORLD"
+
+-- main=  do
+--   r <- keep' $  collect 1 $  threads 2 $ choose [1..10::Int]
+
+--   tr ("R",r)
+
+-- main= keep $ do
+--   option "g" "go"
+--   let n= 3; m= 1
+--   r <- collect 0 $ do
+--           i <- for [1..n]
+--           r <- collect 0 $  async $ return i
+--           ttr ("RS",r)
+--           return r
+--   ttr ("RESULTS",r)
+
+-- mainoptionfinish=do
+--   r <- keep' $ do
+--     r <- option1 "g" "go"
+--     ttr ("------------",r)
+--     i <- for [1,2]
+--     j <- for [0,1]
+--     r <- collect 0 $ do
+--         r <-  coll i j -- <> coll 10
+        
+--         ttr ("RESULT2",r)
+        
+--         return (r :: [Int])
+--     ttr ("SEGUNDO COLLECT",r)
+--   ttr ("FIN",r)
+--   traceAllThreads
+--   where
+--   coll i j= do
+--     r <- collect 0 $ do
+
+--       onFinish $ \m-> ttr ("1FINISH",m)
+--       i <-   threads j $ choose[1..i]
+--       -- liftIO $ threadDelay 1000000
+--       onFinish $ \m -> ttr ("2FINISH",i, m)
+
+--       ttr ("RES",i)
+--       -- onFinish $ \m -> ttr ("3FINISH",i, m)
+      
+--       return i
+--     -- onFinish $ \m -> ttr ("4FINISH",m)
+--     ttr ("RESULT",r)
+--     return r
+
+checkAssert= do
+--   onException $ \(e :: SomeException) -> do
+--     ttr e
+--     exitLeft e
+--     empty
+  onException $ \(AssertionFailed msg) -> do
+    ttr msg
+    exitLeft msg
+    empty
+-- main= keep $ do
+--   onFinish $ \e -> ttr("1FINISH",e)
+  
+--   r <- for [1..3] 
+  
+--   ttr ("RESULTS",r :: Int)
+
+--   onFinish $ \msg  -> ttr ("2FINISH",msg)
+
+testGroupByTime= do
+    r <- collect 3 $ do
+            groupByTime 1000000 $ do
+                i <- for [1..]
+                liftIO $ threadDelay 100000
+                return $ Sum i
+
+    assert (map getSum r== [245,145,45]) $ tr ("RESULT",r)
+
+{-
+el problema es encontrar como la comp en runAt node comp termina?
+creo que seria mejor saber cuando no hay computaciones en el
+nodo local ni el el remoto.
+Pero para lo ultimo hace falta saber las del remoto.
+
+el onFinish' con argumento
+
+teleport con SLast
+
+-}
+-- intento de salvar todo el estado de threads de una computacion
+-- para reiniciarla despues en la misma ejecucion (no shutdown)
+maersk :: Typeable a => TransIO(Either TranShip a) -> IO[Either TranShip a]
+maersk = keep' 
+
+freeze :: TransIO (Either TranShip b)
+freeze= noTrans $ Left <$> (get :: StateIO TranShip)
+
+mainabduceteleport= keep $ initNodes $ do 
+  node1 <- local $ getNodes <&> (!! 1)
+  wormhole (node1) $ do
+    (x,y) <- local $ do
+      let x= "made by thread 1"
+      abduce   -- continue execution in another thread
+      liftIO $ print $ "printing " <> x <> " by another thread"
+      let y = 2
+      return (x,y)
+
+    teleport  -- transport the  stack info to regenerate it in the remote node
+              -- only node1 and (x,y) travels trough the network
+    localIO $ print $ "printing " <> show(node1,x,y ::Int) <> " in another machine's console"
+
+
+-- main= testcvar
+-- testcvar= keep $ do
+--   -- onException $ \(e::SomeException) -> tr e
+--   c <- newCVar
+--   x <- read c  <||> write c --  <||> do liftIO $ return "world2"
+--   ttr x
+--   traceAllThreads
+--   where
+--   read c= do
+--     abduce 
+--     abduce
+--     readCVar c
+--   write c= freeThreads $ do 
+--           abduce
+--           ttr "one"
+--           abduce
+--           ttr "two"
+--           abduce
+--           ttr "three"
+--           -- option "g" "go"
+--           writeCVar c "hello"
+--           ttr "world"
+--           empty
+
+
+
+testProcessMessage :: IO (Either String ())
+testProcessMessage= keep $ initNode $ Cloud $ do
+    abduce
+    r <- endpoint $ Just $ BC.pack "cont" -- (Just $ BC.pack "cont") 0
+    ttr "after setcont"
+    ttr ("FIN",r)
+  <|> restor  "cont"
+
+
+  where
+  restor clos= do 
+     option "g" "go" 
+     ttr ("restore",clos)
+     noTrans $ processMessage 0 ( BC.pack clos) 0 (BC.pack "closr") (Right mempty) False
+     empty
+
+
+-- main= keep $ do
+--   r <- get <|> put
+--   showAllThreads
+--   ttr (r :: String)
+--   where
+--   get= do
+--     abduce
+--     labelState $BC.pack "get"
+--     ev <- getMailbox
+--     readEVar ev
+
+--   put= do
+--     abduce
+--     labelState $BC.pack "put"
+--     ev <- newEVar
+--     putMailbox ev
+--     abduce
+--     writeEVar ev "hello"
+--     empty
+
+mainlog= keep $ initNode $ do
+  -- local $ onException $ \(e :: SomeException) -> do
+  --   log <- getLog
+  --   ttr  ("LOG IN EXCEPTION",log)
+  --   continue
+
+  log <- getLog
+  ttr("LOG INICIAL",log)
+
+  local $ option "g" "go"
+
+  x <- logged $ return "HELLO"
+  y <- logged $ return "WORLD"
+  ttr (x,y)
+  log <- getLog
+  ttr ("LOG FINAL",log)
+  logged $ throwt $ ErrorCall "errorrrrr" :: Cloud()
+
+
+mainminput= keep $ initNode $ do
+    local $ onException $ \(e :: SomeException) -> do
+      log <- getLog
+      ttr  ("LOG IN EXCEPTION",log)
+      empty
+
+    minput "sum" "sum two numbers" :: Cloud ()
+    r  <- minput "term1" "enter  parameters"
+            <> (minput "term2" "enter second parameter")   <|> return 1 :: Cloud Int
+    
+
+    minput "final" ("RESULT", r ::Int) :: Cloud ()
+    
+
+
+
+-- combine :: TypeRep -> SData -> SData -> SData
+-- combine rep x y =
+--   case splitTyConApp rep of
+--     (tc, _) ->
+--       if tc == typeRepTyCon (typeOf (ofType :: M.Map Int String))
+--         then
+--           unsafeCoerce $ M.union ( unsafeCoerce x :: M.Map Int String) (unsafeCoerce y :: M.Map Int String)
+
+--         else  x
+
+-- mixState :: TransIO a -> TransIO a
+-- mixState comp= do
+--   rsts <- liftIO $ newIORef M.empty
+--   mfdata <- gets mfData
+--   liftIO $ liftIO $ writeIORef rsts mfdata
+--   -- repstofind <- M.keys <$> liftIO $ readIORef rreps
+--   comp <*** mixIt rsts 
+--   where
+--   mixIt rsts = noTrans $ do
+--     mfdata <- liftIO $ readIORef rsts
+--     mfdata' <- gets mfData
+--     let mfdata''= mix mfdata' mfdata
+--     liftIO $ writeIORef rsts mfdata''
+--     st <- get
+--     put st{mfData= mfdata''}
+
+-- mixState, childState, parentState
+
+
+-- newtype Mix= Mix (M.Map TypeRep SData) deriving Typeable
+
+-- registerMix :: (a -> a -> a) -> TransIO ()
+-- registerMix f = do
+--     modifyData' (\(n::Int) -> n +1) 1
+--     let t= typeOf (ofType :: typ f)
+--     modifyData' (\(Mix m) -> Mix $ M.insert t (unsafeCoerce f) Mix ) 
+--          (Mix $ M.singleton t (unsafeCoerce f))
+--     where
+--     typ :: (a -> a -> a) -> a
+--     typ x= undefined
+
+-- mixState :: TransIO a -> TransIO a
+-- mixState comp= do
+--   rsts <- liftIO $ newIORef M.empty
+--   mfdata <- gets mfData
+--   liftIO $ liftIO $ writeIORef rsts mfdata
+--   reps <- getState <|> return M.empty
+--   ttr("SIZE",M.size reps)
+--   -- repstofind <- M.keys <$> liftIO $ readIORef rreps
+--   comp <*** mixIt reps rsts 
+--   where
+--   mixIt reps rsts = noTrans $ do
+--     mfdata <- liftIO $ readIORef rsts
+--     mfdata' <- gets mfData
+--     let mfdata''= mix reps mfdata' mfdata
+--     liftIO $ writeIORef rsts mfdata''
+--     st <- get
+--     put st{mfData= mfdata''}
+--     -- | mix the states
+--   mix ::  M.Map TypeRep SData -> M.Map TypeRep SData -> M.Map TypeRep SData -> M.Map TypeRep SData
+--   mix reps= M.unionWithKey (applyMixForType reps)
+--     where
+--     applyMixForType :: M.Map TypeRep SData -> TypeRep -> SData -> SData -> SData
+--     applyMixForType reps rep x y= do
+--         case M.lookup rep reps of
+--           Nothing -> x
+--           Just mixtype -> (unsafeCoerce mixtype) x y
+
+-- main= testregisterMix 
+-- testregisterMix= keep $ do
+--   -- registerMix (M.union :: M.Map Int String -> M.Map Int String -> M.Map Int String)
+--   registerMix ((+) :: Int -> Int ->Int)
+--   registerMix ((++) :: String -> String -> String)
+
+--   -- setData (1 :: Int)
+--   mixState $ 
+--     (do 
+      
+      
+--       abduce
+--       setData (1 :: Int)
+--       setData "hello") <|>  setData (2 :: Int) 
+
+  
+--   -- x <- getIndexData (1 :: Int)
+--   -- y <- getIndexData (2 :: Int)
+--   z <- getData
+--   t <- getData
+--   u <- getData
+--   ttr ("results",z :: Maybe String,t :: Maybe Int, u :: Maybe Float )
+         
+
+
+
+-- myHandler :: Signal -> IO ()
+-- myHandler sig = putStrLn $ "Señal recibida: " ++ show sig
+
+-- main :: IO ()
+-- main= do
+--   forkIO $ void $ forkIO $ do
+--     System.Signal.installHandler sigINT myHandler -- Instala el handler para SIGINT
+--     putStrLn "Presiona CTRL+C para terminar..."
+--   waitLoop
+
+-- waitLoop :: IO ()
+-- waitLoop = waitLoop -- Espera infinita hasta recibir la señal
+
+
+-- main= keep $ initNode $ do
+--   local $ setState "hola"
+--   node <- local getMyNode
+--   r <- liftCloud (collect 0) $ runAt (node) $ return "hello"
+--   ttr ("AFTER COLLECT",r)
+--   r <- local $ getState <|> error "NO STATE" 
+--   ttr ("STATE",r :: String)
+
+-- main= keep $ do
+--   ref <- liftIO $ newIORef undefined
+--   let msg= "MESSAGE"
+--       ondo = writeIORef ref 
+--       doit x= do
+--         f <- liftIO $ readIORef ref 
+--         liftIO $ f x
+--         empty
+
+--   onException $ \(ErrorCall msg) -> do ttr msg; continue
+--   fork $ doit "hello"
+--   react (ondo) (return ())  
+--   error msg
+--   return()
+--   where
+
+-- main= keep  $ do
+--   option "g" "go"
+--   error "err"
+--   return()
+
+-- main= keep $ do
+--   ev <- newEVar
+--   do -- collect 0 $ do
+--     ((readEVar ev :: TransIO String) >> cleanEVar ev >> return "written")  <|> do
+--          setState "hello"
+
+--          (writeEVar ev "world" >> empty)
+  
+--   (getState >>= liftIO . putStrLn) <|> liftIO (print "NO STATE")
+
+-- main= testsetCloudState 
+-- testsetCloudState= keep $ initNode $ inputNodes <|> do
+--   local $ registerMix (M.union :: M.Map Int Closure -> M.Map Int Closure -> M.Map Int Closure)
+
+--   local $ option "g" "go"
+--   -- local $ return "HELLO"
+--   nodes <- localIO  getNodes
+--   guard (length  nodes >1) <|> error "not enough nodes"
+
+--   runAt (nodes !! 1) $ loggedc $ do
+--      setCloudState ("HELLO" :: String)
+--      local $ do
+--         str ::String <- getState
+--         ttr ("IN STATEMENT",str)
+  
+--   runAt (nodes !! 1) $ local $ do
+--       str <- getState
+--       ttr ("STATE",str :: String )
+--   str' <- local getState
+--   ttr ("AT HOME",str' :: String)
+
+-- main= keep $ initNode $inputNodes <|> do
+--   local $ option "g" "go"
+--   nodes <- local getNodes
+
+--   loggedc $   wormhole (nodes !! 1) $ do 
+--     onAll $ endpoint Nothing
+--     PrevClos prevClosDBRef _ _<- getData `onNothing` noExState "teleport" -- return (PrevClos  0 "0" False)
+
+--     log <- onAll $ noTrans $ getClosureLogFrom prevClosDBRef dbClos0
+--     ttr  log
+
+testEvarReactThreadLongLife= do
+  r <- keep' $ do
+      ev <- newEVar
+      -- r <- collect 0 $ do
+      r <-  (do r <- readEVar1 ev;  do liftIO $ threadDelay 10000000; return r) <|> (writeEVar ev "hello" >> empty)
+      ttr r
+      return r
+  ttr r
+
+{-#NOINLINE reff#-}
+reff= unsafePerformIO $ newMVar []
+
+main1= keep' $ it <|> trigger ( 1)  -- <|> callb 2
+  where 
+  it= do
+    r <- reactId True "" (Other "mine") ""  (onCallback) (return ())
+    ttr (r :: Int)
+  
+  onCallback f= do
+    takeMVar reff
+    putMVar reff [f]
+  callb x= liftIO $ do
+    [f] <- readMVar reff
+    f x
+  trigger x= do
+    liftIO $ do
+       [(_, _,_,_,cb)] <- filter (\(_,t,_,_,_)-> t== Other "mine") <$> readMVar rcallbacks
+       (unsafeCoerce cb) x
+       ttr "after"
+    empty
+  
+data Resp= Resp{content:: String} deriving (Generic, ToJSON)
+testMinputSpeed= keep $ initNode $ do
+   r <- minput "test" "call test"
+   moutput  (("content",r :: String),("value",1::Int)) 
+
+testCollectminput= keep $ initNode $ do
+  r <- liftCloud (collect' 0 60000000) $ do 
+           r <- minput "test" "enter string"
+           moutput "ok"
+           return r
+  ttr (r:: [String])
+
+-- main= keep $ do
+--   rs <- collect 0 $  option "g"  "go"
+--   liftIO $ print ("result",rs)
+
+-- main=  keep $ do
+--   -- print $ (deserializePure (BS.pack "[]/e/") :: Maybe([String],BS.ByteString))
+--   r <- withParseString (BS.pack "]/e/")  deserialize <|> error "NO PARSE"   :: TransIO String
+--   liftIO $ print ("RESULT1",r)
+ 
+
+
+mainsimul= keep $ initNode $ do
+   localIO $ writeIORef save True
+   runJobs
+   local $ option "g" "go"
+   r <- simulcoll 
+   onAll $ liftIO $ print("RESULT", r)
+   
+   onAll $ endpoint Nothing
+   job (Just "jobfin") $ local $ option "fin" "fin"
+
+simulcoll  = loggedc $ do
+  local $ return "ANTES"
+  rs <- collect1 
+  ttr ("RS",rs)
+  if null   rs then return  rs else  return   rs <> (job Nothing $ simulcoll )
+  where
+  collect1 = local $ collect 0  $ do
+    -- n <- input (const True) "how many? >"
+    op <- option1 "one" "one" <|> option1 "none" "none"
+    if op== "one" then return[2,2 :: Int] else return []
+
+
+
+
+
+main= testDurableCollect
+testDurableCollect=  keep $ initNode $ do
+  runJobs
+  r <- local $ option "go" "go"
+  ttr ("OPTION",r)
+  r <-  collectp 0 60000000 $ do 
+
+           r <- minput "test" "enter Int" :: Cloud Int
+           moutput "ok"
+           return r
+  ttr ("RESULT",r:: [Int])
+  localIO $ print ("RESULT",r:: [Int])
+
+  job (Just "jobfin") $ local $ option "fin" "fin"
+
+
+collectp n delta  mx=  do
+  onAll $ liftIO $ writeIORef save True
+  tinit <- local getMicroSeconds
+  ttr("COLLECTPP",n,delta)
+
+  let tfin= tinit +  delta
+      numbered= n > 0
+ 
+      collectp' n  delta 
+       | n <= 0 && numbered = return []
+       | otherwise= do
+        (rs,delta') <- local $ do
+            t <-  getMicroSeconds
+
+            let delta'=  tfin -t
+            ttr ("delta'",delta')
+            rs <- if delta' <= 0 then return [] else collectSignal True n (fromIntegral delta) $ unCloud mx
+            ttr ("RS",rs)
+
+            -- tiene que obtener el delta historico dentro de local, para saber si tiene que recuperar mas jobs
+            -- Alabado sea Dios
+            return (rs,delta')
+        let len= length rs
+        ttr ("ITERATION",n,len)
+        if delta'<= 0 || (numbered && len>= n) then return rs else return rs <>  
+                    (job Nothing $  collectp' (n-len) delta')
+  
+  ttr ("COLLECTP",n,delta)
+  collectp' n delta
+
+-- | persistent collect. Unlike Transient.collect, It keeps the results across intended and unintended
+-- shutdowns and restarts
+collectpp n delta  mx=  do
+  tinit <- local getMicroSeconds
+  ttr("COLLECTPP",n,delta)
+
+  let tfin= tinit +  delta
+      numbered= n > 0
+ 
+      collectp' n  delta 
+       | n <= 0 && numbered = return []
+       | otherwise= do
+        (rs,delta') <- local $ do
+            ttr ("COLLECTSIGNAL",n)
+            rs <- collectSignal True n (fromIntegral delta) $ unCloud mx
+            ttr ("RS",rs)
+            t <-  getMicroSeconds
+            let delta'=  tfin -t
+            ttr ("delta'",delta')
+            -- tiene que obtener el delta historico dentro de local, para saber si tiene que recuperar mas jobs
+            -- Alabado sea Dios
+            return (rs,delta')
+        let len= length rs
+        ttr ("ITERATION",n,len)
+        if delta'<= 0 || (numbered && len>= n) then return rs else return rs <> (job Nothing $ collectp' (n-len) delta')
+  
+  ttr ("COLLECTP",n,delta)
+  collectp' n delta
+  
+getMicroSeconds = liftIO $ do
+        (TOD seconds picos) <- getClockTime
+        return (seconds * 1000000 + picos `div` 1000000)
+      
+
+
+testminpustate= keep $ initNode $ do
+  local $ option "g" "go"
+  n <- minput "name" "enter name"
+  s <- minput "surname" $ "hello " <> n <> " enter surname"
+  moutput  (n :: String,s :: String)
+
+
+testFinishInRemote :: IO (Either String ())
+testFinishInRemote= keep $ initNode $ inputNodes <|> do
+
+  local $ do
+    -- onException $ \(ErrorCall msg) -> do
+    --   liftIO $ do
+    --    putStrLn "probably you have not added enough nodes. \nPlease add a new node: \"add <host> <port> n\"\nand press \"g\" to go"
+    --    putStrLn $ "(" <> msg <> ")"
+    --   continue
+    option "g" "go" 
+
+  nodes <- local getNodes
+  -- guard (length nodes > 1) <|> error msg 
+  r' <- liftConcurrent (collect 5) $ do
+           runAt (nodes !! 1) $ 
+            local $  for[1 ..10 :: Int]
+
+          
+  ttr("after teleport",r')
+  r <- runAt (nodes !! 1) $ return "BACK"
+  ttr("after teleport",r)
+
+ 
+testCollectApplicativecut= keep $ do
+
+  checkAssert
+  option "g" "go"
+  r <-  coll 1  <> coll 10
+  traceAllThreads
+  ttr ("RESULTS",r)
+  assert ([1,2,10,11] `isSubsetOf` r) $ return ()
+  where
+  isSubsetOf :: Eq a => [a] -> [a] -> Bool 
+  isSubsetOf xs ys = all (`elem` ys) xs
+  coll i= collect 2 $ do
+    onFinish $ \e ->  ttr ("1FINISH",e )
+    x <-   choose [i.. i+9 ::Int] 
+    -- liftIO $ threadDelay 10000
+    -- abduce
+    onFinish $ const $ ttr ("2FINISH",x )
+
+    ttr ("RS",x)
+    liftIO $ threadDelay 10000
+    return x
+  
+
+-- main= do
+--  r <-  keep testFinish
+--  ttr r
+
+testFinish= do
+  checkAssert
+  option "g" "go"
+  setRState ([] :: [(Int,Int,Int)])
+  let n= 2; m= 2
+  r <- collect 0 $ do
+          i <- for [1..n]
+          j <- for [0..m]
+          -- (i,j) <- [(i,j)| i <- for [1..n],j <- for [0..m]]
+          checkfinish i j 
+  
+  ttr ("RESULTS", length r,r)
+  traceAllThreads
+  let reshould= sort $ concat $ take (m+1) $ repeat  [[1..i] | i <- [1..n]]
+  let r'= sort $ map sort r
+  ttr ("sort r",r')
+  ttr ("reshould", reshould)
+  assert( r' == reshould) $ return()
+
+  -- rss contains all the onFinish triggered
+  rss <- getRState <|> error "no state" :: TransIO [(Int,Int,Int)]
+  ttr ("RSS", length rss,sort rss)
+  let should = sort[(i,j,k)| i<- [1..n],j <- [0..m],k <- [0..i]]
+  ttr ("SHOULD",should)
+  assert (sort rss ==  should) $ return()
+  -- the (i,j,0) corresponding to the first onFinish should be before the (i,j,rest)
+  ttr ("RSS",rss)
+
+  
+  let   ls = [(i,j)| i <-[1..n],j <- [0..m]]
+  ttr ls
+  let fil (i,j)= filter(\(k,l,_) -> i==k && j==l) rss
+  ttr $ map fil ls
+  let ijmatch (s,t)= let f=fil(s,t)in sort f == [(s,t,x)| x <- [0..s]] --  length f == s+1 -- && head f==(s,t,0) 
+  ttr $ map ijmatch ls
+  assert (and $ map ijmatch ls) $  ttr "SUCCESS"
+  where
+  checkfinish i j= do
+    r <- collect  0 $ do
+      onFinish $ const $ do addRState (i,j,0 ::Int)
+      r <-    threads j $ choose[1..i]
+      onFinish $ const $ do addRState  (i,j,r)
+      return r
+    ttr ("RS",r,i,j)
+    assert (length r== i) $ return () -- >= i `div` t) $ return ()
+    return r
+
+
+  addRState x= do
+      Ref (ref ::IORef [(Int,Int,Int)])<- getState <|> error "no state"
+      liftIO $ atomicModifyIORef ref (\rs-> (x:rs,())) 
+
+
+
+
+
+    -- {-#NOINLINE state#-}
+    -- state = lazy $ newIORef ([] :: [Int]) --  [(ThreadId,Int)])
+    -- setState x= liftIO $ writeIORef state x
+    -- addState x = liftIO $do
+    --   -- th <- myThreadId
+    --   liftIO $ atomicModifyIORef state  $ \rs -> (x:rs,())-- ((th,x):rs,())
+
+
+chooserand' :: [a] -> TransIO a
+chooserand' xs=   foldr mix empty xs
+  where
+  mix :: a -> TransIO a -> TransIO a
+  mix  x p= return x <\> p
+  x <\> y = (do threadDelay <$> randomRIO (0,10000000);abduce;x) <|> y
+
+chooserand  ::  [a] -> TransIO  a
+chooserand []= empty
+chooserand   xs = chooseStreamrand xs >>= checkFinalize
+
+-- | inject a stream of SMore values in the computation in as much threads as are available. transmit the end of stream witha SLast value
+chooseStreamrand  ::  [a] -> TransIO (StreamData a)
+chooseStreamrand []= empty
+chooseStreamrand   xs = do
+    evs <- liftIO $ newIORef xs
+    parallel $ do
+           es <- atomicModifyIORef evs $ \es -> let tes= tail es in (tes,es)
+           t <-  randomRIO (100000,10000000)
+           threadDelay t
+           case es  of
+            []  -> return SDone
+            x:_  -> x `seq` return $ SMore x
+-- asdsad= do
+--   r <- onFinish $ const $ do ttr "FINISH EXEC" ; void forwardFinish
+  
+--   ttr ("INTER",r)
+--   topState >>= showThreads
+--   liftIO $ myThreadId >>= killThread
+
+mainsss= keep $ do
+  option "go" "go"
+  traceAllThreads
+  abduce
+  r <- collect 1 $ asyncf (ttr "delay" >>liftIO (threadDelay 1000000) >> return "hello") <|> asyncf(ttr "thword" >> return "world") <|> return "world2"
+  ttr r
+  traceAllThreads
+  where
+  asyncf x= do
+    onFinish $ \e -> ttr ("fin",e)
+    async x
+
+mainlll= keep  $ do
+          -- (do abduce ; liftIO $ threadDelay 1000000;empty) <|> return ()
+          option "go" "go"
+          abduce
+          
+          i <- for [1..3]
+
+          r <- openClose (do  ttr  ("OPEN RESOURCE",i);return $ show i) 
+                           (\i ->  ttr $ "CLOSE RESOURCE" <> i)
+          
+          
+          ttr (i,"USING RESOURCE",r)
+          c <- sync $ option1 "c" "continue" 
+          ttr c
+          return()
+  where
+  runAt' node proc= wormhole node $ do
+    teleport
+    local $ onFinish $ const $ do
+                  -- c <- getState
+                  ttr "ONFINISH"
+                  -- msend c $ toLazyByteString $ serialize $ SMore $ ClosureData closRemote sessRemote clos idSession tosend
+    r <- proc
+    teleport
+    return r
+
 
 mainzxc= keep' $ do
   r <- return "HELLO " <> return "WORLD"
   tr r
 
-mainasd= keep $ do
+testreact= keep $ do
   -- onException $ \(e :: SomeException) ->  tr e
   -- r <- option "go" "go"  -- <|> option "ga" "ga"
 
@@ -767,12 +1548,22 @@ mainexcepterr= keep  $ do
     error "---------------------err"
     return ()
 
-mainjob2= keep $ initNode $  do
+-- main= do
+--   atomically $ do
+--     r <- readDBRef rjobs
+--     writeDBRef rjobs $ Jobs[(1,BC.pack "hello")]
+--   atomically $ do
+--     Jobs r <- readDBRef rjobs `onNothing` return (Jobs [])
+--     writeDBRef rjobs $ Jobs $ r \\[(1,BC.pack "hello")]
+--   syncCache
+
+
+mainjob= keep $ initNode $  do
   runJobs
   local $ option "go" "go"
-  job $  localIO $ print "hello"
-  job $ local $ option "c" "continue"  <|>( option "s" "stop" >> empty)
-  job $  localIO $ print "world"
+  job Nothing $  localIO $ print "hello"
+  job Nothing $ local $ option "c" "continue"   -- <|>( option "s" "stop" >> exit (); empty)
+  job Nothing $  localIO $ print "world"
 
 maincollect0= keep $ do
      option "go" "go"
@@ -803,124 +1594,124 @@ pr x= liftIO $ putStr x
 
 
 
-mainlogdist= keep $ initNode $  go <|> restore1
-  where
-  runAt'' n x= loggedc $ do
-      logged $ do id <- genPersistId; let nam= n <> "-1-" <> show id in setcn nam >> tr nam >> return nam
-      r <- x
-      logged $ do id <- genPersistId; let nam= n <> "-2-" <> show id in setcn nam >> tr nam >> return nam
-      return r
-  go=  do
-    let node1="node1"; node2="node2";node3="node3"
-    local $ option "go" "go"
+-- mainlogdist= keep $ initNode $  go <|> restore1
+--   where
+--   runAt'' n x= loggedc $ do
+--       logged $ do id <- genPersistId; let nam= n <> "-1-" <> show id in setcn nam >> tr nam >> return nam
+--       r <- x
+--       logged $ do id <- genPersistId; let nam= n <> "-2-" <> show id in setcn nam >> tr nam >> return nam
+--       return r
+--   go=  do
+--     let node1="node1"; node2="node2";node3="node3"
+--     local $ option "go" "go"
 
-    r <- runAt'' (node1) $ do
-                  local $ tr "HELLO" >> return HELLO
-                  ref <- onAll $ liftIO $  newIORef (0::Int) -- executes in node1(at exec time) and node2(recovery time)
-                  r <- runAt'' (node2) $ do
-                      onAll $ liftIO $ writeIORef ref 1      -- executes in node2
-                      local $ return WORLD
-                  tr ("1111",r)
-                  runAt'' (node2) $ do
-                      i <- onAll $ liftIO $ readIORef ref    -- executes in node2, keep the result of previous invocation
-                      local $ return (HI,i)
+--     r <- runAt'' (node1) $ do
+--                   local $ tr "HELLO" >> return HELLO
+--                   ref <- onAll $ liftIO $  newIORef (0::Int) -- executes in node1(at exec time) and node2(recovery time)
+--                   r <- runAt'' (node2) $ do
+--                       onAll $ liftIO $ writeIORef ref 1      -- executes in node2
+--                       local $ return WORLD
+--                   tr ("1111",r)
+--                   runAt'' (node2) $ do
+--                       i <- onAll $ liftIO $ readIORef ref    -- executes in node2, keep the result of previous invocation
+--                       local $ return (HI,i)
 
-    onAll $ liftIO $ assert (r== (HI,1)) $ ttr ("OK: non-mutable variables",r)
+--     onAll $ liftIO $ assert (r== (HI,1)) $ ttr ("OK: non-mutable variables",r)
 
-mainlogtests= keep $ initNode $  go <|> restore1
-  where
-  go=  do
-    local $ option "go" "go"
+-- mainlogtests= keep $ initNode $  go <|> restore1
+--   where
+--   go=  do
+--     local $ option "go" "go"
 
-    r <-loggedc $  do
-          loggedc $ do
-                    local $ setcn "two"
-                    local $ return HELLO
-          loggedc $ do
-                    local $ setcn "three"
-                    local $ return WORLD
+--     r <-loggedc $  do
+--           loggedc $ do
+--                     local $ setcn "two"
+--                     local $ return HELLO
+--           loggedc $ do
+--                     local $ setcn "three"
+--                     local $ return WORLD
 
-    local $ setcn "four"
-    local $ tr r
-
-
-maincomplex = keep $ initNode $ inputNodes <|> do
-  r <- proc2 <|> (restore1 >> empty)
-  localIO $ print ("res",r)
-
-  where
-  proc2= (,) <$> proc3 HELLO <*> proc3 WORLD
-
-  proc3 x =  do
-    local $ tr "executing proc3"
-    local $ option x $ "process " <> show x
-    local $ setc
-
-    return x
-
-  proc1= proc "p1" <|> proc "p2"
-  proc op= do
-    logged $ option op ("process "++ op)
-    r <- logged $ return HELLO
-
-    logged $ liftIO $ putStrLn $ show r ++ op
-    r <- loggedc $  loggedc $ logged $ return WORLD
-    logged $ liftIO $ putStrLn $ show r ++ op
-    loggedc $ do
-        logged $ return PRE
-        loggedc $ do
-            logged $ return  PRE1
-            logged setc
-            logged $ return POST1
-        logged $ return POSTT
-
-    showLog
-
-    logged $ return THAT
-
-    r <- loggedc $  loggedc $ logged $ return WORLD
-
-    logged $ liftIO $ putStrLn $ show r ++ op
+--     local $ setcn "four"
+--     local $ tr r
 
 
-    logged setc
+-- maincomplex = keep $ initNode $ inputNodes <|> do
+--   r <- proc2 <|> (restore1 >> empty)
+--   localIO $ print ("res",r)
 
-    r <- logged $ return HI
-    logged $ liftIO $ putStrLn $ show r ++ op
+--   where
+--   proc2= (,) <$> proc3 HELLO <*> proc3 WORLD
 
-    showLog
-    return op
+--   proc3 x =  do
+--     local $ tr "executing proc3"
+--     local $ option x $ "process " <> show x
+--     local $ setc
 
-save= logged $ do
-    option "save" "save execution state"
-    liftIO  syncCache
-    empty
+--     return x
 
-restoren= do
-        option "res" "restore1"
-        clos <- input (const True) "closure"
+--   proc1= proc "p1" <|> proc "p2"
+--   proc op= do
+--     logged $ option op ("process "++ op)
+--     r <- logged $ return HELLO
 
-        noTrans $ restoreClosure 0 clos
-        -- noTrans $ processMessage 0 clos 0 (BC.pack "closr") (Right mempty) False
+--     logged $ liftIO $ putStrLn $ show r ++ op
+--     r <- loggedc $  loggedc $ logged $ return WORLD
+--     logged $ liftIO $ putStrLn $ show r ++ op
+--     loggedc $ do
+--         logged $ return PRE
+--         loggedc $ do
+--             logged $ return  PRE1
+--             logged setc
+--             logged $ return POST1
+--         logged $ return POSTT
 
-restore1= logged $ do
-        restoren
-        empty
+--     showLog
 
-lprint :: Show a => a -> Cloud ()
-lprint= localIO . print
+--     logged $ return THAT
 
-setc =  do
-    (lc,_) <-  setCont Nothing 0
-    liftIO $ putStr  "0 ">> print (localClos lc)
+--     r <- loggedc $  loggedc $ logged $ return WORLD
+
+--     logged $ liftIO $ putStrLn $ show r ++ op
+
+
+--     logged setc
+
+--     r <- logged $ return HI
+--     logged $ liftIO $ putStrLn $ show r ++ op
+
+--     showLog
+--     return op
+
+-- save= logged $ do
+--     option "save" "save execution state"
+--     liftIO  syncCache
+--     empty
+
+-- restoren= do
+--         option "res" "restore1"
+--         clos <- input (const True) "closure"
+
+--         noTrans $ restoreClosure 0 clos
+--         -- noTrans $ processMessage 0 clos 0 (BC.pack "closr") (Right mempty) False
+
+-- restore1= logged $ do
+--         restoren
+--         empty
+
+-- lprint :: Show a => a -> Cloud ()
+-- lprint= localIO . print
+
+-- setc =  do
+--     (lc,_) <-  setCont Nothing 0
+--     liftIO $ putStr  "0 ">> print (localClos lc)
 
 setcn n=  do
-    (lc,_) <- setCont (Just $ BC.pack n)  0
-    liftIO $ putStr  "0 ">> print (localClos lc)
+    setCont (Just $ BC.pack n)  0
+    liftIO $ putStr  "0 ">> print n
 
-setcc= do
-  setc
-  option1 "c" "continue" <|> (option "n" "abort" >> empty)
+-- setcc= do
+--   setc
+--   option1 "c" "continue" <|> (option "n" "abort" >> empty)
 
 showLog=do
   log <- getLog
@@ -940,31 +1731,31 @@ showLog=do
   el setIndexData es equivalente a la DBRef pero sin log, solo con ends
 -}
 
-main22= keep $  initNode $ proc  <|> restore1
+-- main22= keep $  initNode $ proc  <|> restore1
 
-  where
-  proc= do
-    logged $ option "go" "go" >> setc
-    logged setc
+--   where
+--   proc= do
+--     logged $ option "go" "go" >> setc
+--     logged setc
 
-main1= keep $ unCloud $ do
-   onAll firstCont
-   proc <|>  save <|>  restore1
- where
- proc= do
-  logged $ option "go" "go"
-  r <- loggedc $ loggedc $ loggedc $ do
-              logged setc
-              logged $ return HELLO
+-- main1= keep $ unCloud $ do
+--    onAll firstCont
+--    proc <|>  save <|>  restore1
+--  where
+--  proc= do
+--   logged $ option "go" "go"
+--   r <- loggedc $ loggedc $ loggedc $ do
+--               logged setc
+--               logged $ return HELLO
 
-  logged $ liftIO $ print r
+--   logged $ liftIO $ print r
 
-  r1 <- logged $ do
-    setc
-    return WORLD
-  logged $ liftIO $ print (r,r1)
-  log <- getLog
-  tr ("partLog",partLog log)
+--   r1 <- logged $ do
+--     setc
+--     return WORLD
+--   logged $ liftIO $ print (r,r1)
+--   log <- getLog
+--   tr ("partLog",partLog log)
 
 
 -- mainfin= keep' $ do
@@ -983,7 +1774,7 @@ main1= keep $ unCloud $ do
 --              guard $ one == False
 --              liftIO $ writeIORef rone True
 --              (_,cont') <-liftIO $ runStateT (runCont cont) cont 
---              liftIO $ exceptBackg cont' $ Finish $ "job " <> show (unsafePerformIO myThreadId)
+--              liftIO $ backIO cont' $ Finish $ "job " <> show (unsafePerformIO myThreadId)
 --              return()
 
 --   --            return()
@@ -1075,8 +1866,8 @@ assertResult res expected= if res == expected
 
 moderemote= modify (\s -> s {execMode = Remote}) :: TransIO ()
 noSideRemote x = x <|> (moderemote >> empty)
-  
-    
+
+
 {-
 teleport ponerlo que siempre evite ejecuciones alternativas?
    pero eso no evita que lo que tiene en medio de teleport lo ejecute
@@ -1094,7 +1885,7 @@ abduceNoNewThread :: tnreads 0 abduce
 
 maindddd= keep' $ do
   f <|> tr "ALTER"
-  
+
   where
   f= do
     abduce
@@ -1113,57 +1904,57 @@ maincond= do
   print r
 
 
-maintestlog= keep $ initNode $ go <|> restore1
-  where
+-- maintestlog= keep $ initNode $ go <|> restore1
+--   where
 
-  go = do
-          let node1="node1"
-          r <- wormhole1 node1 $ do
-                  r <- local $ return "HELLO"
-                  teleport1 1
-                  r <- local $ return (r,"WORLD")
-                  teleport1 2
-                  local $ return $ "return:" <> show r
-                  return r
-          onAll $ liftIO $ assert (r==("HELLO","WORLD")) $ ttr ("OK: wormhole, teleport composition",r)
-    
-          loggedc $ do
+--   go = do
+--           let node1="node1"
+--           r <- wormhole1 node1 $ do
+--                   r <- local $ return "HELLO"
+--                   teleport1 1
+--                   r <- local $ return (r,"WORLD")
+--                   teleport1 2
+--                   local $ return $ "return:" <> show r
+--                   return r
+--           onAll $ liftIO $ assert (r==("HELLO","WORLD")) $ ttr ("OK: wormhole, teleport composition",r)
 
-            ttr "------checking applicatives  with atRemote --------"
+--           loggedc $ do
 
-            r <- loggedc $ wormhole1 node1 $ do
-                      let remoteReturn x= do
-                                  -- PrevClos dbr _ _ <- onAll getState
-                                  -- log <-  onAll $ noTrans $ getClosureLogFrom dbr dbClos0
-                                  -- ttr ("LOG",log)
-                                  r <- atRemote $ do
-                                          local $ return x
-                                  -- rem <- gets execMode
-                                  -- tr ("REMOTE",rem,r)
-                                  return r
+--             ttr "------checking applicatives  with atRemote --------"
 
-                      remoteReturn "HELLO" <> remoteReturn "WORLD"
-                    
+--             r <- loggedc $ wormhole1 node1 $ do
+--                       let remoteReturn x= do
+--                                   -- PrevClos dbr _ _ <- onAll getState
+--                                   -- log <-  onAll $ noTrans $ getClosureLogFrom dbr dbClos0
+--                                   -- ttr ("LOG",log)
+--                                   r <- atRemote $ do
+--                                           local $ return x
+--                                   -- rem <- gets execMode
+--                                   -- tr ("REMOTE",rem,r)
+--                                   return r
+
+--                       remoteReturn "HELLO" <> remoteReturn "WORLD"
 
 
-            onAll $ liftIO $ assert (r== "HELLOWORLD") $ ttr ("OK: applicatives with atRemote",r)
 
-    
-teleport1 i = local $ do abduce ; setcn $ "teleport" <> show i
-wormhole1 n x = loggedc $ do
-        local $ return $ "wormhole" <> show n
-        r <- x
-        local $ return $ "endwormhole"<> show n
-        return r
+--             onAll $ liftIO $ assert (r== "HELLOWORLD") $ ttr ("OK: applicatives with atRemote",r)
 
-atRemote1 n x= do
-  local abduce
-  teleport1 n
-  r <- x
-  local $ return $ "return:" <> show r
 
-  teleport1 $ n ++ n
-  return r
+-- teleport1 i = local $ do abduce ; setcn $ "teleport" <> show i
+-- wormhole1 n x = loggedc $ do
+--         local $ return $ "wormhole" <> show n
+--         r <- x
+--         local $ return $ "endwormhole"<> show n
+--         return r
+
+-- atRemote1 n x= do
+--   local abduce
+--   teleport1 n
+--   r <- x
+--   local $ return $ "return:" <> show r
+
+--   teleport1 $ n ++ n
+--   return r
 
 mainmini= keep $ initNode  $ do
   local $ return HELLO
@@ -1176,188 +1967,555 @@ mainmini= keep $ initNode  $ do
   local $ return WORLD
   onAll $ getLog >>= ttr
 
+alea :: [TransIO String] -> Cloud ()
+alea [] = return ()
+alea tests= do
+  i <- localIO $ randomRIO (0,length tests)
+  local $ tests !! i
+  let tests'= let (h,t) = Data.List.splitAt (i-1) tests in h <> tail t
+  alea tests'
 
-main= keep $ initNode $ do
-    r <- liftCloud  (collect 2) $ local (async (return "HELLO")) <|> local(async (return "WORLD"))
-    r' <- liftCloud  (collect 2) $ local (async (return "HELLO2")) <|> local(async (return "WORLD2"))
-    ttr (r,r')
+tests :: [Cloud String]
+tests=
+  [testLocalExceptionHandlers
+  -- distributed
+  ,checkWormholeTeleportComposition
+  ,checkApplicativeWithRemote
+  ,checkAlternativesWithAtRemote
+  ,checkStreaming
+  ,checkEmptyInRemoteNodeWhenTheRemoteCallbackToTheCaller
+  ,checkAlternativeDistributed
+  ,checkApplicativeDistributed
+  ,checkMonadicDistributed
+  ,checkReentrantDistributed
+  ,checkNonSerializableMutableVariables
+  ,checkMapReduce
+  ]
 
 
-maintests= keep $ initNode $ inputNodes <|> do
+-- mx <||> my= Transient $ do 
+--   c <- get
+--   x <- mx
+--   liftIO $ runContLoop c x
+--   y <-my
+--   liftIO $ runContLoop c y
+--   return Nothing
 
-    local $ option "go" "go"
+-- finalizer x= x <** (back  $ Finish "finalizer")
+-- 
+-- main= keep $ do
+--   option "g" "go"
+--   x <- collect 0 $  do
+
+--         onFinish $ \e -> ttr ("1FINISH",e)
+--         i<-  choose [1..10]
+--         onFinish $ const $ ttr ("2FINISH",i)
+--         return i
+--   liftIO $ threadDelay 1000000
+--   ttr ("END",x)
+
+  -- x <- collect 0 $  do
+
+  --       onFinish $ \e -> ttr ("1FINISH",e)
+  --       i<-  choose [11..20]
+  --       onFinish $ const $ ttr ("2FINISH",i)
+  --       return i
+  -- liftIO $ threadDelay 1000000
+  -- ttr ("END",x)
+
+
+
+-- main= keep $ do
+
+--       x <- collect 0 $ async(return "hello") <||>  async(return "world")
+--       ttr ("RS",x :: [String])
+
+-- main=  do
+--   r <- keep $ do
+--     checkAssert
+--     option "g" "go"
+--     checkEVars
+--   ttr r
+
+-- main= keep $ do
+--   checkhangEvars
+checkhangEvars= do
+  labelState $ BC.pack "main"
+  ev <- newEVar
+  r <- read ev <|> write ev
+  traceAllThreads
+  c <- get
+  ttr (r,"parent", fmap threadId $ lazy $ readIORef $ parent c)
+  where
+  read ev = do
+    abduce
+    labelState $ BC.pack "read"
+    readEVar ev
+    return "read"
+  write ev = do
+    abduce
+    labelState $ BC.pack "write"
+    writeEVar ev ()
+    return "write"
+
+checkEVars= do
+  ev  <- newEVar
+  ev2 <- newEVar
+  
+  
+  let collectIt = do
+          r <- collect 0 $ read ev <|> read ev2 <|> read ev <|> read ev2
+          ttr ("RESULTS COLLECT",r)
+          return r
+      sumIt = do
+          r <- read ev <> fromString " " <> read ev2
+          ttr ("RS",r)
+          return  [r]
+
+      writeIt = do
+        liftIO $ threadDelay 1000000
+        write ev  "HELLO" <|> write ev2 "WORLD"
+      
+      delEVars v1 v2 = do
+        liftIO $ threadDelay 100000
+        delReadEVar v1
+        delReadEVar v2
+        empty
+        
+
+  r <- collectIt <> sumIt  <|> writeIt 
+  let r'= sort r
+  ttr ("RESULTS", r)
+  assert  (r' == ["HELLO", "HELLO","HELLO WORLD","WORLD","WORLD"]) $ return ()
+
+  where
+  read ev =  do
+    r <- readEVar ev
+    ttr ("RS",r)
+    delReadEVar ev
+    return r
+  
+  write ev x= do
+    liftIO $ threadDelay 100000 -- give time to set up the readEVars (just in case )
+    writeEVar ev x
+    empty
+
+
+
+checkMailbox= do
+  r <- collect 0 $  read  <|> read  <|> write   "HELLO WORLD"
+
+  let r'= sort r
+  liftIO $ print r'
+  assert  (r' == [ "HELLO WORLD", "HELLO WORLD"]) $ return ()
+  where
+  read = getMailbox
+
+  write x= do
+    liftIO $ threadDelay 00000 -- give time to set up the readEVars (just in case )
+    putMailbox x
+    empty
+
+checkOption= do
+  r <- collect 0 $ option1 "h" "hello" <|> option1 "w" "world"
+  
+  let r'= sort r
+  liftIO $ print r'
+  assert  (r' == ["hello", "world"]) $ return ()
+
+checkIfNeeded:: IO ()
+checkIfNeeded= do
+    let ifNeeded= unsafePerformIO
+    let x= TranShip{parent= ifNeeded $ newIORef Nothing}
+    p <- liftIO $ readIORef $ parent x
+    liftIO $ print $ isNothing p
+
+mainfreelogic= keep $ do -- initNode $ inputNodes <|> do
+    
+    -- input (const True) "string > " :: TransIO String
+    option1 "go" "go" <|>  option1 "go2" "go2" <|> (topState >>= showThreads >> empty)
+    topState >>= showThreads
+    
+   
+instance Monoid Int where
+  mappend= (<>)
+  mempty= 0
+
+
+instance Semigroup Int where (<>)= (+)
+  
+  
+testThreadMgm= keep $ do
+   r <- terms
+   ttr r
+  --  topState >>= showThreads
+   return ()
+  where 
+  terms= foldl operator (return (0::Int)) $ replicate 5  term
+  term= func value `operator` func value
+  func :: TransIO a -> TransIO a
+  func= comb fun
+  fun :: a -> TransIO a
+  fun x= do
+        b <- randomRIO(0 :: Int,2)
+        case b of
+          0 -> async $ return x
+          1 -> reactIt x
+          2 -> return x
+  reactIt :: a -> TransIO a
+  reactIt x=  do
+        ref <- liftIO $ newIORef undefined
+        let onEV f= writeIORef ref f 
+            send x= do
+               liftIO  $ do f <- readIORef ref;f x
+               empty
+
+        react onEV (return()) <|> send x
+
+  operator :: (Monoid a) => TransIO a -> TransIO a -> TransIO a
+  operator mx my= do
+      b' <- randomRIO(0::Int,2)
+
+      case b' of
+        0 -> mx <|> my
+        1 -> mx <> my
+        2 -> mx >> my
+
+  
+  value= liftIO randomIO 
+  comb :: (a -> TransIO a) -> TransIO a -> TransIO a
+  comb func val=  do
+      x <- val
+      func x
+
+newtype Term a= Term {unTerm ::(a -> TransIO a)} -- deriving (Applicative,Alternative)
+
+instance Functor Term where
+  fmap f (Term x)= Term $ \z -> do
+    y <- x $ unsafeCoerce z
+    return $ f y
+
+instance Applicative Term where
+  pure x= Term return
+
+  (<*>) :: Term (a -> b) -> Term a -> Term b
+  Term f <*> Term g = Term $ \x -> do
+        let f' = f  $ const x
+            g' = g  $ unsafeCoerce x
+        f' <*> g'
+
+
+
+
+instance Alternative Term where
+  Term x <|> Term y= Term $ \z -> x z <|> y z
+  empty= Term $ const empty
+
+instance Monoid a => Semigroup (Term a) where
+  Term x <> Term y= Term $ \z -> do r <- x z ; y r
+
+instance Monoid a => Monoid (Term a) where
+   mempty= Term $ \x -> return mempty
+
+evaluator :: String -> IO (Either String ())
+evaluator x= keep $ do
+  r <- (unTerm expr) x 
+  ttr r
+  where
+
+
+expr = Term $ \x -> do
+    n <- randomRIO(1,4)
+    let Term f= foldl op ( Term return) $ replicate n term
+    f x
+
+term = Term $ \x -> do
+  n <- randomRIO (0,1::Int)
+  case n of
+    0 -> unTerm atom x
+    1 -> unTerm expr x
+
+op :: Monoid a => Term a -> Term a -> Term a
+Term mx `op` Term my=  Term $ \x -> do
+  ttr "op"
+  b <- randomRIO(0::Int,2)
+
+  case b of
+    0 -> do ttr "alter"; mx x <|> my x
+    1 -> do ttr "monoid"; mx x <> my x
+    2 -> do ttr "monad" ; mx x >> my x
+
+
+atom = Term $ \x ->do
+      b <- randomRIO(0 :: Int,2)
+      case b of
+        0 -> do ttr "async "; async $ return x
+        1 -> do ttr "react "; reactIt x
+        2 -> do ttr "return" ; return x
+
+refcallback = unsafePerformIO $ newIORef Nothing
+
+reactIt :: a -> TransIO a
+reactIt x = react onEV (return()) <|> send x
+  where
+  onEV :: (b -> IO ()) -> IO ()
+  onEV f = writeIORef refcallback $ Just f
+  send x = do
+    mf <- liftIO $ readIORef refcallback
+    case mf of Nothing -> empty; Just f -> f x
+    empty
+
+  
+
+mainddd= keep $ do
+         r <- reactIt "hello"
+         ttr r
+
+-- >>> 2+5
+
+
+
+{-
+
+>>> 2+3
+
+-}
+
+-- >>> keep' $ topState >>= showThreads
+-- []
+
+
+
+
+
+
+
+
+
+
+
+
+
+maininputasda= keep' $ do
+  th <- liftIO myThreadId
+  ttr ("before input",th)
+  topState >>= showThreads
+
+  input (const True) "prompt> "  :: TransIO String
+
+  labelState $ BC.pack "called"
+  th <- liftIO myThreadId
+  ttr ("real th after input",th)
+  st <- get
+  ttr ("in register th", threadId st)
+  ttr $ ("register state", unsafePerformIO $ readIORef $ labelth st)
+  topState >>= showThreads
+
+-- main :: IO (Either String ())
+-- main= keep $ initNode $ do
+--   r <- atRemote $ local $ async (return "hello") <|> async (return "world")
+--   ttr r
+  
+
+maindist=  keep $ initNode $ inputNodes <|> do
 
     nodes <- local getNodes
+    local $ option "go" "go"
+    ttr nodes
 
-
-    checkWormholeTeleportComposition nodes
-    checkApplicativeWithRemote nodes
-    checkAlternativesWithAtRemote nodes
-    checkStreaming nodes
+    -- testLocalExceptionHandlers
+    -- checkWormholeTeleportComposition 
+    -- checkApplicativeWithRemote 
+    -- checkAlternativesWithAtRemote
+    checkStreaming
     empty
-    checkEmptyInRemoteNodeWhenTheRemoteCallbackToTheCaller nodes
-    checkAlternativeDistributed nodes
-    checkApplicativeDistributed nodes
-    checkMonadicDistributed nodes
-    checkReentrantDistributed nodes
-    checkNonSerializableMutableVariables nodes
-    checkMapReduce nodes
-    where
-    checkWormholeTeleportComposition (node0:node1:node2:_)= loggedc $ do
+    checkEmptyInRemoteNodeWhenTheRemoteCallbackToTheCaller
+    checkAlternativeDistributed
+    checkApplicativeDistributed
+    checkMonadicDistributed
+    checkReentrantDistributed
+    checkNonSerializableMutableVariables
+    checkMapReduce
 
-          ttr "------checking wormhole, teleport composition --------"
+checkWormholeTeleportComposition = loggedc $ do
+      (node0:node1:_) <- local getNodes
 
-          r <- wormhole node1 $ do
-                  shouldRunIn node0
-                  r <- local $ return "HELLO"
-                  teleport
-                  shouldRunIn node1
-                  r <- local $ return (r,"WORLD")
-                  teleport
-                  shouldRunIn node0
-                  return r
-          onAll $ liftIO $ assert (r==("HELLO","WORLD")) $ ttr ("OK: wormhole, teleport composition",r)
-    
-    checkApplicativeWithRemote (node0:node1:node2:node3:_)= loggedc $ do
+      ttr "------checking wormhole, teleport composition --------"
 
-          ttr "------checking applicatives  with atRemote --------"
-          r <- loggedc $ wormhole' node1 $ do
-                    let remoteReturn x= do
-                                r <- atRemote $ do
-                                        ttr "REMOTERETURN"
-                                        shouldRunIn node1
-                                        local $ return x
-                                shouldRunIn node0
-                                rem <- gets execMode
-                                tr ("REMOTE",rem,r)
-                                return r
+      r <- wormhole node1 $ do
+              shouldRunIn node0
+              r <- local $ return "HELLO"
+              teleport
+              shouldRunIn node1
+              r <- local $ return (r,"WORLD")
+              teleport
+              shouldRunIn node0
+              return r
+      onAll $ liftIO $ assert (r==("HELLO","WORLD")) $ ttr ("OK: wormhole, teleport composition",r)
+      return "checkWormholeTeleportComposition"
+checkApplicativeWithRemote= loggedc $ do
+      (node0:node1:_) <- local getNodes
 
-                    loggedc $ remoteReturn "APPLI" <> remoteReturn "CATIVE"
+      ttr "------checking applicatives  with atRemote --------"
+      r <- concurrent $ wormhole node1 $ do
+                let remoteReturn x= do
+                            r <- atRemote $ do
+                                    ttr "REMOTERETURN"
+                                    shouldRunIn node1
+                                    local $ return x
+                            shouldRunIn node0
+                            rem <- gets execMode
+                            tr ("REMOTE",rem,r)
+                            return r
 
-
-          onAll $ liftIO $ assert (r== "APPLICATIVE") $ ttr ("OK: applicatives with atRemote",r)
-          return r
-
-    checkAlternativesWithAtRemote (node0:node1:node2:node3:_)= loggedc $ do
-          ttr "------checking alternatives  with atRemote --------"
-
-          r <- liftCloud (collect 2) $ wormhole' node1 $ do
-                    let remoteReturn x= atRemote $ do
-                            shouldRunIn node1
-                            local $ return x
-
-                    remoteReturn "ALTER" <|> remoteReturn "NATIVE" 
-
-          onAll $ liftIO $ assert (sort r== ["ALTER","NATIVE"]) $ ttr ("OK: alternatives with atRemote",r)
-          return r
-
-    checkStreaming (node0:node1:node2:node3:_)= loggedc $ do
-
-          ttr "------checking streaming --------"
-
-          r <- liftCloud (collect 2) $ wormhole node1 $ do
-                  atRemote $ do
-                    shouldRunIn node1
-                    local $ async (return "%STRE") <|> async (return "AMING")
-
-          onAll $ liftIO $ assert (sort r== ["%STRE","AMING"]) $ ttr ("OK: streaming",r)
+                loggedc $ remoteReturn "APPLI" <> remoteReturn "CATIVE"
 
 
-    checkEmptyInRemoteNodeWhenTheRemoteCallbackToTheCaller (node0:node1:node2:node3:_)= loggedc $ do
+      onAll $ liftIO $ assert (r== "APPLICATIVE") $ ttr ("OK: applicatives with atRemote",r)
+      return r
 
-          onAll $ liftIO $  putStrLn "------checking  empty in remote node when the remote call back to the caller #46 --------"
+checkAlternativesWithAtRemote = loggedc $ do
+      (node0:node1:_) <- local getNodes
 
-          r <- runAt node1 $ do
-                    shouldRunIn (node1)
-                    runAt node2 $ runAt node1 (shouldRunIn (node1) >> empty)  <|>   (shouldRunIn (node2) >> local (return "world"))
+      ttr "------checking alternatives  with atRemote --------"
 
-          -- on every node that executes this, this assertion should be true
-          onAll $ liftIO $ assert (r== "world") $ ttr ("OK: empty in remote",r)
+      r <- liftCloud (collect 2) $ wormhole node1 $ do
+                let remoteReturn x= atRemote $ do
+                        shouldRunIn node1
+                        local $ return x
 
+                loggedc $ remoteReturn "ALTER" <|> remoteReturn "NATIVE"
 
-    checkAlternativeDistributed (node0:node1:node2:node3:_)= loggedc $ do
+      onAll $ liftIO $ assert (sort r== ["ALTER","NATIVE"]) $ ttr ("OK: alternatives with atRemote",r)
+      return "checkAlternativesWithAtRemote"
 
-          ttr "------checking Alternative distributed: distributed parallelism --------"
-          r <- liftCloud (collect 2) $
-                              runAt node1 (shouldRunIn (node1) >> return "hello" ) <|>
-                              runAt node2 (shouldRunIn (node2) >> return "world" ) -- <|>
-          --                     runAt node3 (shouldRunIn(node3) >> return "world2")
+checkStreaming = loggedc $ do
+      (node0:node1:_) <- local getNodes
 
-          onAll $ liftIO $ assert (sort r== ["hello", "world"]) $   print ("OK: alternative distributed",r)
+      ttr "------checking streaming --------"
+      r <- wormhole node1 $ do
+              r <- atRemote $ do
+                shouldRunIn node1
+                onAll $ topState >>= showThreads
+                local $ threads 0 $ async (return "%STRE") <|> async (return "AMING")
+              onAll $ topState >>= showThreads
 
-
-
-
-
-    checkApplicativeDistributed (node0:node1:node2:node3:_)= loggedc $ do
-
-          ttr "--------------checking Applicative distributed: distributed concurrency--------"
-
-          r <-   loggedc $ runAt node1 (do shouldRunIn ( node1) ; localIO $ do print "HELLO";return "HELLO ")
-                    <>  (runAt node2 (shouldRunIn ( node2) >> return "WORLD " ))
-                    -- <>  (runAt node3 (shouldRunIn( node3) >> return "WORLD2" ))
-
-          onAll $ liftIO $ assert (r== "HELLO WORLD ") $  print ("OK: applicative distributed",r)
-          
+              -- onAll delListener
+              -- onAll delListener
+              return r
+      ttr r
+      -- onAll $ liftIO $ assert (sort r==  ["%STRE","AMING"] ) $ ttr ("OK: streaming",r)
+      return "checkStreaming"
 
 
-    checkMonadicDistributed (node0:node1:node2:node3:_)= loggedc $ do
+checkEmptyInRemoteNodeWhenTheRemoteCallbackToTheCaller = loggedc $ do
+      (node0:node1:node2:node3:_) <- local getNodes
 
-          ttr "----------------checking monadic, distributed-------------"
-          r <-  runAt node1 $ do
+      onAll $ liftIO $  putStrLn "------checking  empty in remote node when the remote call back to the caller #46 --------"
+
+      r <- runAt node1 $ do
+                shouldRunIn (node1)
+                runAt node2 $ runAt node1 (shouldRunIn (node1) >> empty)  <|>   (shouldRunIn (node2) >> local (return "checkEmptyInRemoteNodeWhenTheRemoteCallbackToTheCaller"))
+
+      -- on every node that executes this, this assertion should be true
+      onAll $ liftIO $ assert (r== "world") $ ttr ("OK: empty in remote",r)
+      return r
+
+checkAlternativeDistributed = loggedc $ do
+      (node0:node1:node2:node3:_) <- local getNodes
+
+      ttr "------checking Alternative distributed: distributed parallelism --------"
+      r <- liftCloud (collect 2) $
+                          runAt node1 (shouldRunIn (node1) >> return "hello" ) <|>
+                          runAt node2 (shouldRunIn (node2) >> return "world" ) -- <|>
+      --                     runAt node3 (shouldRunIn(node3) >> return "world2")
+
+      onAll $ liftIO $ assert (sort r== ["hello", "world"]) $   print ("OK: alternative distributed",r)
+      return "checkAlternativeDistributed"
+
+
+
+
+
+checkApplicativeDistributed = loggedc $ do
+      (node0:node1:node2:node3:_) <- local getNodes
+
+      ttr "--------------checking Applicative distributed: distributed concurrency--------"
+
+      r <-   loggedc $ runAt node1 (do shouldRunIn ( node1) ; localIO $ do print "HELLO";return "HELLO ")
+                <>  (runAt node2 (shouldRunIn ( node2) >> return "WORLD " ))
+                -- <>  (runAt node3 (shouldRunIn( node3) >> return "WORLD2" ))
+
+      onAll $ liftIO $ assert (r== "HELLO WORLD ") $  print ("OK: applicative distributed",r)
+      return r
+
+
+
+checkMonadicDistributed = loggedc $ do
+      (node0:node1:node2:node3:_) <- local getNodes
+
+      ttr "----------------checking monadic, distributed-------------"
+      r <-  runAt node1 $ do
+              shouldRunIn (node1)
+              r <- local $ return "HELLO"
+              runAt node2 $ do
+                shouldRunIn (node2)
+                return $ r ++ "WORLD"
+
+              --   runAt node3 $ do
+              --     shouldRunIn(node3)
+              --     return "WORLD" 
+
+
+      onAll $ liftIO $ assert (r== "HELLOWORLD") $  print ("OK: monadic distributed",r)
+      return r
+
+checkReentrantDistributed = loggedc $ do
+      (node0:node1:node2:node3:_) <- local getNodes
+      ttr "------------- checking reentrant distributed ----------------"
+
+      r <- runAt node1 $ do
+              shouldRunIn (node1)
+              r <- local $ return "HELLO"
+              runAt node2 $ do
+                shouldRunIn (node2)
+                r <- local $ return (r,"WORLD")
+                runAt node1 $ do
                   shouldRunIn (node1)
-                  r <- local $ return "HELLO"
+                  r <- local $ return (r,"WORLD2")
                   runAt node2 $ do
                     shouldRunIn (node2)
-                    return $ r ++ "WORLD"
+                    return r
 
-                  --   runAt node3 $ do
-                  --     shouldRunIn(node3)
-                  --     return "WORLD" 
+      onAll $ liftIO $ assert (r== (("HELLO","WORLD"),"WORLD2")) $  print ("OK: reentrant distributed",r)
+      return "checkReentrantDistributed"
 
+checkNonSerializableMutableVariables = loggedc $ do
+      (node0:node1:node2:node3:_) <- local getNodes
 
-          onAll $ liftIO $ assert (r== "HELLOWORLD") $  print ("OK: monadic distributed",r)
+      ttr "---checking that non serializable mutable variables in the stack are keept across sucessive invocations ---"
 
-    checkReentrantDistributed (node0:node1:node2:node3:_)= loggedc $ do
-          ttr "------------- checking reentrant distributed ----------------"
+      r <- runAt (node1) $ do
+              h <- local $ return HELLO
+              ref <- onAll $ liftIO $  newIORef (0::Int) -- executes in node1(at exec time) and node2(recovery time)
+              r <- runAt (node2) $ do
+                  onAll $ liftIO $ writeIORef ref 1      -- executes in node2
+                  local $ return (h,WORLD)
+              runAt (node2) $ do
+                  i <- onAll $ liftIO $ readIORef ref    -- executes in node2, keep the result of previous invocation
+                  local $ return (r,WORLD,i)
 
-          r <- runAt node1 $ do
-                  shouldRunIn (node1)
-                  r <- local $ return "HELLO"
-                  runAt node2 $ do
-                    shouldRunIn (node2)
-                    r <- local $ return (r,"WORLD")
-                    runAt node1 $ do
-                      shouldRunIn (node1)
-                      r <- local $ return (r,"WORLD2")
-                      runAt node2 $ do
-                        shouldRunIn (node2)
-                        return r
+      onAll $ liftIO $ assert (r== ((HELLO,WORLD),WORLD,1)) $ ttr ("OK: non-serializable, mutable variables",r)
+      return "checkNonSerializableMutableVariables"
 
-          onAll $ liftIO $ assert (r== (("HELLO","WORLD"),"WORLD2")) $  print ("OK: reentrant distributed",r)
+checkMapReduce = loggedc $ do
+      (node0:node1:node2:node3:_) <- local getNodes
 
-    checkNonSerializableMutableVariables (node0:node1:node2:node3:_)= loggedc $ do
+      ttr "----------------checking map-reduce -------------"
 
-          ttr "---checking that non serializable mutable variables in the stack are keept across sucessive invocations ---"
-
-          r <- runAt (node1) $ do
-                  h <- local $ return HELLO
-                  ref <- onAll $ liftIO $  newIORef (0::Int) -- executes in node1(at exec time) and node2(recovery time)
-                  r <- runAt (node2) $ do
-                      onAll $ liftIO $ writeIORef ref 1      -- executes in node2
-                      local $ return (h,WORLD)
-                  runAt (node2) $ do
-                      i <- onAll $ liftIO $ readIORef ref    -- executes in node2, keep the result of previous invocation
-                      local $ return (r,WORLD,i)
-          
-          onAll $ liftIO $ assert (r== ((HELLO,WORLD),WORLD,1)) $ ttr ("OK: non-serializable, mutable variables",r)
-
-    checkMapReduce (node0:node1:node2:node3:_)= loggedc $ do
-
-          ttr "----------------checking map-reduce -------------"
-
-          r <- reduce  (+)  . mapKeyB (\w -> (w, 1 :: Int))  $ getText  words "hello world hello"
-          onAll $ liftIO $ assert (sort (M.toList r) == sort [("hello",2::Int),("world",1)]) $ ttr ("OK: mapReduce",r)
+      r <- reduce  (+)  . mapKeyB (\w -> (w, 1 :: Int))  $ getText  words "hello world hello"
+      onAll $ liftIO $ assert (sort (M.toList r) == sort [("hello",2::Int),("world",1)]) $ ttr ("OK: mapReduce",r)
+      return "checkMapReduce"
 
 
 runAt' node mx = wormhole node $ atRemote' mx
@@ -1397,7 +2555,7 @@ mainxxx= keep $ initNode $ inputNodes <|> do
   tr r
 
 mainkeep= keep $ do
-  return () `onBack` \() ->   forward ()
+  onBack1 $  \() ->   forward ()
   liftIO $ print "HELLO"
   back ()
   return ()
@@ -1411,7 +2569,7 @@ maintrans= runTransient $ do
 
 
 
-mainlog= keep' $ unCloud $ do
+mainlog2= keep' $ unCloud $ do
   proc
   log <- getLog
   onAll $ liftIO $ print $ partLog log
@@ -1441,11 +2599,11 @@ mainjob3 = keep $ initNode $ do
 
 
   --  minput "input2"  "test2" :: Cloud()
-  job (process ev) <|> report ev
+  job Nothing (process ev) <|> report ev
 
   where
    process ev= do
-    i <- local $ threads 1 $ choose [(1 :: Int)..]
+    i <- local $ threads 1 $ choose[(1 :: Int)..]
     localIO $ threadDelay 10000000
     localIO $ atomicModifyIORef ev $ \l -> (i:l,())
     empty
@@ -1454,13 +2612,14 @@ mainjob3 = keep $ initNode $ do
    report ev=  do
     minput "log"  "show log" :: Cloud()
 
-    e <- localIO $ readIORef ev
+    e <- localIO $ readIORef ev :: Cloud [Int]
     minput "" $ reverse e :: Cloud ()
     empty
 
 
 
-mparallel mx=  job $ local $ parallel mx
+
+-- mparallel mx=  job $ local $ parallel mx
 
 
 {-
@@ -1602,7 +2761,7 @@ maincollect =do
     -- pero deberia activarse onFinish
     liftIO $ myThreadId >>= print
 
-    r <- threads 0 $ choose [1..2]
+    r <- threads 0 $ choose[1..2]
     onFinish $ const $ liftIO $ print ("FIN",r)
 
     liftIO $ threadDelay 1000000
@@ -1777,7 +2936,7 @@ mainauction = keep $ initNode $ do
        error "auction: not implemented"
 
 
-maintest = keep $ initNode $ test <|>  restore1
+maintest = keep $ initNode $ test -- <|>  restore1
   where
   test= do
     -- POSTData (name :: String, wallet :: Integer) 
@@ -1800,70 +2959,70 @@ maintest = keep $ initNode $ test <|>  restore1
     --    error "auction: not implemented"
 
 
-minput1 :: (Loggable a, ToHTTPReq a,Loggable val) => String  ->  val -> Cloud a
-minput1 ident val = response
-  where
-    response = do
-      -- idSession <- local $ fromIntegral <$> genPersistId
-      modify $ \s -> s {execMode = if execMode s == Remote then Remote else Parallel}
-      local $ do
-        log <- getLog
-        conn <- getState -- if connection not available, execute alternative computation
-        let closLocal = hashClosure log
-        mynode <- getMyNode
+-- minput1 :: (Loggable a, ToHTTPReq a,Loggable val) => String  ->  val -> Cloud a
+-- minput1 ident val = response
+--   where
+--     response = do
+--       -- idSession <- local $ fromIntegral <$> genPersistId
+--       modify $ \s -> s {execMode = if execMode s == Remote then Remote else Parallel}
+--       local $ do
+--         log <- getLog
+--         conn <- getState -- if connection not available, execute alternative computation
+--         let closLocal = hashClosure log
+--         mynode <- getMyNode
 
 
 
-        let idSession = 0
+--         let idSession = 0
 
 
-        params <- toHTTPReq $ type1 response
+--         params <- toHTTPReq $ type1 response
 
-        connected log  idSession conn closLocal
-
-
-
-    connected log  idSession conn closLocal    = do
-      cdata <- liftIO $ readIORef $ connData conn
+--         connected log  idSession conn closLocal
 
 
 
-      -- onException $ \(e :: SomeException) -> do liftIO $ print "THROWT"; throwt e; empty
-
-      (idcontext' :: Int, result) <- do
-        pstring <- giveParseString
-        if (not $ recover log) || BS.null pstring
-          then do
-            receivee conn (Just $ BC.pack ident)  val
-            unCloud $ logged $ error "not enough parameters 2" -- read the response, error if response not logged
-          else do
-            receivee conn (Just $ BC.pack ident)  val
-            unCloud $ logged $ error "insuficient parameters 3" -- read the response
-
-      tr ("MINPUT RESULT",idcontext',result)
-      return result `asTypeOf` return (type1 response)
+--     connected log  idSession conn closLocal    = do
+--       cdata <- liftIO $ readIORef $ connData conn
 
 
-    type1 :: Typeable a => Cloud a -> a
-    type1 cx = r
-      where
-        r = error $ show $ typeOf r
 
-receivee conn clos  val= do
-  (lc, log) <- setCont clos 0
-  s <- giveParseString
-  -- tr ("receive PARSESTRING",s,"LOG",toPath $ partLog log)
-  if recover log && not (BS.null s)
-    then (abduce >> receive1 lc val) <|> return () -- watch this event var and continue restoring
-    else  receive1 lc val
+--       -- onException $ \(e :: SomeException) -> do liftIO $ print "THROWT"; throwt e; empty
 
-  where
-  -- receive1 :: (Loggable val) => LocalClosure -> val -> TransIO ()
-  receive1 lc val= do
+--       (idcontext' :: Int, result) <- do
+--         pstring <- giveParseString
+--         if (not $ recover log) || BS.null pstring
+--           then do
+--             receivee conn (Just $ BC.pack ident)  val
+--             unCloud $ logged $ error "not enough parameters 2" -- read the response, error if response not logged
+--           else do
+--             receivee conn (Just $ BC.pack ident)  val
+--             unCloud $ logged $ error "insuficient parameters 3" -- read the response
+
+--       tr ("MINPUT RESULT",idcontext',result)
+--       return result `asTypeOf` return (type1 response)
 
 
-      setParseString $ toLazyByteString  (lazyByteString (BS.pack "0/") <> (serialize val)) :: TransIO ()
-      -- setLog 0 (lazyByteString (BS.pack "0/") <> (serialize val)) 0 0 :: TransIO()
+--     type1 :: Typeable a => Cloud a -> a
+--     type1 cx = r
+--       where
+--         r = error $ show $ typeOf r
+
+-- -- receivee conn clos  val= do
+--   -- (lc, log) <- setCont clos 0
+--   -- s <- giveParseString
+--   -- -- tr ("receive PARSESTRING",s,"LOG",toPath $ partLog log)
+--   -- if recover log && not (BS.null s)
+--   --   then (abduce >> receive1 lc val) <|> return () -- watch this event var and continue restoring
+--   --   else  receive1 lc val
+
+--   -- where
+--   -- -- receive1 :: (Loggable val) => LocalClosure -> val -> TransIO ()
+--   -- receive1 lc val= do
+
+
+--       setParseString $ toLazyByteString  (lazyByteString (BS.pack "0/") <> (serialize val)) :: TransIO ()
+--       -- setLog 0 (lazyByteString (BS.pack "0/") <> (serialize val)) 0 0 :: TransIO()
 
 
 
@@ -1882,10 +3041,12 @@ maindistrib = keep $ initNode $ inputNodes <|> do
 
 -- yield that manages blocking tasks
 type Task a=  TransIO a
-data Yield = forall a.Yield EventF (TransIO a) deriving Typeable
+data Yield = forall a.Yield TranShip (TransIO a) deriving Typeable
 
 -- | Yields the execution to other tasks and gives some blocking procedure that must 
 -- be executed before the task could be awakened again.
+-- if the task is trivial `return ()` it will be queued and the scheduler will dequeue
+-- and execute it
 yield' :: TransIO a -> TransIO a
 yield' task = Transient $ do
   cont <- get
@@ -1900,7 +3061,7 @@ yield' task = Transient $ do
 scheduler= threads 2 $ do
     Yield cont task <- getMailbox
     r <-  task
-    liftIO $ runCont' r cont
+    liftIO $ runContIO r cont
     empty
 
 
@@ -1936,7 +3097,7 @@ mainbuff= keep' $ do
 --   case event cont of
 --     Nothing -> do
 --        setData cont{event=Just ()}
---        liftIO $ runCont' cont
+--        liftIO $ runContIO cont
 --        return ()
 --     Just r -> do
 --       tr "just"
@@ -1967,14 +3128,14 @@ time f = do
 
 mainprimes= time $ keep' $  threads 4 $ do
   l <- collect 0 $ do
-          i <- choose' [1000000000..10000000000]
+          i <- choose [1000000000..10000000000]
           !r <- guard (isPrime i)
           return r
   tr l
 
 mainsum= time $ keep' $  threads 4 $ do
   l <- collect 0 $ do
-          i <- choose' [1..1000000]
+          i <- choose [1..1000000]
           !r <- sum [1,1000000]
           return r
   tr l
@@ -2000,7 +3161,7 @@ mainasunasd= keep' $ do
    tr r
 
 mainasssas= keep' $ do
-      s <- choose [1,2,3,4] -- abduce' <|> abduce' <|> abduce' <|> abduce'
+      s <- choose[1,2,3,4] -- abduce' <|> abduce' <|> abduce' <|> abduce'
       tr "thread"
       let !r= sum [1.. 100000000]
       tr r
@@ -2040,7 +3201,7 @@ maindbref= do
     liftIO $ atomically $ mapM newr [ A i "hello" ( show $ unsafePerformIO myThreadId)  | i <- [0..1000]]
     liftIO $ print "end"
 
-    k <- threads 0 $ choose [0..100]
+    k <- threads 0 $ choose[0..100]
 
     liftIO $ atomically $ forM [0..1000] $ \i -> do
         let dbr= getDBRef $ show i
@@ -2052,8 +3213,25 @@ maindbref= do
 
 
 
+testLocalExceptionHandlers=  local $ do
+    r <-  collect 0 $ verify <|> play
+
+    ttr r
+    assert (r==["HELLO"]) $ ttr "OK"
+    return "testLocalExceptionHandlers"
+    where
+    verify= do ttr "GET"; r <- getMailbox :: TransIO String; ttr r; return r
 
 
+
+    play= do
+            onException $ \(SomeException e) -> do lastPutMailbox "HELLO" ; empty
+
+            localExceptionHandlers $
+                onException $ \(SomeException e) -> putMailbox "WORLD"
+
+            throw $ userError "errrr"
+            empty
 
 
 
