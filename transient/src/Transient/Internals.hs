@@ -79,7 +79,6 @@ import Control.Monad
 import Control.Exception(AsyncException(ThreadKilled))
 
 import Data.Time.Clock
-import System.Posix.Signals
 -- import System.Signal
 import System.Directory.Internal.Prelude (exitFailure)
 import GHC.IO.Handle (hIsTerminalDevice)
