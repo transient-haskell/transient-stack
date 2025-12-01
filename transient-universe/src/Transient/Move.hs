@@ -69,7 +69,7 @@ getMyNode, getWebServerNode, getNodes, getEqualNodes, nodeList, isBrowserInstanc
 local, onAll, logged,loggedc, localIO, 
 
 -- * Moving Computations
-wormhole, teleport, copyData,
+wormhole, teleport,
 
 -- * Running at a Remote Node
  beamTo, forkTo,runAt, atRemote, setSynchronous, syncStream,

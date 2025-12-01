@@ -40,6 +40,7 @@ import           Data.Default
 import           Control.Applicative
 import           Control.Exception                  as E hiding (onException)
 import           Control.Monad.State
+import           Control.Monad
 import           Data.IORef
 import           Unsafe.Coerce
 import           System.IO.Unsafe

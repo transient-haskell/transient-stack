@@ -1,5 +1,5 @@
  {-# LANGUAGE ExistentialQuantification #-}
-module Transient.Mailboxes(newMailbox,deleteMailbox,getMailbox,getMailbox',putMailbox,putMailbox',lastPutMailbox,lastPutMailbox',getEVarFromMailbox,getEVarFromMailbox') where
+module Transient.Mailboxes(newMailbox,deleteMailbox,deleteMailbox',getMailbox,getMailbox',putMailbox,putMailbox',lastPutMailbox,lastPutMailbox',getEVarFromMailbox,getEVarFromMailbox') where
 
 import Transient.Internals
 -- import Transient.EVars

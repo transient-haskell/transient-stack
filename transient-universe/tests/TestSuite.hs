@@ -54,9 +54,8 @@ main= do
      endMonitor 
 
      case mr of
-       Left _ -> print "NO RESULT, NO THREADS RUNNING" >> exitFailure
-       Right Nothing  -> print  "SUCCESS" >> exitSuccess 
-       Right (Just e) -> putStr "FAIL: "  >> print e >> exitFailure
+       Left e -> print ("FAILURE",e) >> exitFailure
+       Right ()  -> print  "SUCCESS" >> exitSuccess 
 
  
 

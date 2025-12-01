@@ -96,13 +96,16 @@ executable monitorService
 
     -- if !impl(ghcjs >=0.1)
         build-depends:
+            base>4,
+            mtl -any,
             transformers -any,
             containers,
             transient,
             transient-universe,
             process,
             directory,
-            bytestring
+            bytestring,
+            data-default
             
         hs-source-dirs: app/server/Transient/Move/Services
         main-is: MonitorService.hs

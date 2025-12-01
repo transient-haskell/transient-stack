@@ -112,7 +112,7 @@ module GHCJS.HPlay.View(
 )  where
 
 
-import           Transient.Internals     hiding (input, option, parent)
+import           Transient.Internals     hiding (input, option, parent,genNewId)
 import           Transient.Move.Logged hiding ((<<))
 import           Transient.Move.Utils
 import qualified Prelude(id,span,div)

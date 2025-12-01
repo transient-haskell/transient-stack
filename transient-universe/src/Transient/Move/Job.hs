@@ -11,6 +11,7 @@
 --
 -- Author: Alabado sea Dios que inspira todo lo bueno que hago. Porque Él es el que obra en mi
 --
+{-# LANGUAGE ScopedTypeVariables #-}
 module Transient.Move.Job where -- (job, config, runJobs) where
 import Transient.Internals
 import Transient.Move.Internals
@@ -95,7 +96,7 @@ job :: Loggable a => (Maybe String) -> Cloud a -> Cloud a
 job mname mx = do
   ttr ("job", mname)
   local $  do
-      mprev <- getData 
+      mprev :: Maybe Job <- getData 
       when (isJust mprev) $ remove $ fromJust mprev
       PrevClos dbprevclos _ isapp <- getData `onNothing` noExState "job"
       let(idSession,_) = getSessClosure dbprevclos
@@ -125,7 +126,7 @@ job mname mx = do
 
 
   
-
+remove :: Job -> TransIO ()
 remove conclos= do
       liftIO $ atomically $ do
         -- unsafeIOToSTM $ print "REMOVE"
