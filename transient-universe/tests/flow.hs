@@ -1210,7 +1210,8 @@ testDurableCollect=  keep $ initNode $ do
 
   job (Just "jobfin") $ local $ option "fin" "fin"
 
-
+-- | persistent collect. Unlike Transient.collect, Transient.Move.collect  keeps the results across intended and unintended
+-- shutdowns and restarts
 collectp n delta  mx=  do
   onAll $ liftIO $ writeIORef save True
   tinit <- local getMicroSeconds
