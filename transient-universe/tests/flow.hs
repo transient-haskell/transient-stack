@@ -1193,6 +1193,27 @@ simulcoll  = loggedc $ do
 
 
 
+distributedVotation= keep $ initNode $ runJobs <|> connectNode <|> aggregate  <|> enternode 
+
+enternode= do
+  myNode <- localIO getMyNode
+  localIO $ print ("You can communicate this node to let other to connect to, since it will be an active node",myNode)
+  option "connect"  "to enter an active dApp node to connect to"
+  node <- liftA2 (localIO . createNode) (input (const True) "enter the hostname> ") (input (const True) "enter the port> ")
+  runAt node $ connectNode node
+  
+connectNode node= local $ putMailbox node  
+  
+  aggregate= do
+    aggregated <- collectp 0 time $ do
+                  node<- local getMailbox 
+                  runAt node $ do
+                      results <- collectp 0 time $ voteapi "vote" options
+                      job Nothing
+                      return results 
+    return $ flatten aggregated
+
+
 
 
 main= testDurableCollect

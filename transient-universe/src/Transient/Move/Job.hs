@@ -29,7 +29,7 @@ import Data.List
 import Data.Maybe
 import Data.Typeable
 
-newtype Job= Job (Int,BC.ByteString)  deriving (Typeable,Read,Show,Eq)
+newtype Job= Job {jobSession :: Int,jobName :: BC.ByteString,jobNode :: Node, jobError :: Exception}  deriving (Typeable,Read,Show,Eq)
 data Jobs= Jobs{pending :: [Job]}  deriving (Read,Show)
 instance TC.Indexable Jobs where key _= "__Jobs"
 
@@ -64,70 +64,38 @@ instance TC.Indexable Jobs where key _= "__Jobs"
 --
 
 
--- job :: Loggable a => Cloud a -> Cloud a
--- job mx = do
---   this@(idSession,_) <- local $ do
---     idSession <- fromIntegral <$> genPersistId
---     log <- getLog <|> error "job: no log"
---     let this = (idSession,BC.pack $ show $ hashClosure log + hashExec) -- es la siguiente closure
---     ttr("JOB",this)
 
---     liftIO $ atomically $ do
---        Jobs  pending <- readDBRef rjobs `onNothing` return (Jobs[])
---     -- liftIO $ print ("creating job",this)
---        writeDBRef rjobs $ Jobs $ this:pending
-
---     return this
-
-
---   local $ setCont Nothing idSession  >> return()
---       -- liftIO $ print $ localClos clos
-
---   rs <- local $ do
---        onFinish  $ \_ ->do ttr ("REMOVE",this);remove this 
-       
---        -- alabado sea Jesucristo
---        abduce
---        unCloud mx
-  
---   return rs
-
-job :: Loggable a => (Maybe String) -> Cloud a -> Cloud a
-job mname mx = do
-  ttr ("job", mname)
-  local $  do
+job :: (Maybe String) -> Cloud ()
+job mname  =  local $  do
       mprev :: Maybe Job <- getData 
-      when (isJust mprev) $ remove $ fromJust mprev
+      when (isJust mprev) $ jobRemove $ fromJust mprev
       PrevClos dbprevclos _ isapp <- getData `onNothing` noExState "job"
       let(idSession,_) = getSessClosure dbprevclos
       endpoint (fmap BC.pack mname) -- void $ setCont Nothing idSession 
       tr "AFTER ENDPOINT"
       PrevClos thisclos _ isapp <- getData `onNothing` noExState "job 2"
-      -- false to force the log NOt to recreate this endpoint when replaying
+      -- false to force the log Not to recreate this endpoint when replaying
       setState $ PrevClos thisclos False isapp
 
       -- PrevClos thisclos _ _ <- getState 
-      let this = getSessClosure thisclos
+      let (s,c) = getSessClosure thisclos
+          this= Job s c myNode Nothing
       liftIO $ atomically $ do
          Jobs  pending <- readDBRef rjobs `onNothing` return (Jobs [])
          tr  ("creating job",pending,this)
-         writeDBRef rjobs $ Jobs $  Job this:pending
-      setData $ Job this
-      tr ("job",thisclos)
---       return ("job",thisclos)
+         writeDBRef rjobs $ Jobs $   this:pending
+      setData  this
 
---   local $ do
-      -- onFinish  $ \_ -> remove this
-      -- alabado sea Jesucristo
-      abduce
-      r <- unCloud mx 
-      -- remove this
-      return r
+      onException $ \e@(ConnectionError node _) $ do
+         -- store node in job to be rescheduled when node recovers
+         liftIO $ atomically $ writeDBRef rjobs this{nodeJob=node,nodeError=e}
+         empty
 
 
   
-remove :: Job -> TransIO ()
-remove conclos= do
+  
+jobRemove :: Job -> TransIO ()
+jobRemove conclos= do
       liftIO $ atomically $ do
         -- unsafeIOToSTM $ print "REMOVE"
         Jobs  pending <- readDBRef rjobs `onNothing` return (Jobs [])
@@ -166,15 +134,64 @@ rjobs = getDBRef "__Jobs"
 -- A more complete explanation https://matrix.to/#/!kThWcanpHQZJuFHvcB:gitter.im/$DARXcz9ny51BVT1L7RNH7HTa35JQNtatnCaHGFR9LfM?via=gitter.im&via=matrix.org&via=matrix.freyachat.eu
 
 config :: Loggable a => String -> Cloud a -> Cloud a
-config name mx = job (Just name) mx
-  
+config name mx = do
+   job (Just name) 
+   mx
 
-runJobs= local $ fork $ do
-   Jobs  pending <-liftIO $ atomically $ readDBRef rjobs `onNothing` return (Jobs  [])
-   tr ("runJobs",pending )
-   Job (id,clos) <- choose pending
-   --  noTrans $  restoreClosure id $ BC.unpack clos
-   (log,clos') <- getClosureLog id $ BC.unpack clos
-   conn <- getState
-   remove $Job (id,clos)
-   Transient $ sendToClosure  log 0 mempty conn False clos'
+-- A node notify that it is ready to continue unfinished jobs
+newtype Ping= Ping Node
+
+runJobs= local $ startJobs <|> commJobs
+  where
+  startJobs= do
+    Jobs  pending <-liftIO $ atomically $ readDBRef rjobs `onNothing` return (Jobs  [])
+    tr ("runJobs",pending )
+    myNode <- getMyNode
+    Job (id,clos) <- choose pending
+    schedule $ Job id clos myNode Nothing
+
+  commJobs= do
+    Ping node <- getMailbox
+    jobs <- atomically $ readDBRef rjobs `onNothing` return (Jobs  [])
+    let js= filterByNode node jobs
+    j <- choose js
+    schedule j
+
+  schedule job@(Job id clos node Nothing)= do
+    (log,clos') <- getClosureLog id $ BC.unpack clos
+    let conn= Connection{remoteNode= lazy $ newIORef node} 
+    jobRemove job
+    Transient $ sendToClosure  log 0 mempty conn False clos'
+
+
+-- | persistent collect. Unlike Transient.collect, Transient.Move.collect  keeps the results across intended and unintended
+-- shutdowns and restarts
+collectp n delta  mx=  do
+  onAll $ liftIO $ writeIORef save True
+  tinit <- local getMicroSeconds
+  ttr("COLLECTPP",n,delta)
+
+  let tfin= tinit +  delta
+      numbered= n > 0
+ 
+      collectp' n  delta 
+       | n <= 0 && numbered = return []
+       | otherwise= do
+        (rs,delta') <- local $ do
+            t <-  getMicroSeconds
+
+            let delta'=  tfin -t
+            ttr ("delta'",delta')
+            rs <- if delta' <= 0 then return [] else collectSignal True n (fromIntegral delta) $ unCloud mx
+            ttr ("RS",rs)
+
+            -- tiene que obtener el delta historico dentro de local, para saber si tiene que recuperar mas jobs
+            -- Alabado sea Dios
+            return (rs,delta')
+        let len= length rs
+        ttr ("ITERATION",n,len)
+        if delta'<= 0 || (numbered && len>= n) then return rs else return rs <>  
+                    (do job Nothing ;  collectp' (n-len) delta')
+  
+  ttr ("COLLECTP",n,delta)
+  collectp' n delta
