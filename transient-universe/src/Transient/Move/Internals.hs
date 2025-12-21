@@ -738,13 +738,17 @@ reportBack = onException $ \(e :: SomeException) -> do
 
 -- | Set a state value in all the nodes participating in a cloud computation. This state data can be read and 
 -- updated locally with other state primitives in each node, but only `setCloudState` set it in all the nodes
-setCloudState :: Loggable b => b -> Cloud ()
+setCloudState :: Typeable b => b -> Cloud ()
 setCloudState x = do
   -- assure that every computation restore fron a log pass trough this
-  r <- local $ do
-      modifyState' (\prevclos -> prevclos{preservePath=True}) $ noExState "setCloudState"
-      return x
-  onAll $ setState r
+  -- r <- local $ do
+  --     modifyState' (\prevclos -> prevclos{preservePath=True}) $ noExState "setCloudState"
+  --     return x
+  -- onAll $ setState r
+
+  modifyState' (\prevclos -> prevclos{preservePath=True}) $ noExState "setCloudState"
+  onAll $ setState x
+
 
 -- broadcastState= x
 --   where 

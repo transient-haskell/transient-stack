@@ -209,6 +209,7 @@ data LocalClosure = LocalClosure
     localEvar :: Maybe (EVar (Either CloudException (StreamData Builder, SessionId, IdClosure, Connection))),
     localCont :: Maybe TranShip
   }
+  -- | ListPrecessors [DBRef LocalClosure]
 
 kLocalClos idSess clos = BC.unpack clos <> "-" <> show idSess
 

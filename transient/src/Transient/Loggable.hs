@@ -17,6 +17,7 @@ import Control.Applicative
 import System.IO.Unsafe
 import Unsafe.Coerce
 import Control.Monad
+import Control.Monad.IO.Class
 
 
 class (Show a, Read a,Typeable a) => Loggable a where
@@ -131,9 +132,10 @@ instance   (Typeable a, Loggable a) => Loggable [a]  where
       r= if typeOf (ty r) /= typeOf (ofType :: String)
               then (tChar '[' *> commaSep deserialize <* tChar ']')
               else
-                
-                  do sandbox(tChar ']') ; return  (unsafeCoerce "")
-                 <|> do
+                  
+                -- do sandbox(tChar ']') ; empty -- return  (unsafeCoerce "")
+                --  <|> 
+                 do
                   -- either is a string in with " "
                         sandbox' $ tChar '\"'
                         -- s <- getParseBuffer
@@ -262,7 +264,11 @@ dupSlash s= BS.foldl dupCharSlash (lazyByteString "") s where
   dupCharSlash s '/'=  (s <> lazyByteString "//") !> "slash"
   dupCharSlash s c= s <> lazyByteString (BS.singleton c) !> c
 
+separators = "/:\t\n; " :: String
+
 undupSlash = do
+    sandbox' $ do r <- anyChar ; when (r `elem` ']':separators)  empty
+
     s <- tTakeUntil $ \s -> BS.head s == '/'
     do string "//"
        return s <> "/" <> undupSlash

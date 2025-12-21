@@ -28,6 +28,7 @@ import Control.Monad
 import Data.List
 import Data.Maybe
 import Data.Typeable
+import Data.IORef
 
 newtype Job= Job (Int,BC.ByteString)  deriving (Typeable,Read,Show,Eq)
 data Jobs= Jobs{pending :: [Job]}  deriving (Read,Show)
@@ -95,6 +96,7 @@ instance TC.Indexable Jobs where key _= "__Jobs"
 job :: Loggable a => (Maybe String) -> Cloud a -> Cloud a
 job mname mx = do
   ttr ("job", mname)
+  localIO $ writeIORef save True
   local $  do
       mprev :: Maybe Job <- getData 
       when (isJust mprev) $ remove $ fromJust mprev
@@ -110,7 +112,7 @@ job mname mx = do
       let this = getSessClosure thisclos
       liftIO $ atomically $ do
          Jobs  pending <- readDBRef rjobs `onNothing` return (Jobs [])
-         tr  ("creating job",pending,this)
+         ttr  ("creating job",pending,this)
          writeDBRef rjobs $ Jobs $  Job this:pending
       setData $ Job this
       tr ("job",thisclos)

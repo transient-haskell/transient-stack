@@ -2582,8 +2582,8 @@ collectSignal saveOnSignal  number time proc'=  localBack (Finish "") $ do
             sts' <- gets mfData
             -- liftIO $ atomicModifyIORef rstates $ \sts -> (mix sts' sts,())
 
-            x <- genNewId
-            tr ("WRITE",x)
+            -- x <- genNewId
+            -- tr ("WRITE",x)
             empty
         signal= do
           guard saveOnSignal
@@ -2892,7 +2892,7 @@ back reason =  do
 
   goBackt (Backtrack x [] )
        | typeOf x == typeOf (Just $ Finish "") = empty  -- finish is executed after any other backtracking, including throwt exception
-       | otherwise = do  liftIO $ putStrLn $ show x <> " \n\nnot handled\n\n" ; empty   -- Ad Maiorem Dei Gloriam
+       | otherwise = do  liftIO $ putStrLn $ "backtracking of type " <>  show (typeOf x) <> " not handled\n\n" ; empty   -- Ad Maiorem Dei Gloriam
 
   goBackt (Backtrack _ stack@((f,k) : bs) )= do
         setData $ Backtrack (Just reason) bs

@@ -130,6 +130,10 @@ minput ident msg' = response
           mc <- getData
           case mc of
             Nothing -> return $ Context 0 M.empty
+              -- ctx <- Context <$>  (unCloud $ logged genSessionId) <*> return M.empty
+              -- tr ("CONTEXR from 0",ctx)
+              -- setState ctx
+              -- return ctx
             Just (Context 0 x) ->  do
               ctx <- Context <$>  (unCloud $ logged genSessionId) <*> return x
               tr ("CONTEXR from 0",ctx)
@@ -271,7 +275,7 @@ minput ident msg' = response
             -- logged will deserialize the request parameters
             unCloud $ logged $ error "insuficient parameters 3" -- read the response
             -- maybe another user from other context continues the program
-      tr ("MINPUT RESULT",idcontext',result)
+      ttr ("MINPUT RESULT",idcontext',result)
       mncontext <- recoverContext idcontext'
       when (isJust mncontext) $ setState (fromJust mncontext :: Context)
       return result `asTypeOf` return (type1 response)
@@ -305,7 +309,7 @@ minput ident msg' = response
 
 
 -- | makes a `minput`  to be discoverable by  `published` so that the endpoint may be available for other users.
--- The first parameter is the key where many endpoints may be published. The second parameter is the endpoint (`minput`) itselfñ
+-- The first parameter is the key where many endpoints may be published. The second parameter is the endpoint (`minput`) itself
 
 public :: Loggable a => String -> Cloud a -> Cloud a
 public key inp= inp  <|> add key

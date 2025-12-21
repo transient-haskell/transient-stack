@@ -246,7 +246,7 @@ inputfm remove ident message mv cond = do
                       liftIO $ when (isJust mv) $  putStrLn ""
                       returnm mv
 
-separators = "/:\t\n; "
+-- separators = "/:\t\n; "
 dropspaces = dropWhile (`elem` separators)
 
 
