@@ -81,7 +81,7 @@ newtype Cloud a = Cloud {unCloud :: TransIO a}
 
 
 -- | previous local checkpointed closure in the execution flow
-data PrevClos = PrevClos{dbref:: DBRef LocalClosure, preservePath :: Bool, isApplicative :: Bool}
+data PrevClos = PrevClos{dbref:: DBRef LocalClosure, newSession :: Maybe Int, preservePath :: Bool, isApplicative :: Bool} deriving Show
 
 -- | last remote closure in a teleport waiting for responses in the execution flow
 newtype ClosToRespond= ClosToRespond (DBRef LocalClosure) -- {remSession :: SessionId, remClosure :: IdClosure}
@@ -201,13 +201,13 @@ data ConnectionData
    deriving (Show)
 
 data LocalClosure = LocalClosure
-  { localSession :: Int,
-    prevClos :: DBRef LocalClosure,
-    localLog :: Builder,
-    localClos :: IdClosure,
-    localMvar :: MVar (),
-    localEvar :: Maybe (EVar (Either CloudException (StreamData Builder, SessionId, IdClosure, Connection))),
-    localCont :: Maybe TranShip
+  { localClos     :: IdClosure,
+    localSession  :: Int,
+    prevClos      :: DBRef LocalClosure,
+    localLog      :: Builder,
+    localMvar     :: MVar (),
+    localEvar     :: Maybe (EVar (Either CloudException (StreamData Builder, SessionId, IdClosure, Connection))),
+    localCont     :: Maybe TranShip
   }
   -- | ListPrecessors [DBRef LocalClosure]
 
@@ -225,7 +225,7 @@ instance (Show a, Read a) => TC.Serializable a where
   deserialize = read . BL.unpack
 
 instance TC.Serializable LocalClosure where
-  serialize LocalClosure {..} = TC.serialize (localSession, prevClos, localLog, localClos)
+  serialize LocalClosure {..} = TC.serialize (localClos,localSession, prevClos, localLog)
   deserialize str =
     let (localSession, prevClos, localLog,  localClos) = TC.deserialize str
         block = unsafePerformIO $ newMVar ()
@@ -289,5 +289,18 @@ instance Show ConnectionError where
 
 instance Exception ConnectionError
 
+data HTTPMethod = GET | POST deriving (Read, Show, Typeable, Eq,Generic)
 
+instance Loggable HTTPMethod
+
+instance ToJSON HTTPMethod
+
+newtype Endpoints= Endpoints (M.Map BL.ByteString HTTPReq) deriving Show
+data HTTPReq = HTTPReq
+  { reqtype :: HTTPMethod,
+    requrl :: BL.ByteString,
+    reqheaders :: BL.ByteString,
+    reqbody :: BL.ByteString
+  }
+  deriving (Read, Show, Typeable, Generic)
 

@@ -262,6 +262,8 @@ input cond prompt = inputf True "input" prompt Nothing cond
 input' :: (Typeable a, Loggable a) =>  a -> (a -> Bool) -> String -> TransIO a
 input' v cond prompt = inputf True "input" prompt (Just v) cond
 
+-- -- input removed after use either if it validades or not
+-- input1 cond prompt = inputf False "input" prompt Nothing cond
 
 newtype NavBack= NavBack Bool
 
@@ -326,7 +328,7 @@ inputNav mv cond prompt= do
 
 
 {-# NOINLINE rprompt #-}
-rprompt = unsafePerformIO $ newIORef "tr> "
+rprompt = unsafePerformIO $ newIORef "tr > "
 
 inputLoop =
   do

@@ -288,6 +288,27 @@ local :: Loggable a => TransIO a -> Cloud a
 -- data EnterLocal= EnterLocal deriving (Typeable,Show)
 local = logged
 
+-- | execute the computation in all the nodes of the cloud where the computation is translated but only
+-- if this is necessary. If the computation in which `onAll` is enclosed has been already executed in the
+-- calling node, it is not executed again in the called node.
+--
+-- > onAll $ setState Foo
+-- > runAt node ...  setState is executed in the called node
+--
+-- > local $ do blah blah blah; onAll setState Foo; blah...
+-- > runAt node ... setState is NOT executed in the called node since the local computation has been already logged before calling
+onAll :: TransIO a -> Cloud a
+onAll = Cloud
+
+-- | force the execution of the computation in all the nodes of the cloud where the computation is translated
+--
+-- > local $ do blah blah blah; onAll setState Foo; blah...
+-- > runAt node ... setState is  executed in the called node
+--
+onAllNodes :: TransIO a -> Cloud a
+onAllNodes proc = do
+    modifyState' (\prevclos -> prevclos{preservePath=True}) $ noExState "setCloudState"
+    onAll proc
 
 -- #ifndef ghcjs_HOST_OS
 
@@ -319,8 +340,7 @@ runCloudIO' (Cloud mx) = keep' mx
 
 --
 
-onAll :: TransIO a -> Cloud a
-onAll = Cloud
+
 
 -- -- | only executes if the result is demanded. It is useful when the conputation result is only used in
 -- -- the remote node, but it is not serializable. All the state changes executed in the argument with
@@ -600,9 +620,12 @@ syncStream proc = do
   Use 'teleport' when you need to shift execution seamlessly, ensuring
   that computations can continue independently on a different host or
   environment without loss of state or context.
+
+  The execution context migrates to the remote node opened by wormhole.
+  A second teleport in the same wormhole brings back the execution to the original node. and so on
 -}
 teleport :: Cloud ()
-teleport =  do -- local $ do
+teleport =  do 
 
   modify $ \s -> s {execMode = if execMode s == Remote then Remote else Parallel}
 
@@ -646,7 +669,7 @@ teleport =  do -- local $ do
             remoteClosDBRef <-
                   do
                   ClosToRespond ref <- getState
-                  tr ("after ClosToRespond",ref)   -- it is the respose to a previous teleport
+                  tr ("after ClosToRespond",ref)   -- it is the response to a previous teleport
                   delState $ ClosToRespond ref
                   return ref
                 <|> do
@@ -658,7 +681,7 @@ teleport =  do -- local $ do
                   tr "return 0 0"
                   return dbClos0
 
-            PrevClos prevClosDBRef _ _<- getData `onNothing` noExState "teleport" -- return (PrevClos  0 "0" False)
+            PrevClos prevClosDBRef _ _ _<- getData `onNothing` noExState "teleport" -- return (PrevClos  0 "0" False)
             -- updateLastClosureForConnection idConn prevClosDBRef
             tr ("PREVCLOS",prevClosDBRef)
             -- calcula el log entre la ultima closure almacenada localmente (prevclos) y el punto que el nodo ya ha recibido (closremote) 
@@ -692,7 +715,7 @@ setNotifyFinishToCallingNode :: Connection -> TransIO ()
 setNotifyFinishToCallingNode conn = do
     -- check if it is my node TODO
     mctr <- getData
-    PrevClos prevClosDBRef _ _<- getData `onNothing` noExState "teleport" -- return (PrevClos  0 "0" False)
+    PrevClos prevClosDBRef _ _ _<- getData `onNothing` noExState "teleport" -- return (PrevClos  0 "0" False)
 
     case mctr of
       Nothing -> tr "NO CLOS TO RESPOND"
@@ -739,27 +762,12 @@ reportBack = onException $ \(e :: SomeException) -> do
 -- | Set a state value in all the nodes participating in a cloud computation. This state data can be read and 
 -- updated locally with other state primitives in each node, but only `setCloudState` set it in all the nodes
 setCloudState :: Typeable b => b -> Cloud ()
-setCloudState x = do
-  -- assure that every computation restore fron a log pass trough this
-  -- r <- local $ do
-  --     modifyState' (\prevclos -> prevclos{preservePath=True}) $ noExState "setCloudState"
-  --     return x
-  -- onAll $ setState r
-
-  modifyState' (\prevclos -> prevclos{preservePath=True}) $ noExState "setCloudState"
-  onAll $ setState x
+setCloudState x = onAllNodes $ setState x
+  -- modifyState' (\prevclos -> prevclos{preservePath=True}) $ noExState "setCloudState"
+  -- onAll $ setState x
 
 
--- broadcastState= x
---   where 
---   x= do
---     r <- local $ do
---       modifyState' (\prevclos -> prevclos{preservePath=True}) $ error "setCloudState: no execution state"
---       getState <|> error ( "no such state: " <> typeOf (t x))
---     onAll $ setState r
 
---   t :: TransIO a -> a
---   t= undefined
 
 
 -- | execute a Transient action in each of the nodes connected.
@@ -2522,7 +2530,7 @@ processMessage s1 closl s2 closr mlog deleteClosure = do
         Just LocalClosure {localCont = Nothing} -> do
           tr "RESTORECLOSuRE"
           -- restoreClosure s1 $ BC.unpack closl 
-          (log',closreg) <- getClosureLog s1 $  BC.unpack closl
+          (log',closreg) <- getClosureLog s1  closl
           tr "AFTER RESTORECLOS"
           -- when (synchronous conn) $ liftIO $ void (tryPutMVar mv ()) -- for syncronous streaming
           case mlog of
@@ -2767,11 +2775,7 @@ isWebSocketsReq =
   not . null
     . filter ((==  "Sec-WebSocket-Key") . fst)
 
-data HTTPMethod = GET | POST deriving (Read, Show, Typeable, Eq,Generic)
 
-instance Loggable HTTPMethod
-
-instance ToJSON HTTPMethod
 
 getFirstLine = (,,) <$> getMethod <*> (BS.toStrict <$> getUri) <*> getVers
   where
@@ -3243,11 +3247,14 @@ getClosureLog idSession "0" = do
 
 getClosureLog idSession clos = do
   tr ("getClosureLog", idSession, clos)
-  closReg <- liftIO $ atomically $ readDBRef (getDBRef $ kLocalClos idSession $ BC.pack clos) `onNothing` error ("closure not found in DB:" <> show (idSession,clos))
+  closReg <- liftIO $ atomically $ readDBRef (getDBRef $ kLocalClos idSession  clos) `onNothing` error ("closure not found in DB:" <> show (idSession,clos))
+  liftIO $ takeMVar (localMvar closReg) -- can only be recovered by a single process to avoid duplications
+  closReg <- liftIO $ atomically $ readDBRef (getDBRef $ kLocalClos idSession  clos) `onNothing` error ("closure not found in DB:" <> show (idSession,clos))
+
   prev    <- liftIO $ atomically $ readDBRef (prevClos closReg) `onNothing` error "prevClos not found"
   case localCont closReg of
     Nothing -> do
-      (prevLog, clos) <- getClosureLog (localSession prev) (BC.unpack $ localClos prev)
+      (prevLog, clos) <- getClosureLog (localSession prev) ( localClos prev)
       let locallogclos = localLog closReg
       tr ("PREVLOG",  prevLog)
       tr ("LOCALLOG",  locallogclos)

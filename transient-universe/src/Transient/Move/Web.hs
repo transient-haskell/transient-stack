@@ -17,8 +17,8 @@
 
 
 module Transient.Move.Web  (minput,moutput,public,published,showURL,getURL,ToHTTPReq(..),POSTData(..),HTTPReq(..),
-AsJSON(..),getSessionState,setSessionState,newSessionState,rawHTTP,serializeToJSON,deserializeJSON,
- IsCommand,optionEndpoints,getCookie,setCookie) where
+AsJSON(..),{-getSessionState,setSessionState,newSessionState,-}rawHTTP,serializeToJSON,deserializeJSON,
+ IsCommand,optionEndpoints,getCookie,setCookie,genNewSession) where
 
 import Control.Applicative
 import Control.Concurrent.MVar
@@ -50,6 +50,7 @@ import Transient.Move.Defs
 import Transient.Move.Internals
 import Transient.Parse
 import Transient.Move.JSON
+import Transient.Move.Job
 import Unsafe.Coerce
 import Data.List
 
@@ -65,19 +66,19 @@ instance TC.Indexable InputDatas where key (InputDatas key _)= key
 
 instance Loggable InputData
 
-data Context = Context Int (M.Map String BS.ByteString) deriving (Read, Show, Typeable)
+-- data Context = Context Int (M.Map String BS.ByteString) deriving (Read, Show, Typeable)
 
 
-instance TC.Indexable Context where key (Context k _) = show k
+-- instance TC.Indexable Context where key (Context k _) = show k
 
 -- newtype URL= URL BS.ByteString  deriving (Read, Show, Typeable) -- for endpoint urls
-data HTTPReq = HTTPReq
-  { reqtype :: HTTPMethod,
-    requrl :: BS.ByteString,
-    reqheaders :: BS.ByteString,
-    reqbody :: BS.ByteString
-  }
-  deriving (Read, Show, Typeable, Generic)
+-- data HTTPReq = HTTPReq
+--   { reqtype :: HTTPMethod,
+--     requrl :: BS.ByteString,
+--     reqheaders :: BS.ByteString,
+--     reqbody :: BS.ByteString
+--   }
+--   deriving (Read, Show, Typeable, Generic)
 
 instance ToJSON BL.ByteString where
   toJSON = toJSON . BS.unpack
@@ -104,45 +105,37 @@ instance Semigroup HTTPReq where
 -- The first parameter is the identifier of the endpoint. It is used to identify the endpoint in the URL as well
 -- as in the console.
 --
--- The second parameter is the message that will be sent to the client. It can be a string, or any JSON object.
+-- The second parameter is the message that will be sent to the client. It can be a string, or any JSON object. Normally
+-- this message is the response to the previous minput and/or a message explaining what comes next if the user invoque
+-- the endpoint. More content can be added to the mesage by composing more content with other minput or`moutput` using
+-- applicative, alternative and algebraic operators. Mainly the alternative operator <|> is used. Example:
+--
+-- > (minput "this" message1 >>= process) <|> (minput "that" message2 >>= process2) <|> stream
+-- > where
+-- > stream = foldl (<|>) empty $ map moutput messagelist 
+--
+-- All is streamed as chunked encoding so the receiver can process the streams of messages and endpoints
 --
 -- It is the main way to interact with users and programs which do not share the same base code.
 -- Otherwise, a transient program distributed among different nodes, including web nodes, would use `runAt` and other
 -- distributed primitives..
---
--- Since minput can be composed with itself and other transient primitives, the expression could wait for more than one minput request/response
---
--- For example  `minput "term1" "enter "
+
 minput :: (Loggable a, ToHTTPReq a,ToJSON b,Typeable b) => String -> b -> Cloud a
-minput ident msg' = response
+minput ident msg' = onAll $ sandboxData (ofType :: ClosToRespond) $ unCloud  response
   where
     msg= encode msg'
     response = do
-      -- idSession <- local $ fromIntegral <$> genPersistId
+      delState (ofType :: ClosToRespond)
       modify $ \s -> s {execMode = if execMode s == Remote then Remote else Parallel}
       local $ do
         log <- getLog
         conn <- getState -- if connection not available, execute alternative computation
         let closLocal = hashClosure log
-        -- closdata@(Closure sess closRemote _) <- getIndexData (idConn conn) `onNothing` return (Closure 0 "0" [])
         mynode <- getMyNode
-        ctx@(Context idcontext _) <-  do
-          mc <- getData
-          case mc of
-            Nothing -> return $ Context 0 M.empty
-              -- ctx <- Context <$>  (unCloud $ logged genSessionId) <*> return M.empty
-              -- tr ("CONTEXR from 0",ctx)
-              -- setState ctx
-              -- return ctx
-            Just (Context 0 x) ->  do
-              ctx <- Context <$>  (unCloud $ logged genSessionId) <*> return x
-              tr ("CONTEXR from 0",ctx)
-              setState ctx
-              return ctx
-            Just ct -> return ct
-
-
-        let idSession = idcontext
+        
+        PrevClos dbprevclos mn _  _ <- getData `onNothing` noExState "minput"
+        let idSession = if isJust mn then fromJust mn else fst $ getSessClosure dbprevclos
+        ttr ("ENDPOINTWAIT", idSession)
         let urlbase =
               str "http://" <> str (nodeHost mynode) <> str ":" <> intt (nodePort mynode)
                 </> str ident
@@ -161,7 +154,7 @@ minput ident msg' = response
               | otherwise = msg
         setState $ InputData ident msgdat httpreq
 
-        connected log ctx idSession conn closLocal  httpreq <|> commandLine conn log httpreq
+        connected log  idSession conn closLocal  httpreq <|> commandLine conn log httpreq
 
     commandLine conn log httpreq = do
       guard (not $ recover log)
@@ -175,22 +168,23 @@ minput ident msg' = response
         -- if no ident it is just a message with no further option
         then do liftIO $ putStrLn $ BS.unpack msg; empty
         else do
-          Context n st <-
-            getState <|> do
-              let ctx = Context 0 M.empty
-              setState ctx
-              return ctx
+          -- Context n st <-
+          --   getState <|> do
+          --     let ctx = Context 0 M.empty
+          --     setState ctx
+          --     return ctx
 
-          let ref = getDBRef $ show n
-          liftIO $ atomically $ writeDBRef ref $ Context n st
+          -- let ref = getDBRef $ show n
+          -- liftIO $ atomically $ writeDBRef ref $ Context n st
 
           execmode <- gets execMode
           tr ("LOG",execmode)
-          option ident $ BS.unpack msg <> "\nEnter\t\x1b[1;31m" ++ "endpt "<> ident <> "\x1b[0m" <> "\tfor this endpoint details"
+          option ident $ BS.unpack msg <> "\nEnter\t\x1b[1;31m" ++ "endpt "<> ident <> "\x1b[0m" <> "\tfor details about this endpoint"
           setState IsCommand
-
-          ctx@(Context idc _) <- liftIO $ atomically $ readDBRef ref `onNothing` error "minput: no context"
-          setState ctx
+          PrevClos dbr _ _ _ <- getData `onNothing` noExState "commandLine minput"
+          let (idc,_) = getSessClosure dbr
+          -- ctx@(Context idc _) <- liftIO $ atomically $ readDBRef ref `onNothing` error "minput: no context"
+          -- setState ctx
 
           r <-
             if typeOf response /= typeOf (ofType :: Cloud ())
@@ -201,7 +195,7 @@ minput ident msg' = response
           (_,r') <- unCloud $ logged $ return (idc,r)
           return r'
 
-    connected log ctx@(Context idcontext _) idSession conn closLocal  httpreq = do
+    connected log {- ctx@(Context idcontext _)-} idSession conn closLocal  httpreq = do
       cdata <- liftIO $ readIORef $ connData conn
 
       onException $ \( e :: SomeException) -> do -- 
@@ -219,10 +213,10 @@ minput ident msg' = response
 
       -- onException $ \(e :: SomeException) -> do liftIO $ print "THROWT"; throwt e; empty
 
-      liftIO $ atomically $ writeDBRef (getDBRef $ show idcontext) ctx -- store the state, the id will be in the URL
+      -- liftIO $ atomically $ writeDBRef (getDBRef $ show idSession) ctx -- store the state, the id will be in the URL
       Endpoints endpts <- getEndpoints
       setRState $ Endpoints  $ M.insert (str ident) httpreq endpts
-      tr ("ADDED ENDPOINT",ident,httpreq)
+      ttr ("ADDED ENDPOINT",ident,httpreq, "previous endpoints:", M.keys endpts)
       (idcontext' :: Int, result) <- do
         pstring <- giveParseString
         if not (recover log) || BS.null pstring
@@ -232,20 +226,22 @@ minput ident msg' = response
             -- ty <- liftIO $ readIORef $ connData conn
             case cdata of
               Just Self -> do
+                -- b <- getLog >>= return . recover
                 endpointWait  (Just $ BC.pack ident) idSession
+
                 delState IsCommand
                 tr "SELF XXX"
 
-                ps <- giveParseString
+                -- ps <- giveParseString
                 -- log <- getLog
 
-                -- tr ("PARSE BEFORE LOGGED EN MINPUT",ps, recover log)
 
-                -- setData log{recover=True}
                 (string "e/" >> string "e/") <|> return "e/"
-                unCloud $ logged $  liftIO $ do error "insuficient parameters 1"; empty -- read the response
-
+                r <- unCloud $ logged $  liftIO $ do error "insuficient parameters 1"; empty -- read the response
+                genNewSession
+                return r
               _ -> do
+
                 checkComposeJSON conn
 
 
@@ -260,38 +256,44 @@ minput ident msg' = response
                 tr "after msend"
                 -- store the msg and the url and the alias
                 -- se puede simular solo con los datos actuales
-
+                -- b <- getLog >>= return . recover
                 endpointWait  (Just $ BC.pack ident) idSession
                 tr "after receive"
                 delState IsCommand
                 delRState InitSendSequence
-                unCloud $ logged $ error "not enough parameters 2" -- read the response, error if response not logged
+                r <- unCloud $ logged $ error "not enough parameters 2" -- read the response, error if response not logged
+                genNewSession
+                return r
           else do
             -- the program has just restarted and recovered and this endpoint is active waiting for requests.
             -- Perhaps a request waked up that endpoint
+            -- b <- getLog >>= return . recover
+
             endpointWait  (Just $ BC.pack ident) idSession
             delState IsCommand
             tr ("else",ident)
             -- logged will deserialize the request parameters
-            unCloud $ logged $ error "insuficient parameters 3" -- read the response
+            r <- unCloud $ logged $ error "insuficient parameters 3" -- read the response
+            genNewSession
+            return r
             -- maybe another user from other context continues the program
       ttr ("MINPUT RESULT",idcontext',result)
-      mncontext <- recoverContext idcontext'
-      when (isJust mncontext) $ setState (fromJust mncontext :: Context)
+      -- mncontext <- recoverContext idcontext'
+      -- when (isJust mncontext) $ setState (fromJust mncontext :: Context)
       return result `asTypeOf` return (type1 response)
       where
-        recoverContext idcontext' = liftIO $
-          atomically $ do
-            let con = getDBRef $ show idcontext' :: DBRef Context
-            mr <- readDBRef con
-            case mr of
-              Nothing -> return Nothing
-              Just c@(Context n _) ->
-                if n == -1
-                  then return Nothing
-                  else do
-                    -- delDBRef con
-                    return $ Just c
+        -- recoverContext idcontext' = liftIO $
+        --   atomically $ do
+        --     let con = getDBRef $ show idcontext' :: DBRef Context
+        --     mr <- readDBRef con
+        --     case mr of
+        --       Nothing -> return Nothing
+        --       Just c@(Context n _) ->
+        --         if n == -1
+        --           then return Nothing
+        --           else do
+        --             -- delDBRef con
+        --             return $ Just c
 
 
     (</>) x y = x <> str "/" <> y
@@ -373,7 +375,6 @@ published k=  local $ do
       Transient $ processMessage (read $ BS.unpack s) (BS.toStrict cl)  (read $ BS.unpack s') (BS.toStrict cl') (Right $ lazyByteString $ ids <> "/" <> pars) False
       return ()
 
-newtype Endpoints= Endpoints (M.Map BS.ByteString HTTPReq)
 getEndpoints= getRState <|> return (Endpoints M.empty) -- |error "NO ENDPOINT state: use optionEndpoints" -- return (Endpoints M.empty)
 
 -- | show the URL that may be called to access that functionality within a program 
@@ -427,25 +428,27 @@ give URL for a new session or the current session?
   new ever? current session are not given by the console
 -}
 -- | menu to show info about the endpoints available
-optionEndpoints :: TransIO b
+optionEndpoints :: Loggable a => Cloud a
 optionEndpoints = do
   -- Endpoints endpts <- getEndpoints
   -- guard(not $ null endpts)
-  newRState $ Endpoints M.empty
-  option ("endpt" :: String) "info about a endpoint"
-  Endpoints endpts <- getEndpoints
-  liftIO $ do putStr "endpoints available: "; print $ M.keys endpts
-  ident:: BS.ByteString <- input (const True) "enter the endpoint for which you want to know the interface"
+    onAllNodes $ newRState $ Endpoints M.empty
+    local $ do
+      option ("endpt" :: String) "info about a endpoint"
+      Endpoints endpts <- getEndpoints
 
-  let murl = M.lookup ident  endpts
-  case murl of
-    Nothing ->  liftIO $ do putStr  "No such endpoint: " ; print ident
-    Just req -> liftIO $ putStrLn "\nYou can invoque this endpoint with:" >> printURL req
-  empty
-  where
-  printURL req= liftIO $ putStrLn $ "\n" <> BS.unpack (("curl " <>
-                    (if reqtype req== GET then mempty else ("-H 'content-type: application/json' -XPOST -d " <>
-                       "\"" <> reqbody req) <> "\" ")) <> requrl req)
+      liftIO $ do putStr "endpoints available: "; print $ M.keys endpts
+      ident:: BS.ByteString <- input' "" (const True) "enter the endpoint for which you want to know the interface"
+
+      let murl = M.lookup ident  endpts
+      case murl of
+        Nothing ->  liftIO $ do putStr  "No such endpoint: " ; print ident
+        Just req -> liftIO $ putStrLn "\nYou can invoque this endpoint with:" >> printURL req
+      empty
+    where
+    printURL req= liftIO $ putStrLn $ "\n" <> BS.unpack (("curl " <>
+                      (if reqtype req== GET then mempty else ("-H 'content-type: application/json' -XPOST -d " <>
+                        "\"" <> reqbody req) <> "\" ")) <> requrl req)
 
 -- | add the chunked fragments of the beguinning '[', the comma separator and the end ']' of the JSON packet for a set of `minput` statements
 -- that are sent in parallel (for example, with the alterenative operator)
@@ -461,7 +464,6 @@ checkComposeJSON conn = do
       -- onException $ \(e :: SomeException) -> do liftIO $ print "THROWT"; throwt e
 
       sendCookies conn
-      tr "MSEND ["
       msend conn "\r\n1\r\n[\r\n"
       delState $ Cookies []
 
@@ -524,7 +526,9 @@ cookies  sesion de programaa - sesion remota
 -}
 sendOption :: BS.ByteString -> HTTPReq -> TransIO ()
 sendOption msg req = do
-  Context id _ <- getState <|> error "sendOption:no minput context, use `minput`"
+  PrevClos dbr _ _ _ <- getData `onNothing` noExState "sendOption"
+  let (id,_) = getSessClosure dbr
+  -- Context id _ <- getState <|> error "sendOption:no minput context, use `minput`"
   url' <- withParseString (requrl req) $ short id <|> long id
   sendFragment $ "{ \"msg\":\"" <>  msg <> "\", \"req\":" <> encode (req {requrl = url'}) <> "}"
 
@@ -570,39 +574,66 @@ sendFragment tosend = do
   checkComposeJSON conn
   msend conn $ toHex l <> "\r\n" <> tosend <> "\r\n"
 
-getSessionState :: (Typeable a, Loggable a) => TransIO a
-getSessionState = res
-  where
-    res = Transient $ do
-      mc <- getData
-      case mc of
-        Nothing -> tr "NO MAP" >> return Nothing
-        Just (Context idcontext' mf) -> do
-          case M.lookup (show $ typeOf $ ty res) mf of
-            Just str -> runTrans $ withParseString str deserialize
-            Nothing -> return Nothing
-    -- return $ fmap read $ M.lookup (show $ typeOf $ ty res) mf
-    ty :: TransIO a -> a
-    ty = undefined
+-- getSessionState :: (Typeable a, Loggable a) => TransIO a
+-- getSessionState = res
+--   where
+--     res = Transient $ do
+--       mc <- getData
+--       case mc of
+--         Nothing -> tr "NO MAP" >> return Nothing
+--         Just (Context idcontext' mf) -> do
+--           case M.lookup (show $ typeOf $ ty res) mf of
+--             Just str -> runTrans $ withParseString str deserialize
+--             Nothing -> return Nothing
+--     -- return $ fmap read $ M.lookup (show $ typeOf $ ty res) mf
+--     ty :: TransIO a -> a
+--     ty = undefined
 
-newSessionState :: (Loggable a, Typeable a) => a -> Cloud ()
-newSessionState x = local $ do
-  ctx <- Context <$> genSessionId <*> return (M.singleton (show $ typeOf x) (toLazyByteString $ serialize x))
-  setState ctx
+-- newSessionState :: (Loggable a, Typeable a) => a -> Cloud ()
+-- newSessionState x = local $ do
+--   ctx <- Context <$> genSessionId <*> return (M.singleton (show $ typeOf x) (toLazyByteString $ serialize x))
+--   setState ctx
 
--- | set a session value of the given type that last across all the Web navigation of a given user
-setSessionState :: (MonadState TranShip m, Loggable a) => a -> m ()
-setSessionState x = do
-  modifyData'
-    (\(Context n map) -> Context n $ M.insert (show $ typeOf x) (toLazyByteString $ serialize x) map)
-    (Context 0 $ M.singleton (show $ typeOf x) $ toLazyByteString $ serialize x)
-  return ()
+-- -- | set a session value of the given type that last across all the Web navigation of a given user
+-- setSessionState :: (MonadState TranShip m, Loggable a) => a -> m ()
+-- setSessionState x = do
+--   modifyData'
+--     (\(Context n map) -> Context n $ M.insert (show $ typeOf x) (toLazyByteString $ serialize x) map)
+--     (Context 0 $ M.singleton (show $ typeOf x) $ toLazyByteString $ serialize x)
+--   return ()
 
-genSessionId :: MonadIO m => m Int
+-- genSessionId :: MonadIO m => m Int
 genSessionId = liftIO $ do
-  n <- randomIO
-  return $ if n < 0 then - n else n
+    n <- randomIO
+    return $ if n < 0 then - n else n 
 
+-- genNewSession1= genSessionId >>= genNewSession
+
+-- genNewSession newSession=  do
+--     -- newSession <-  genSessionId
+--   ttr ("GEN NEW SESSION", newSession)
+--   modifyData' (\(PrevClos p mf l i) -> 
+--     case mf of
+--       Just _  -> PrevClos p mf l i :: PrevClos
+--       Nothing -> PrevClos p  (Just newSession) l i)
+--     (error "newSession: no Previous closure")
+--   PrevClos _ mn _ _ <- getData `onNothing` noExState "genNewSession" :: TransIO PrevClos
+--   ttr ("NEW SESSION SET", mn)
+
+logged1 :: Loggable a => TransIO a -> TransIO a
+logged1= unCloud . logged
+
+
+genNewSession =  do
+    newSession <- logged1 genSessionId
+    tr ("GEN NEW SESSION", newSession)
+    modifyData' (\prev@(PrevClos p mf l i) -> 
+      case mf of
+        Just _  -> prev
+        Nothing -> PrevClos p  (Just newSession) l i)
+      (error "genNewSession: no Previous closure")
+    -- PrevClos _ mn _ _ <- getData `onNothing` noExState "genNewSession" :: TransIO PrevClos
+    -- ttr ("NEW SESSION SET", mn)
 
 class  Typeable a => ToHTTPReq a where
   toHTTPReq :: a -> TransIO HTTPReq

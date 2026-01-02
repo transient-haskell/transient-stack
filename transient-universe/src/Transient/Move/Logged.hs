@@ -58,9 +58,11 @@ import Data.ByteString.Builder
 
 import Data.TCache (getDBRef)
 
-import Control.Concurrent.MVar ( newEmptyMVar, newMVar )
+import Control.Concurrent.MVar ( newEmptyMVar, newMVar ,tryPutMVar)
 
 import System.Random ( randomRIO )
+
+
 
 u :: IO a -> a
 u= unsafePerformIO
@@ -188,9 +190,10 @@ endpointWait  mclos idSession = do
 endpoint :: Maybe B.ByteString -> TransIO ()
 endpoint maybeName= do
 
-  PrevClos dbr _ _ <- getData `onNothing` error "teleport: please use `initNode to perform distrubuted computing"
+  PrevClos dbr mn _ _ <- getData `onNothing` error "teleport: please use `initNode to perform distrubuted computing"
   -- idSession <- localSession <$> liftIO (atomically $ readDBRef dbr `onNothing` error "logApp: no prevClos")
-  let (idSession,_) = getSessClosure dbr
+  let idSession = if isJust mn then fromJust mn else fst $ getSessClosure dbr
+  ttr ("ENDPOINT", maybeName, idSession)
   -- closLocal <- maybe (unCloud $ logged $  liftIO $ BSS.pack . show <$> liftIO (randomRIO (0,100000) :: IO Int)) return maybeName -- hashClosure log
   log <- getLog
   closLocal <- maybe ( return $ BSS.pack . show $ hashClosure log) return maybeName -- hashClosure log
@@ -263,16 +266,19 @@ receive1  lc = do
 
 
 -- setLog :: Int -> Builder -> Int -> B.ByteString -> TransIO ()
-setLog :: (MonadState TranShip m, MonadIO m, Show a) => Int -> Builder -> a -> B.ByteString -> m ()
-setLog idConn log sessionId closr = do
+setLogFromFile :: (MonadState TranShip m, MonadIO m, Show a) => Int -> Builder -> a -> B.ByteString -> m ()
+setLogFromFile idConn log sessionId closr = do
   tr ("setLog for",idConn,"Closure",sessionId, closr )
   void $ updateLastClosureForConnection idConn (getDBRef $ kLocalClos sessionId closr) --  (Closure sessionId closr [])
   setParseString $ toLazyByteString log
 
   modifyData' (\l -> l {recover = True}) emptyLog
-  setState $ ClosToRespond $ getDBRef $ kLocalClos sessionId closr
   tr "setLog done"
   return ()
+  
+setLog idConn log sessionId closr = do
+  setLogFromFile idConn log sessionId closr
+  setState $ ClosToRespond $ getDBRef $ kLocalClos sessionId closr
 
   {-|
     Stores the computation state for the current session id and names it with the given name. If the name is not provided, a name is generated. The state is stored in the database and the computation continues. The computation can be recovered later and executed with `getClosureLog`.
@@ -302,26 +308,29 @@ setCont' logstr closName idSession=   noTrans $ do
   -- tr "RESET LOG"
   modifyState' (\log -> log{partLog= mempty}) (error "setCont: no log")
 
-  PrevClos dbprevclos _ isapp <- getData `onNothing` noExState "setCont"
+  PrevClos dbprevclos _ _ isapp <- getData `onNothing` noExState "setCont"
   -- ctr <- getData :: StateIO (Maybe ClosToRespond)
   cont <- get
 
 
-  -- mr <- liftIO $ atomically $ readDBRef dblocalclos
-  -- case mr of
-  --   Just locClos@LocalClosure {..} -> do
-  --     tr "found dblocalclos"
-  --     closure <- if toLazyByteString logstr== mempty -- two consecutive endpoints
-  --       then return locClos
-  --       else do
-  --         ev <- runTrans newEVar -- if isNothing ctr then runTrans newEVar else return Nothing
-  --         return locClos {localEvar = ev, localCont = Just cont,localLog= logstr}
-  --     setState $ PrevClos dblocalclos True isapp
-  --     liftIO $ atomically $ writeDBRef dblocalclos closure
+  mr <- liftIO $ atomically $ readDBRef dblocalclos
+  case mr of
+    Just locClos@LocalClosure {..} -> do
+      tr "found dblocalclos"
+      closure <- if toLazyByteString logstr== mempty -- two consecutive endpoints
+        then return locClos
+        else do
+          
+          ev <- runTrans newEVar -- if isNothing ctr then runTrans newEVar else return Nothing
+          return locClos {localEvar = ev, localCont = Just cont,localLog= logstr}
+      setState $ PrevClos dblocalclos Nothing True isapp
+      liftIO $ atomically $ writeDBRef dblocalclos closure
+      
+      liftIO $ tryPutMVar localMvar ()   -- getClosurelog blocks on the MVar, so we need to release it here when it has been restored
 
-  --     return  closure
-  --   _ -> do
-  do
+      return  closure
+    _ -> do
+  -- do
       mv <- liftIO  newEmptyMVar
       ev <- runTrans newEVar -- if isNothing ctr then runTrans newEVar else return Nothing
       tr ("createEVar",closName)
@@ -338,13 +347,12 @@ setCont' logstr closName idSession=   noTrans $ do
               }
 
 
-      tr ("SETCONT", closName, idSession,"PREVCLOS",dbprevclos,logstr)
-      tr ("SETSTATE PREVCLOS",idSession, closName)
+      ttr ("SETCONT", closName, idSession,"PREVCLOS",dbprevclos,logstr)
       -- here the flag True is set to preserve the endpoint/teleport/continuation si that every log restore pass trough this continuation
-      setState $ PrevClos dblocalclos True isapp
+      setState $ PrevClos dblocalclos Nothing True isapp
 
       liftIO $ atomically $ writeDBRef dblocalclos closure
-
+      liftIO $ tryPutMVar (localMvar closure) ()   -- getClosurelog blocks on the MVar, so we need to release it here when it has been restored
 
       return  closure
 
@@ -359,7 +367,7 @@ firstEndpoint= firstCont >>= receive1
 -- normally could application use firstEndpoint which makes the checkpoint and can receive serializations of
 -- remote stacks (logs) to continue the execution from the checkpoint on.
 firstCont =  do
-  setState $ PrevClos dbClos0 False False
+  setState $ PrevClos  dbClos0 Nothing False False
 
   cont <- get
   log <- getLog
@@ -389,6 +397,8 @@ hashDone= 10000000
 hashExec= 100000
 hashWait= 1000
 
+noExState s= error $ s <> ": no execution state. Use initNode to init the Cloud computation"
+
 
 -- | Run the computation, write its result in a log in the state
 -- and return the result. If the log already contains the result of this
@@ -400,11 +410,11 @@ hashWait= 1000
 -- discarded.
 --
 
-noExState s= error $ s <> ": no execution state. Use initNode to init the Cloud computation"
+
 logged :: Loggable a => TransIO a -> Cloud a
 logged mx =  Cloud $ sandboxDataCond handle $ do
 
-    -- Cristo es Rey.  Chirst is King.
+    -- JesusChrist loves you
 
     modifyState' ( \prevc -> prevc{preservePath= False}) $ noExState "logged"
 
@@ -417,9 +427,8 @@ logged mx =  Cloud $ sandboxDataCond handle $ do
 
     where
 
-    handle (Just mnow) (Just mprev) = Just $ PrevClos (dbref mnow) ( preservePath mnow || preservePath mprev) False
+    handle (Just mnow) (Just mprev) = Just $ PrevClos (dbref mnow) (newSession mnow) ( preservePath mnow || preservePath mprev) False
     handle _ _ = error "no log initialized: use initNode before logging"
-
     logit = do
           initialLog <- getLog
           let initialSegment= partLog initialLog

@@ -201,13 +201,32 @@ data ExecMode = Remote | Parallel | Serial
   deriving (Typeable, Eq, Show)
 
 
+type PolyMap = M.Map TypeRep SData
+merge :: PolyMap -> PolyMap -> PolyMap
+merge = M.unionWithKey combine
+
+data Backtrack1 a = Backtrack1 (Maybe a) [SData]
+combine :: TypeRep -> SData -> SData -> SData
+combine t x y =  tracec ("Merging type: " ++ show t) $ 
+  
+  let tc = typeRepTyCon  t
+      tc'= typeRepTyCon (typeOf (ofType :: Backtrack ()))
+  in if tc ==  tc'
+      then    
+        let list  = case unsafeCoerce x :: Backtrack1 () of
+                        Backtrack1 _ list  -> list
+            list' = case unsafeCoerce y :: Backtrack1 () of
+                        Backtrack1 _ list' -> list'
+        in  unsafeCoerce $ Backtrack1 Nothing ( list ++  list')
+      else y -- Default behavior: take the second value
+
 -- | TranShip describes the context of a TransientIO computation:
 data TranShip = forall a b. TranShip
   {
     fcomp       :: a -> TransIO b
     -- ^ List of continuations
 
-  , mfData      :: M.Map TypeRep SData
+  , mfData      :: PolyMap
     -- ^ State data accessed with get/set/Data/State/RState etc operations
 
   , mfSequence  :: Int
@@ -1477,6 +1496,7 @@ newtype Ref a = Ref (IORef a)
 -- It return the associated IORef, so it can be updated in the IO monad
 newRState:: (MonadIO m,TransMonad m, Typeable a) => a -> m (IORef a)
 newRState x= do
+    ttr ("CREATING REF",typeOf x)
     ref@(Ref rx) <- Ref <$> liftIO (newIORef x)
     setData  ref
     return rx
@@ -1489,8 +1509,10 @@ setRState:: (MonadIO m,TransMonad m, Typeable a) => a -> m ()
 setRState x= do
     Ref ref <- getData `onNothing` do
                             ref <- Ref <$> liftIO (newIORef x)
+                            ttr ("CREATING REF",typeOf x)
                             setData  ref
                             return  ref
+    ttr ("setRState",typeOf x)
     liftIO $ atomicModifyIORef ref $ const (x,())
 
 -- | Get the value of the mutable reference created with newRState
@@ -1499,9 +1521,10 @@ getRData= do
     mref <- getData
     case mref of
      Just (Ref ref) -> do
-        tr "getRData Just"
-        Just <$> liftIO (readIORef ref)
-     Nothing ->  tr "getRData Nothing" >> return Nothing
+        Just <$> do r <- liftIO (readIORef ref)
+                    ttr ("getRData",typeOf r)
+                    return r
+     Nothing ->  ttr "getRData Nothing" >> return Nothing
 
 -- | return the reference value. It has not been  created, the computation stop and executes the anternative computation if any
 getRState :: Typeable a => TransIO a
@@ -2557,11 +2580,12 @@ delc cbs name= do
 collect' :: Int -> Int -> TransIO a -> TransIO [a]
 collect'  = collectSignal False
 
+-- | Like 'collect'' but in case of signal (like termination of the process) save the results collected until that moment.
 collectSignal :: Bool -> Int -> Int -> TransIO a -> TransIO [a]
 collectSignal saveOnSignal  number time proc'=  localBack (Finish "") $ do
   anyThreads abduce         -- necessary for alternatives/applicatives. all spawned threads will hang from this one
   do
-    evexit <- getEVarFromMailbox
+    -- evexit <- getEVarFromMailbox
     idev <- genNewId
     let id' = show idev
 
@@ -2590,7 +2614,7 @@ collectSignal saveOnSignal  number time proc'=  localBack (Finish "") $ do
           -- to save results on exit so that collect could log the partial results. This is necessary for durable operations in the cloud monad
           liftIO $ writeIORef save True
           -- react on signal received
-          Exit _ _ <- readEVar'  False idev evexit
+          Exit _ _ <- getMailbox -- readEVar'  False idev evexit
 
           liftIO $ readIORef res
         timer =  do
@@ -2625,7 +2649,7 @@ collectSignal saveOnSignal  number time proc'=  localBack (Finish "") $ do
           guard $ hasnot || number > 0 && length rs >= number
           f <- liftIO $ atomicModifyIORef done $ \x ->(True,x) -- previous onFinish not triggered?
  
-          if f then backtrack
+          if f then backtrack   -- already processed. let execute other finish/collect above
           else do
             tr "changeStatusCont"
             changeStatusCont cont $ \(status, lab) ->(delistener id status Dead,lab )
@@ -2652,7 +2676,7 @@ collectSignal saveOnSignal  number time proc'=  localBack (Finish "") $ do
             liftIO $ readIORef res
 
     r <- signal <|> timer <|> (proc `onBack` check)
-    delReadEVarPoint evexit idev 
+    -- delReadEVarPoint evexit idev 
     return r
 
 
@@ -2664,11 +2688,7 @@ data Exit  = forall a. Exit TypeRep (MVar a) deriving Typeable
 exit :: Typeable a => a -> TransIO ()
 exit x= do
   ex@(Exit typeofIt rexit) <- getState <|> error " no Exit state: use keep or keep'"
-
-
-
   when (typeOf x /= typeofIt) $ error $ " exit of type not expected. (expected, sent)= ("<> show typeofIt <> ", "<>  show (typeOf x)
-
   -- warn anyone interested
   putMailbox ex
   liftIO $ threadDelay 1000000
@@ -2784,7 +2804,7 @@ onBack ac bac = Transient $ do
                         -- Todo lo puedo en Cristo que me fortalece
                         -- setData log
                         bac reason
-  setState $ Finish "example"
+  -- setState $ Finish "example"
   runTrans ac
   where
   eventOf :: (b -> TransIO a) -> b
@@ -2797,24 +2817,6 @@ onBack ac bac = Transient $ do
     modifyData' (\(Backtrack b bs) -> Backtrack b  $ (handler,unsafeCoerce k):unsafeCoerce bs)
                (Backtrack mwit [(  handler,unsafeCoerce k)])
     return ()
-
-
-
-  --   --  tr "registerBack"
-  --   TranShip{fcomp=k}  <- get
-  -- -- if isJust (event cont) then return Nothing else do
-  --   md <- getData `asTypeOf` return (Just (backStateOf $ eventOf handler))
-
-  --   case md of
-  --         -- Just (Backtrack b []) ->  setData $ Backtrack b  [(handler,unsafeCoerce k)]
-  --         Just bss@(Backtrack b bs) ->
-  --           -- when (isNothing b) $
-  --                 setData $ Backtrack b  ((  handler,unsafeCoerce k):unsafeCoerce bs)
-
-  --         Nothing ->  setData $ Backtrack mwit [(  handler,unsafeCoerce k)]
-
-
-
     where
 
     eventOf :: (b -> TransIO  a) -> b
@@ -2865,7 +2867,7 @@ retry= forward ()
 
 
 newtype NotHandled a= NotHandled a deriving Typeable
-instance (Typeable a) => Show (NotHandled a) where show (NotHandled x)= "backtracking of type " <> show (typeOf x) <> " not handled"
+instance (Typeable a) => Show (NotHandled a) where show (NotHandled x)= "backtracking of type " <> show (typeOf  x) <> " not handled"
 instance Typeable a => Exception (NotHandled a)
 
 -- | Start the backtracking process for a given backtrack type. Performs all the
@@ -2890,9 +2892,9 @@ back reason =  do
 
   where
 
-  goBackt (Backtrack x [] )
-       | typeOf x == typeOf (Just $ Finish "") = empty  -- finish is executed after any other backtracking, including throwt exception
-       | otherwise = do  liftIO $ putStrLn $ "backtracking of type " <>  show (typeOf x) <> " not handled\n\n" ; empty   -- Ad Maiorem Dei Gloriam
+  goBackt (Backtrack x [] ) = empty
+      --  | typeOf x == typeOf (Just $ Finish "") = empty  -- finish is executed after any other backtracking, including throwt exception
+      --  | otherwise = do  liftIO $ putStrLn $ NotHandled x --"backtracking of type " <>  show (typeOf x) <> " not handled\n\n" ; empty   -- Ad Maiorem Dei Gloriam
 
   goBackt (Backtrack _ stack@((f,k) : bs) )= do
         setData $ Backtrack (Just reason) bs
@@ -3380,10 +3382,11 @@ newtype EVarId = EVarId Int deriving Typeable
 --
 -- see https://www.schoolofhaskell.com/user/agocorona/publish-subscribe-variables-transient-effects-v
 --
-newEVar :: TransIO (EVar a)
-newEVar = do
-    ref <- liftIO $ newIORef []
+-- newEVar :: monadIO m => m (EVar a)
+newEVar = liftIO $ do
+    ref <- newIORef []
     return $ EVar ref
+
 
 -- | Reads a stream of events from an EVar.
 --
@@ -3408,7 +3411,7 @@ readEVar1 ev = do
        id <- genNewId
        readEVar' False id ev
 
--- | creates a subscription to an EVar with an identifier. The second parameter defines either if the subcription os once or permanent
+-- | creates a subscription to an EVar with an identifier. The second parameter defines either if the subcription is once or permanent
 readEVar' :: Bool -> Int -> EVar a -> TransIO a
 readEVar' keep id (EVar ref)= do
        tr ("readEVar",id)

@@ -20,19 +20,26 @@ import Transient.Indeterminism
 import Transient.Move.Logged
 import qualified Data.ByteString.Char8 as BC
 import Control.Monad.IO.Class
-import Data.TCache hiding (onNothing)
+import Data.TCache  hiding (onNothing)
+-- import Data.TCache.DefaultPersistence as TC(key)
+import Data.TCache.IndexQuery
 import qualified Data.TCache.DefaultPersistence as TC
 
 import Control.Applicative
+import Control.Exception.Base hiding (onException)
 import Control.Monad
 import Data.List
+import qualified Data.Map as M
 import Data.Maybe
 import Data.Typeable
 import Data.IORef
+import System.Time
 
-newtype Job= Job (Int,BC.ByteString)  deriving (Typeable,Read,Show,Eq)
-data Jobs= Jobs{pending :: [Job]}  deriving (Read,Show)
-instance TC.Indexable Jobs where key _= "__Jobs"
+-- newtype Job= Job (Int,BC.ByteString)  deriving (Typeable,Read,Show,Eq)
+data Job= Job {jobClosure :: DBRef LocalClosure,jobNode :: Node, jobError :: Maybe SomeException}  deriving (Typeable,Read,Show)
+instance TC.Indexable Job where key (Job dbr  _ _)= 'J':keyObjDBRef dbr
+-- data Jobs= Jobs{pending :: [Job]}  deriving (Read,Show)
+-- instance TC.Indexable Jobs where key _= "__Jobs"
 
 -- | -- a job is intended to create tasks that will finish even if the program is interrupted
 --
@@ -63,81 +70,100 @@ instance TC.Indexable Jobs where key _= "__Jobs"
 -- >  job $ local $ option1 "c" "continue to world" <|>( option1 "s" "stop" >> empty)
 -- >  job $  localIO $ print "world"
 --
+job= job' Nothing
 
 
--- job :: Loggable a => Cloud a -> Cloud a
--- job mx = do
---   this@(idSession,_) <- local $ do
---     idSession <- fromIntegral <$> genPersistId
---     log <- getLog <|> error "job: no log"
---     let this = (idSession,BC.pack $ show $ hashClosure log + hashExec) -- es la siguiente closure
---     ttr("JOB",this)
-
---     liftIO $ atomically $ do
---        Jobs  pending <- readDBRef rjobs `onNothing` return (Jobs[])
---     -- liftIO $ print ("creating job",this)
---        writeDBRef rjobs $ Jobs $ this:pending
-
---     return this
 
 
---   local $ setCont Nothing idSession  >> return()
---       -- liftIO $ print $ localClos clos
+job' :: (Maybe String) -> Cloud ()
+job' mname  =  local $  do
+  mprev :: Maybe Job <- getData 
+  liftIO $ writeIORef save True
+  when (isJust mprev) $ jobRemove $ fromJust mprev
+  -- PrevClos dbprevclos _ _ isapp <- getData `onNothing` noExState "job"
+  -- let(idSession,_) = getSessClosure dbprevclos
+  endpoint (fmap BC.pack mname) -- void $ setCont Nothing idSession 
+  tr "AFTER ENDPOINT"
+  p@(PrevClos thisclos ms _ isapp) <- getData `onNothing` noExState "job 2"
+  -- -- false to force the log Not to recreate this endpoint after replaying
+  ttr ("JOB PREVCLOS",p )
+  setState $ PrevClos thisclos ms False isapp
 
---   rs <- local $ do
---        onFinish  $ \_ ->do ttr ("REMOVE",this);remove this 
-       
---        -- alabado sea Jesucristo
---        abduce
---        unCloud mx
-  
---   return rs
-
-job :: Loggable a => (Maybe String) -> Cloud a -> Cloud a
-job mname mx = do
-  ttr ("job", mname)
-  localIO $ writeIORef save True
-  local $  do
-      mprev :: Maybe Job <- getData 
-      when (isJust mprev) $ remove $ fromJust mprev
-      PrevClos dbprevclos _ isapp <- getData `onNothing` noExState "job"
-      let(idSession,_) = getSessClosure dbprevclos
-      endpoint (fmap BC.pack mname) -- void $ setCont Nothing idSession 
-      tr "AFTER ENDPOINT"
-      PrevClos thisclos _ isapp <- getData `onNothing` noExState "job 2"
-      -- false to force the log NOt to recreate this endpoint when replaying
-      setState $ PrevClos thisclos False isapp
-
-      -- PrevClos thisclos _ _ <- getState 
-      let this = getSessClosure thisclos
-      liftIO $ atomically $ do
-         Jobs  pending <- readDBRef rjobs `onNothing` return (Jobs [])
-         ttr  ("creating job",pending,this)
-         writeDBRef rjobs $ Jobs $  Job this:pending
-      setData $ Job this
-      tr ("job",thisclos)
---       return ("job",thisclos)
-
---   local $ do
-      -- onFinish  $ \_ -> remove this
-      -- alabado sea Jesucristo
-      abduce
-      r <- unCloud mx 
-      -- remove this
-      return r
+  -- PrevClos thisclos _ _ <- getState 
+  -- conn <- getData `onNothing` noExState "job conn"
+  myNode <- getMyNode
+  -- let (s,c) = getSessClosure thisclos
+  let this= Job thisclos myNode Nothing
+  liftIO $ atomically $ newDBRef this
+  --    Jobs  pending <- readDBRef rjobs `onNothing` return (Jobs [])
+  --    tr  ("creating job",pending,this)
+  --    writeDBRef rjobs $ Jobs $   this:pending
+  setData  this
+  onException $ \(e :: SomeException) -> do
+    ttr ("job exception", e)
+     -- distinguish connection errors to reschedule jobs when nodes recover   
+    case fromException e of
+      Just (ConnectionError _ node) -> liftIO $ atomically $ writeDBRef (getDBRef $ keyResource this)  this{jobNode=node, jobError= Just e}
+      Nothing ->                       liftIO $ atomically $ writeDBRef (getDBRef $ keyResource this)  this{jobError= Just  e}
+  -- onException $ \e@(ConnectionError _ node) -> do
+  --    -- store node in job to be rescheduled when the node recovers
+  --    liftIO $ atomically $ newDBRef  this{jobNode=node, jobError= Just $ toException e}
+      
+    empty
 
 
   
-remove :: Job -> TransIO ()
-remove conclos= do
-      liftIO $ atomically $ do
-        -- unsafeIOToSTM $ print "REMOVE"
-        Jobs  pending <- readDBRef rjobs `onNothing` return (Jobs [])
-        tr ("REMOVE",pending,conclos,pending \\[conclos])
-        writeDBRef rjobs $ Jobs  $ pending \\ [conclos]
-      delState conclos
+  
+jobRemove :: Job -> TransIO ()
+jobRemove job= do
+      ttr ("jobRemove", job)
+      liftIO $ atomically $ delDBRef $ (getDBRef $ keyResource job :: DBRef Job)
+      delState job
 
-rjobs = getDBRef "__Jobs"
+
+
+-- A node notify that it is ready to continue unfinished jobs
+newtype Ping= Ping Node
+data AllJobsExecuted= AllJobsExecuted
+
+runJobs= do
+  onAll $ onException $ \(e :: SomeException) -> do
+          liftIO $ print ("job exception", e)
+  -- onAll $ newRState $ Endpoints M.empty
+
+  local $ fork $ do
+    liftIO $ index jobNode
+    startJobs  <|> commJobs
+  where
+  startJobs= do
+    mynode <- getMyNode
+    launchJobsForNode mynode
+
+
+  commJobs= do
+    Ping node <- getMailbox
+    launchJobsForNode node
+
+  launchJobsForNode :: Node -> TransIO ()
+  launchJobsForNode node= do
+    dbrjobs <- liftIO $ atomically $  jobNode .==. node :: TransIO [DBRef Job]
+    ttr ("runJobs(commJobs): jobs found", length dbrjobs, node)
+    collect 0 $ do
+      j <- for $ reverse dbrjobs
+
+      job@(Job dbr _ _) <- (liftIO $  atomically $ readDBRef j) `onNothing` error ("runJobs(commJobs): job not found " ++ show j)
+
+      let (s,clos) = getSessClosure dbr ::  (SessionId, IdClosure)
+      (log,clos') <- getClosureLog s clos
+      conn <- getData `onNothing` noExState "runJobs(commJobs): conn not found"
+      setState job
+
+      Transient $ sendToClosure  log s mempty conn False clos'
+    -- jobRemove job  -- don't remove because it could have spawned new processes
+    -- ttr ("END JOB",job)
+    putMailbox' node AllJobsExecuted 
+
+
 
 -- | A config job is executed once and then his data is used for the rest of the
 -- computation without being executed when the program is restarted again.
@@ -168,15 +194,46 @@ rjobs = getDBRef "__Jobs"
 -- A more complete explanation https://matrix.to/#/!kThWcanpHQZJuFHvcB:gitter.im/$DARXcz9ny51BVT1L7RNH7HTa35JQNtatnCaHGFR9LfM?via=gitter.im&via=matrix.org&via=matrix.freyachat.eu
 
 config :: Loggable a => String -> Cloud a -> Cloud a
-config name mx = job (Just name) mx
+config name mx = do
+   job' $ Just  name
+   mx
   
 
-runJobs= local $ fork $ do
-   Jobs  pending <-liftIO $ atomically $ readDBRef rjobs `onNothing` return (Jobs  [])
-   tr ("runJobs",pending )
-   Job (id,clos) <- choose pending
-   --  noTrans $  restoreClosure id $ BC.unpack clos
-   (log,clos') <- getClosureLog id $ BC.unpack clos
-   conn <- getState
-   remove $Job (id,clos)
-   Transient $ sendToClosure  log 0 mempty conn False clos'
+
+-- | persistent collect. Unlike Transient.collect, Transient.Move.collect  keeps the results across intended and unintended
+-- shutdowns and restarts
+collectp :: Loggable a => Int -> Integer -> Cloud a -> Cloud [a]
+collectp n delta  mx=  do
+  onAll $ liftIO $ writeIORef save True
+  tinit <- local getMicroSeconds
+  tr("COLLECTPP",n,delta)
+
+  let tfin= tinit +  delta
+      numbered= n > 0
+ 
+      collectp' n  delta 
+       | n <= 0 && numbered = return []
+       | otherwise= do
+        (rs,delta') <- local $ do
+            t <-  getMicroSeconds
+
+            let delta'=  tfin -t
+            ttr ("delta'",delta')
+            rs <- if delta' <= 0 then return [] else collectSignal True n (fromIntegral delta) $ unCloud mx
+            ttr ("RS",rs)
+
+            -- tiene que obtener el delta historico dentro de local, para saber si tiene que recuperar mas jobs
+            -- Alabado sea Dios
+            return (rs,delta')
+        let len= length rs
+        tr ("ITERATION",n,len)
+        let n'= if numbered then n - len else 0
+        if delta'<= 0 || (numbered && len>= n) then return rs else return rs <>  
+                    (job >>  collectp' n' delta')
+  
+  tr ("COLLECTP",n,delta)
+  collectp' n delta
+  
+getMicroSeconds = liftIO $ do
+        (TOD seconds picos) <- getClockTime
+        return (seconds * 1000000 + picos `div` 1000000)

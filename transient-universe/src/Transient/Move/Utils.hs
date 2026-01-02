@@ -251,7 +251,7 @@ initWebApp node app=  do
 
         unCloud $ wormhole serverNode $ do 
 #ifndef ghcjs_HOST_OS
-            local optionEndpoints <|> 
+            optionEndpoints <|> 
 #else
               local empty  <|>
 #endif
