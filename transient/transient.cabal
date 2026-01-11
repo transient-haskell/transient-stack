@@ -27,12 +27,13 @@ library
 --            ghcjs-base -any
 
 
-    build-depends:      base          >= 4.8.0  &&  < 5
+    build-depends:      base            >= 4.8.0  
                         , containers    >= 0.5.6
                         , transformers  >= 0.4.2
                         , time          >= 1.5
                         , directory     >= 1.2.2
                         , bytestring    >= 0.10.6
+                        , text
 
 
                      -- libraries not bundled w/ GHC

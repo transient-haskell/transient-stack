@@ -85,9 +85,9 @@ data PartRef a= Ref Node Path Save deriving (Typeable, Read, Show)
 data Partition a=  Part Node Path Save a deriving (Typeable,Read,Show)
 type Save= Bool
 
-instance Loggable Text.Text where
-   serialize t= byteString (encodeUtf8 t)
-   deserialize = tTakeWhile (/= '/') >>= return . decodeUtf8 . toStrict
+-- instance Loggable Text.Text where
+--    serialize t= byteString (encodeUtf8 t)
+--    deserialize = tTakeWhile (/= '/') >>= return . decodeUtf8 . toStrict
 
 
 

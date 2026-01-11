@@ -573,8 +573,8 @@ keep mx = do
                   -- topState >>= showThreads
                   showAllThreads
                   appendFile logFile $ show e ++ "\n" -- `catch` \(e:: IOError) -> exc
-                log <- getLog
-                liftIO $ print log
+                -- log <- getLog
+                -- liftIO $ print log
                 empty
 
           onException $ \(e :: IOException) -> do

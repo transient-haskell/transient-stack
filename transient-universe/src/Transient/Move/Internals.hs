@@ -286,7 +286,7 @@ local :: Loggable a => TransIO a -> Cloud a
 -- local =  Cloud . logged'
 
 -- data EnterLocal= EnterLocal deriving (Typeable,Show)
-local = logged
+local = Cloud . logged
 
 -- | execute the computation in all the nodes of the cloud where the computation is translated but only
 -- if this is necessary. If the computation in which `onAll` is enclosed has been already executed in the
@@ -364,7 +364,7 @@ runCloudIO' (Cloud mx) = keep' mx
 -- | Log the result a cloud computation. Like `loogged`, this erases all the log produced by computations
 -- inside and substitute it for that single result when the computation is completed.
 loggedc :: Loggable a => Cloud a -> Cloud a
-loggedc (Cloud mx) = logged mx
+loggedc (Cloud mx) = Cloud $ logged mx
 
 
 -- | the `Cloud` monad has no `MonadIO` instance since the value must be `Loggable` and MonadIO can not express this contraint. `localIO= local . liftIO`
@@ -687,7 +687,7 @@ teleport =  do
             -- calcula el log entre la ultima closure almacenada localmente (prevclos) y el punto que el nodo ya ha recibido (closremote) 
             prevlog <- noTrans $ getClosureLogFrom prevClosDBRef remoteClosDBRef
             tr ("PARTLOG", partLog log)
-            let tosend =  prevlog <> partLog log
+            let tosend =  prevlog <> [[partLog log]]
 
             -- let closLocal = BC.pack $ show $ hashClosure log
 
@@ -2068,15 +2068,15 @@ listenNew port conn' = do
                   -- tr ("POST HEADERS=", BS.take len str)
 
                   setParseString $ BS.take len str
-                  return $ log <> lazyByteString (BS.take len str) -- [(Var . IDynamic $ postParams)]  TODO: solve deserialization
+                  return $ log <> lazyByteString (BS.take len str) 
                 Just x -> do
                   -- tr ("POST HEADERS=", BS.take len str)
                   let str = BS.take len str
-                  return $ log <> lazyByteString str --  ++ [Var $ IDynamic  str]
+                  return $ log <> lazyByteString str 
                 _ -> return $ log
               --  let build= toPath log'
               setParseString $ toLazyByteString log'
-              return $ SMore $ ClosureData "0" 0 "0" 0 log' -- !> ("APIIIII", log')
+              return $ SMore $ ClosureData "0" 0 "0" 0 [[log']] 
 
         ("relay", _) -> proxy sock method vers uri'
 
@@ -2148,7 +2148,7 @@ listenNew port conn' = do
                   -- integer
                   deserialize
                     -- a void message is sent to the application signaling the beginning of a connection
-                    <|> (return $ SMore (ClosureData "0" 0 "0" 0 (exec <> lazyByteString s)))
+                    <|> (return $ SMore (ClosureData "0" 0 "0" 0 [[exec <> lazyByteString s]]))
             else do
               -- let uri'' = if not $ isNumber $ BS.head uri'
               --               then
@@ -2192,7 +2192,7 @@ listenNew port conn' = do
               -- httpreq :: HTTPHeaders <- getState <|> error "no state"
               -- tr ("HEADERS",headers)
               tr ("string to parse", s)
-              return $ SMore $ ClosureData remoteClosure s1 thisClosure s2 $ lazyByteString s
+              return $ SMore $ ClosureData remoteClosure s1 thisClosure s2 [[lazyByteString s]]
   where
 
     shortClosParams body= do
@@ -2502,7 +2502,7 @@ execLog mlog = Transient $ do
 -- - 'Bool' - A flag indicating whether the target closure should be deleted.
 --
 -- The function performs various actions based on the input parameters, such as restoring a closure, executing a closure, and handling errors.
-processMessage :: SessionId -> IdClosure -> SessionId -> IdClosure -> Either CloudException Builder -> Bool -> StateIO (Maybe ())
+processMessage :: SessionId -> IdClosure -> SessionId -> IdClosure -> Either CloudException [[Builder]] -> Bool -> StateIO (Maybe ())
 processMessage s1 closl s2 closr mlog deleteClosure = do
       tr ("processMessage", mlog)
       conn <- getData `onNothing` error "Listen: myNode not set, use initNode"
@@ -2530,11 +2530,11 @@ processMessage s1 closl s2 closr mlog deleteClosure = do
         Just LocalClosure {localCont = Nothing} -> do
           tr "RESTORECLOSuRE"
           -- restoreClosure s1 $ BC.unpack closl 
-          (log',closreg) <- getClosureLog s1  closl
+          (log', closreg) <- getClosureLog s1  closl
           tr "AFTER RESTORECLOS"
           -- when (synchronous conn) $ liftIO $ void (tryPutMVar mv ()) -- for syncronous streaming
           case mlog of
-            Right log -> sendToClosure (log' <> log) s2 closr conn deleteClosure closreg
+            Right log -> sendToClosure ((log' ::[[Builder]]) <> log) s2 closr conn deleteClosure closreg
             Left except -> do
               tr  ("receive:",except)
               runTrans $ writeEVar (fromJust $ localEvar closreg) $ Left except
@@ -2569,12 +2569,12 @@ processMessage s1 closl s2 closr mlog deleteClosure = do
 
 
 
-sendToClosure log s2 closr conn deleteClosure LocalClosure {localClos = closLocal, localMvar = mv, localEvar = Just ev, localCont = Just cont} = do  
-    tr "before writeevar"
-    runTrans $
-      if deleteClosure
-        then writeEVar ev $ Right (SLast log, s2, closr, conn)
-        else writeEVar ev $ Right (SMore log, s2, closr, conn)
+sendToClosure logs s2 closr conn deleteClosure LocalClosure {localClos = closLocal, localMvar = mv, localEvar = Just ev, localCont = Just cont} = do  
+  tr "before writeevar"
+  runTrans $ do 
+    if deleteClosure
+        then writeEVar ev $ Right (SLast logs, s2, closr, conn)
+        else writeEVar ev $ Right (SMore logs, s2, closr, conn)
 
 
 
@@ -3236,7 +3236,7 @@ loopClosures= do
 -- | Restore the continuation recursively from the most recent alive closure.
 --  Retrieves the log and continuation from a closure identified by the Session ID (`idSession`) and the closure ID (`clos`).
 -- If the closure with the given ID is not found in the database, an error is raised.
--- getClosureLog :: Int -> BS.ByteString -> StateIO (Builder, TranShip)
+-- getClosureLog :: Int -> IdClosure -> StateT TranShip IO ([[Builder]], LocalClosure)
 getClosureLog idSession "0" = do
   tr ("getClosureLog", idSession, 0)
 
@@ -3258,19 +3258,16 @@ getClosureLog idSession clos = do
       let locallogclos = localLog closReg
       tr ("PREVLOG",  prevLog)
       tr ("LOCALLOG",  locallogclos)
-      tr ("SUM",  prevLog <> locallogclos)
-      return (prevLog <> locallogclos, clos)
+      tr ("SUM",  prevLog <> [locallogclos])
+      return (prevLog <> [locallogclos], clos)
     Just cont -> do
       tr ("JUST",idSession,clos)
       return (mempty, closReg)
 
-      -- return (mempty, cont)
 
-
-
--- | Retrieves the log from a closure (identified by prevclos) to send to the closure of a remote node (identified by remclos). the prevclos is the segment already saved in LocalClousure register in order to reconstruct the stack in the remote node necessary for continuing the execution. To this sequence is necessary to sum the current fragment that has not yet already commited
+-- | to send to the closure of a remote node (identified by remclos), retrieves the log from a closure (identified by prevclos) the prevclos is the segment already saved in the LocalClousure registers. This is in order to reconstruct the stack in the remote node necessary for continuing the execution. To this sequence is necessary to sum the current fragment that has not yet already saved
 -- If the closure with the given ID is not found, an error is raised.
-getClosureLogFrom :: DBRef LocalClosure -> DBRef LocalClosure -> StateIO Builder
+getClosureLogFrom :: DBRef LocalClosure -> DBRef LocalClosure -> StateIO [[Builder]]
 getClosureLogFrom prevclos remclos
   | prevclos==dbClos0 = return mempty
   | otherwise = do
@@ -3283,8 +3280,8 @@ getClosureLogFrom prevclos remclos
       let locallogclos = localLog prevReg
       tr ("PREVLOG",  prevLog)
       tr ("LOCALLOG",prevclos,  locallogclos)
-      tr ("SUM",  prevLog <> locallogclos)
-      return (prevLog <> locallogclos)
+      tr ("SUM",  prevLog <> [locallogclos])
+      return (prevLog <> [locallogclos])
     True -> do
       return mempty
 

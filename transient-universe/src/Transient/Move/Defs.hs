@@ -31,7 +31,7 @@ import System.IO.Unsafe
 import qualified Data.ByteString.Char8                  as BC
 import qualified Data.ByteString.Lazy.Char8             as BL
 import qualified Data.ByteString                        as B(ByteString)
-
+import qualified Data.Text                              as TE
 import Control.Concurrent.MVar
 import Data.IORef
 import Data.Aeson
@@ -204,9 +204,9 @@ data LocalClosure = LocalClosure
   { localClos     :: IdClosure,
     localSession  :: Int,
     prevClos      :: DBRef LocalClosure,
-    localLog      :: Builder,
+    localLog      :: [Builder],
     localMvar     :: MVar (),
-    localEvar     :: Maybe (EVar (Either CloudException (StreamData Builder, SessionId, IdClosure, Connection))),
+    localEvar     :: Maybe (EVar (Either CloudException (StreamData [[Builder]], SessionId, IdClosure, Connection))),
     localCont     :: Maybe TranShip
   }
   -- | ListPrecessors [DBRef LocalClosure]
@@ -251,9 +251,10 @@ instance Default Service where
 instance Default [Service] where
   def= [def]
 
+instance Default TE.Text where
+  def=mempty
 
-
-data NodeMSG = ClosureData IdClosure SessionId IdClosure SessionId Builder deriving (Read, Show)
+data NodeMSG = ClosureData IdClosure SessionId IdClosure SessionId [[Builder]] deriving (Read, Show)
 
 instance Loggable NodeMSG where
   serialize :: NodeMSG -> Builder
@@ -263,23 +264,20 @@ instance Loggable NodeMSG where
       <> "/"
       <> intDec s2
       <> "/"
-      <> build
+      <> serialize build
 
   deserialize :: TransIO NodeMSG
   deserialize =
     ClosureData <$> (BL.toStrict <$> tTakeWhile (/= '/') <* tChar '/') <*> (int <* tChar '/')
       <*> (BL.toStrict <$> tTakeWhile (/= '/') <* tChar '/')
       <*> (int <* tChar '/')
-      <*> restOfIt
+      <*> deserialize
     where
       restOfIt = lazyByteString <$> giveParseString
 
 
 -- The remote closure ids for each node connection
 type Closure = DBRef LocalClosure -- Closure SessionId IdClosure [Int] deriving (Read, Show, Typeable)
-
--- {-# SPECIALIZE getIndexData :: Int  -> StateIO (Maybe Closure) #-}
-
 
 
 data ConnectionError = ConnectionError String Node deriving (Read)

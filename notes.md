@@ -900,3 +900,91 @@ job: usar siempre con collect paa asegurar que acaba.
     y un job que sucede al anterior debe borrar el anterior
   
   job que cree un state que será borrado el siguiente. Solo puede haber un solo job en la linea de ejecucion
+
+
+
+backtracking tiene que seguir EVars y conexiones hacia los llamantes?
+  si el recovery en el llamado  reinstala los handlers, esos se pueden ejecutar en el nodo llamado
+
+en un collect
+   un solo closure con una lista de paths  o cambios de sessionid para que haya muchos closures distintos
+
+   un solo closure con una lista de paths
+      mas compacto, no necesita closures y jobs separados ni un elemento especial que los identifique todos para que la siguiente closure los invoque
+      pero si ya el session id no distingue
+        que pasa con los distintos paths generados por un stream como for, choose, waitEvents?
+          una variable de entorno que especifique cuando se duplican los caminos y cuando no?
+           no porque se usa cuando varios paths convergen en uno (collect) 
+           mientras que el stream es lo contrario: un path se convierte en muchos
+             y esa esctructura no vale. ni es necesaria porque 
+           para esos casos se precisa y basta un cambio de sesion si se quiere distinguir, tal como se habia pensado
+           como se ejecuta? 
+            se hace streaming a la evar del a closure la lista completa para que la ejecute.
+        
+        como se manejan los estados, por ejemplo, el id de usuario que envia al minput
+           ese problema lo tienen ambos metodos. es inherente a collect: colapsa la informacion.
+
+  como se recupera una localclosure que ahora tiene una lista de serializaciones, no una sola:
+    hayque usar lo que se recibe de un nodo remoto, que es una lista de ahora listas. normalmente son individuales, 
+    cuando son varias son producidas por un collect.
+    cuando se acaba la lista, coincide con el inicio de la siguiente localclosure.
+    
+    usar endpointWait, que pasa a ser endpoint
+    se lanza toda la lista a la EVar de la localclosure
+    pero como se regenera el log?
+     con la misma logica actual.
+    localClosure (... partLog :: Builder, others ::[Builder]...)
+      no partLog pertenece a Log mientras 
+      data Log  = Log{ recover :: Bool , partLog :: Builder,  hashClosure :: Int} deriving (Show)
+      permanece igual
+
+      data LocalClosure = LocalClosure
+  { localClos     :: IdClosure,
+    localSession  :: Int,
+    prevClos      :: DBRef LocalClosure,
+    localLog      :: [Builder],
+    localMvar     :: MVar (),
+    localEvar     :: Maybe (EVar (Either CloudException (StreamData Builder, SessionId, IdClosure, Connection))),
+    localCont     :: Maybe TranShip
+
+
+    se borra others
+    se opera igual que ahora con el Builder
+    no se necesita Others? quiza no. si para almacenar. en disco, Builder esta vacio. others tiene todos los paths
+    Builder es para computar en programa, asi la logica permanece igual
+    Solo en el combine de collect se genera un localclosure con una lista completa al salir de collect
+     la logica de combine
+
+
+1
+collect
+   2 2
+
+2   2
+1   1
+
+hay que detectar como estaba el stack antes de entrar (1)
+cuando se sumen quitar del stack la parte que ya estaba antes de entar en el collect
+como se sabe lo que habia antes?
+  al entrar medirlo
+    pero como se mete en el combine?
+    añadir un tercer parametro:
+    combine t -> a -> a -> a
+    combine t -> a -> a -> a ->a
+    combine :: typerep ainical a a'
+
+el primero siempre es el que habia al entrar : 1
+el segundo es el primer resultado  21. se mezclan quitando la longitud de primer: 2(1 qutado)1
+el siguiente es otro 21 con 21. queremos sacar 221. la regla es?
+
+truco qutar el de entrada en collect en todos los tipos con stack, añadirlo al final
+
+collect que corte todos los stacks de backtracking y los restaure al final.
+   porque provocarian salidas del proceso concurrente
+   y collect debe ser un espacio confinado. igual que los aplicativos
+   con esto se resuelve el problema.
+
+quitarback = d0
+  let mfData'= M.mapWithKey f mfData
+  where
+  f k x = if tipo backtrack r l then l vacio

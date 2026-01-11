@@ -17,40 +17,6 @@
 
 
 
-
-{- cabal:
-        build-depends:
-                       base          >= 4.8.1  &&  < 5
-                     , containers    >= 0.5.6
-                     , transformers  >= 0.4.2
-                     , time          >= 1.5
-                     , directory     >= 1.2.2
-                     , bytestring    >= 0.10.6
-                     , network       >= 3
-
-                     -- libraries not bundled w/ GHC
-                     , transient
-                     , transient-universe
-                     , mtl
-                     , stm
-                     , random
-                     , vector
-                     , TCache
-                     ,  signal
-                     , aeson
-                     , data-default
-                     , deepseq
-                     , signal
-
-
-
-    build-depends:
-        base >4
-    default-language: Haskell2010
-    hs-source-dirs: tests src .
-    ghc-options: -O0 
--}
-
 -- info: use `sed -i 's/\r//g' file` if message "/usr/bin/env: ‘execthirdlinedocker.sh\r’: No such file or directory"
 -- runghc    -i../transient/src -i../transient-universe/src -i../axiom/src   $1 ${2} ${3}
 -- mkdir -p ./static && ghcjs --make   -i../transient/src -i../transient-universe/src  -i../axiom/src -i../ghcjs-perch/src $1 -o static/out && runghc   -i../transient/src -i../transient-universe/src -i../axiom/src   $1 ${2} ${3}
@@ -143,13 +109,13 @@ import Data.Bits (Bits(xor))
 -- import Debug.Trace
 
 -- mainrerun = keep $ rerun "config" $ do
---   logged $ liftIO $ do
+--   local $ liftIO $ do
 --      putStrLn "configuring the program"
 --      putStrLn "The program will not ask again in further executions within this folder"
 
---   host <- logged $ input (const True)  "host? "
+--   host <- local $ input (const True)  "host? "
 --   liftIO $ print "AFTER HOST"
---   port <- logged $ input (const True)  "port? "
+--   port <- local $ input (const True)  "port? "
 --   endpoint
 
 --   liftIO $ putStrLn $ "Running server at " ++ host ++ ":" ++ show port
@@ -197,10 +163,10 @@ createFlow=
   fichero nombre closure, log con el incremental desde el ultimo createFlow
   como se sabe el incremento
    colocar una señal en el punto del log.
-     r <- logged
-            logged
+     r <- local
+            local
                 createflow
-     logged
+     local
      createFlow
   
   hacer como las closures
@@ -367,11 +333,11 @@ guardNetworkRequest conn= do
 
 -- mainhelloword= keep' $ do
 --   closCheckpoint
---   x <- logged $ return "hello "
+--   x <- local $ return "hello "
 --   closCheckpoint
---   y <- logged $ return "wolrd"
+--   y <- local $ return "wolrd"
 --   closCheckpoint
---   logged $ liftIO $ print $ x <> y
+--   local $ liftIO $ print $ x <> y
 
 
 
@@ -574,7 +540,7 @@ mainback1= keep $  do
 --     showLog
 
 --   sal x= do
---     logged setc
+--     local setc
 --     lprint x
 
 -- (</>) x y= Transient $ do
@@ -593,21 +559,21 @@ mainback1= keep $  do
 
 -- mainsimple= keep $  initNode $ do
 --   -- firstCont
---   -- logged $ logged $ do
+--   -- local $ local $ do
 --   proc2 <|> restore1 <|> save
 
 
 --   where
 --   proc2= do
---     logged $ option "p" "process"
+--     local $ option "p" "process"
 --     r <-loggedc $ loggedc $ do
---           logged setc
---           logged $ return HELLO -- liftIO $ print "PARSE ERROR"; error "PARSE ERROR" :: TransIO HELLO 
+--           local setc
+--           local $ return HELLO -- liftIO $ print "PARSE ERROR"; error "PARSE ERROR" :: TransIO HELLO 
 --     localIO $ print r
 
 --     r <- loggedc $ loggedc $ do
---             logged setc
---             logged $ return (HI ,THAT)
+--             local setc
+--             local $ return (HI ,THAT)
 --     localIO $ print r
 
 --     showLog
@@ -913,12 +879,12 @@ mainlog= keep $ initNode $ do
 
   local $ option "g" "go"
 
-  x <- logged $ return "HELLO"
-  y <- logged $ return "WORLD"
+  x <- local $ return "HELLO"
+  y <- local $ return "WORLD"
   ttr (x,y)
   log <- getLog
   ttr ("LOG FINAL",log)
-  logged $ throwt $ ErrorCall "errorrrrr" :: Cloud()
+  local $ throwt $ ErrorCall "errorrrrr" :: Cloud()
 
 
 mainminput= keep $ initNode $ do
@@ -933,156 +899,194 @@ mainminput= keep $ initNode $ do
     
 
     minput "final" ("RESULT", r ::Int) :: Cloud ()
-    
+
+{-
+class Mix a where
+    mix :: a -> a -> a
+    mix  x y= y
+
+data SDatam = forall a. (Typeable a, Mix a) => SDatam a
+ufromSDatam :: Typeable a => SDatam ->  a
+ufromSDatam (SDatam x) = unsafeCoerce x
+
+type PolyMap = M.Map TypeRep SDatam
+merge :: PolyMap -> PolyMap -> PolyMap
+merge = M.unionWith combine
+
+combine :: SDatam -> SDatam -> SDatam
+combine (SDatam x) (SDatam y) = SDatam (unsafeCoerce x `mix` y)
+-}
+setPreservePath =   void $ modifyState' (\prevclos -> prevclos{preservePath=True}) $ noExState "setCloudState"
+isPreservePath = onAll $ preservePath <$> getState 
+-- main= testPreservePath
+testPreservePath= keep $ initNode $ do
+  runJobs
+  local $ option "g" "go"
+  loggedc $ do
+    r <- setPreservePath
+    p <- isPreservePath
+    ttr ("ISPRESEVEPATH",p)
+    r' <- local $ do ttr ("NO SE EJECUTA EN REPLAY",p); return "HELLO"
+    ttr ("SI SE EJECUTA EN REPLAY",r')
+    job
+
+{-#NOINLINE counter#-}
+counter= lazy $ newIORef (0 :: Int)
+
+-- main= testBacktrackingAfterRestart
+testBacktrackingAfterRestart= keep $ initNode $ do
+  runJobs
+  local $ option "g" "go"
+  loggedc $ localIO (ttr "hello") `onBackc` \(Navigation) -> do
+      r<- localIO (ttr "world")
+      ttr ("in handler",r)
+      localIO $ modifyIORef counter (+1)
+      job
+      onAll $ forward Navigation
+  -- ttr "BEFOREJOB"
+  -- job
+  -- ttr "AFTER JOB"
+  n <- localIO $ readIORef counter
+  ttr ("STATE AFTER BACKTRACKING",n :: Int)
+  localIO $ threadDelay 10000000
+  onAll $ back Navigation
+  return ()
+
+onBackc :: (Typeable b, Show b) => Cloud a -> ( b -> Cloud a) -> Cloud a
+onBackc a ac= do
+  modifyState' (\prevclos -> prevclos{preservePath=True}) $ noExState "setCloudState"
+  onAll $ onBack (unCloud a) (\e -> unCloud (ac  e))
 
 
-
--- combine :: TypeRep -> SData -> SData -> SData
--- combine rep x y =
---   case splitTyConApp rep of
---     (tc, _) ->
---       if tc == typeRepTyCon (typeOf (ofType :: M.Map Int String))
---         then
---           unsafeCoerce $ M.union ( unsafeCoerce x :: M.Map Int String) (unsafeCoerce y :: M.Map Int String)
-
---         else  x
-
--- mixState :: TransIO a -> TransIO a
--- mixState comp= do
---   rsts <- liftIO $ newIORef M.empty
---   mfdata <- gets mfData
---   liftIO $ liftIO $ writeIORef rsts mfdata
---   -- repstofind <- M.keys <$> liftIO $ readIORef rreps
---   comp <*** mixIt rsts 
---   where
---   mixIt rsts = noTrans $ do
---     mfdata <- liftIO $ readIORef rsts
---     mfdata' <- gets mfData
---     let mfdata''= mix mfdata' mfdata
---     liftIO $ writeIORef rsts mfdata''
---     st <- get
---     put st{mfData= mfdata''}
-
--- mixState, childState, parentState
-
-
--- newtype Mix= Mix (M.Map TypeRep SData) deriving Typeable
-
--- registerMix :: (a -> a -> a) -> TransIO ()
--- registerMix f = do
---     modifyData' (\(n::Int) -> n +1) 1
---     let t= typeOf (ofType :: typ f)
---     modifyData' (\(Mix m) -> Mix $ M.insert t (unsafeCoerce f) Mix ) 
---          (Mix $ M.singleton t (unsafeCoerce f))
---     where
---     typ :: (a -> a -> a) -> a
---     typ x= undefined
-
--- mixState :: TransIO a -> TransIO a
--- mixState comp= do
---   rsts <- liftIO $ newIORef M.empty
---   mfdata <- gets mfData
---   liftIO $ liftIO $ writeIORef rsts mfdata
---   reps <- getState <|> return M.empty
---   ttr("SIZE",M.size reps)
---   -- repstofind <- M.keys <$> liftIO $ readIORef rreps
---   comp <*** mixIt reps rsts 
---   where
---   mixIt reps rsts = noTrans $ do
---     mfdata <- liftIO $ readIORef rsts
---     mfdata' <- gets mfData
---     let mfdata''= mix reps mfdata' mfdata
---     liftIO $ writeIORef rsts mfdata''
---     st <- get
---     put st{mfData= mfdata''}
---     -- | mix the states
---   mix ::  M.Map TypeRep SData -> M.Map TypeRep SData -> M.Map TypeRep SData -> M.Map TypeRep SData
---   mix reps= M.unionWithKey (applyMixForType reps)
---     where
---     applyMixForType :: M.Map TypeRep SData -> TypeRep -> SData -> SData -> SData
---     applyMixForType reps rep x y= do
---         case M.lookup rep reps of
---           Nothing -> x
---           Just mixtype -> (unsafeCoerce mixtype) x y
-
--- main= testregisterMix 
--- testregisterMix= keep $ do
---   -- registerMix (M.union :: M.Map Int String -> M.Map Int String -> M.Map Int String)
---   registerMix ((+) :: Int -> Int ->Int)
---   registerMix ((++) :: String -> String -> String)
-
---   -- setData (1 :: Int)
---   mixState $ 
---     (do 
-      
-      
---       abduce
---       setData (1 :: Int)
---       setData "hello") <|>  setData (2 :: Int) 
-
-  
---   -- x <- getIndexData (1 :: Int)
---   -- y <- getIndexData (2 :: Int)
---   z <- getData
---   t <- getData
---   u <- getData
---   ttr ("results",z :: Maybe String,t :: Maybe Int, u :: Maybe Float )
-         
-
-
-
--- myHandler :: Signal -> IO ()
--- myHandler sig = putStrLn $ "Señal recibida: " ++ show sig
-
--- main :: IO ()
--- main= do
---   forkIO $ void $ forkIO $ do
---     System.Signal.installHandler sigINT myHandler -- Instala el handler para SIGINT
---     putStrLn "Presiona CTRL+C para terminar..."
---   waitLoop
-
--- waitLoop :: IO ()
--- waitLoop = waitLoop -- Espera infinita hasta recibir la señal
-
+-- main= keep  $ initNode   $ do
+--   local genNewSession
+--   PrevClos dbr mn _ _ <- getData `onNothing` noExState  "minput" :: Cloud PrevClos
+--   ttr ("PREV CLOSURE", mn)
+--   let idSession = if isJust mn then fromJust mn else fst $ getSessClosure dbr
+--   ttr ("ENDPOINTWAIT", idSession)
+--   -- onAll $ endpointWait  (Just $BC.pack "test") idSession
+--   empty
+--   return ()
 
 -- main= keep $ initNode $ do
---   local $ setState "hola"
---   node <- local getMyNode
---   r <- liftCloud (collect 0) $ runAt (node) $ return "hello"
---   ttr ("AFTER COLLECT",r)
---   r <- local $ getState <|> error "NO STATE" 
---   ttr ("STATE",r :: String)
+--   runJobs
+--   setCloudState "hello"
+--   s <- minput "p1" "p1" :: Cloud String
+--   ttr s  
+--   local $ do
+--      PrevClos a b c d <- getState <|> error "no state" 
+--      ttr (a,b,c,d)
 
--- main= keep $ do
---   ref <- liftIO $ newIORef undefined
---   let msg= "MESSAGE"
---       ondo = writeIORef ref 
---       doit x= do
---         f <- liftIO $ readIORef ref 
---         liftIO $ f x
---         empty
+--   minput "p2" "p2" :: Cloud ()
+--   moutput "ok"
 
---   onException $ \(ErrorCall msg) -> do ttr msg; continue
---   fork $ doit "hello"
---   react (ondo) (return ())  
---   error msg
---   return()
---   where
+--   r <- local $ getState <|> error "no state"
+--   localIO $ print ("STATE",r :: String)
 
--- main= keep  $ do
---   option "g" "go"
---   error "err"
---   return()
+{-
+en ejecucion repetiva guardar como origen el ultimo teleport
+debe guardarse el orden en la ejecucion de los jobs y ejecutarse en un solo thread
+-}
 
--- main= keep $ do
---   ev <- newEVar
---   do -- collect 0 $ do
---     ((readEVar ev :: TransIO String) >> cleanEVar ev >> return "written")  <|> do
---          setState "hello"
+-- main= keep $ initNode $ inputNodes <|> do
+--   local $ option "g" "go"
+--   nodes <- local getNodes
+--   ttr nodes
+--   -- local genNewSession1
 
---          (writeEVar ev "world" >> empty)
+--   s <- runAt (nodes !! 1) $ do
+--         local $ for ["hello","world"]
+--   -- local genNewSession1
+--   ttr s
+
+
+
+-- main= testCollectJob
+testCollectJob= keep $ initNode $ do
+  runJobs
+  t <- local $ option "g" "go"
+  ttr ("STARTING testCollectJob1",t)
+  r <- collectc 2 0 $ do
+          r <- minput "test" "enter string" 
+          moutput "ok"  `onBackc` \Navigation -> ttr ("IN HANDLER",r) 
+          return r
   
---   (getState >>= liftIO . putStrLn) <|> liftIO (print "NO STATE")
+  ttr ("RESULT",r) 
+  -- onAll $ back Navigation
+
+  minput "results" "see results" :: Cloud ()
+  moutput ("results",r :: [String])
+
+
+
+main= testcollectc
+testcollectc= keep $ initNode $ do
+  runJobs
+  return() `onBackc` \Navigation -> ttr ("Navigation", "INIT")
+  minput "g" "go" <|> published "res" :: Cloud ()
+  r <- collectc 2 0 $ do
+            r <- minput "inp" "inp" `onBackc` \Navigation -> do ttr ("Navigation");  onAll $ forward Navigation; return "cccc" :: Cloud String
+            moutput "ok" 
+            return r 
+  ttr ("*************RESULT",r) 
+  publish "res" $ minput "results" "results" ::Cloud ()
+  moutput r
+  local $ back Navigation :: Cloud ()
+
+{-
+hacer sandbox de todos los datos
+    borrar datos de backtracking
+    ejecutar collect
+    mezclar ambos
+    poner los
+-}
+
+
+
+
+-- -- | persistent non recursive collect that preserves backtracking handlers
+-- collectc :: Loggable a => Int -> Int -> Cloud a -> Cloud [a]
+-- collectc n delta action= do
+--   tinit <- local $ fromIntegral <$> getMicroSeconds
+
+--   let tfin= tinit +  delta
+
+--   t <- onAll $ fromIntegral <$> getMicroSeconds
+--   let timeleft= let t'= tfin - t in if t' <0 then 0 else t'
+--   ttr("TIMELEFT",timeleft)
+--   -- node <- onAll getMyNode
+--   initState <- gets mfData
+--   states <- onAll $ liftIO $ newIORef M.empty
+--   removeBacktracking
+
+--   r <- local $ collect' n timeleft $ unCloud $ do
+--           r <- action
+
+--           modifyState' (\prevclos -> prevclos{preservePath=True}) $ noExState "collectc"
+
+--           job
+--           -- onAll $ liftIO $ threadDelay 10000
+--           onAll $  do
+--             s <- gets mfData
+--             s' <-liftIO $ readIORef states
+
+--             liftIO $ writeIORef states $ Transient.Internals.merge  s' s
+--           return r
+
+--   s <- onAll $ liftIO $ readIORef states
+--   modify $ \st -> st{mfData= Transient.Internals.merge initState s}
+--   where
+--   return r
+--   removeBacktracking :: TransMonad m => m ()
+--   removeBacktracking =  modify $ \st -> st{mfData= M.filterWithKey f $ mfData st}  
+--     where
+--     -- change to filterKeys, currently websockets needs Data.Map < 0.8
+--     f t _=   -- t == typeOf(ofType :: Backtrack Finish)  ||
+--             typeRepTyCon  t /=  typeRepTyCon (typeOf (ofType :: Backtrack ()))
+
+
+
+
 
 -- main= testsetCloudState 
 -- testsetCloudState= keep $ initNode $ inputNodes <|> do
@@ -1170,110 +1174,94 @@ testCollectminput= keep $ initNode $ do
  
 
 
-mainsimul= keep $ initNode $ do
-   localIO $ writeIORef save True
-   runJobs
-   local $ option "g" "go"
-   r <- simulcoll 
-   onAll $ liftIO $ print("RESULT", r)
+-- mainsimul= keep $ initNode $ do
+--    localIO $ writeIORef save True
+--    runJobs
+--    local $ option "g" "go"
+--    r <- simulcoll 
+--    onAll $ liftIO $ print("RESULT", r)
    
-   onAll $ endpoint Nothing
-   job (Just "jobfin") $ local $ option "fin" "fin"
-
-simulcoll  = loggedc $ do
-  local $ return "ANTES"
-  rs <- collect1 
-  ttr ("RS",rs)
-  if null   rs then return  rs else  return   rs <> (job Nothing $ simulcoll )
-  where
-  collect1 = local $ collect 0  $ do
-    -- n <- input (const True) "how many? >"
-    op <- option1 "one" "one" <|> option1 "none" "none"
-    if op== "one" then return[2,2 :: Int] else return []
+--    onAll $ endpoint Nothing
+--    job (Just "jobfin") $ local $ option "fin" "fin"
 
 
 
 
 
-main= testDurableCollect
-testDurableCollect=  keep $ initNode $ do
+-- data SA= SA{pp::String} deriving (Generic,ToJSON,FromJSON)
+-- instance TC.Indexable SA where key (SA p)= "SA-" <> p
+-- main= keep $ initNode $ Cloud $ liftIO $ do
+--    index pp
+--    atomically $ newDBRef (SA "hello")
+--    atomically $ newDBRef (SA "world")
+--    syncCache
+
+
+-- maincccc= keep $ initNode $ do
+--   runJobs
+--   ((minput "seq" "start sequence" :: Cloud ()) >> sequencem)
+--      <|> ((minput "collect" "start collect"  :: Cloud ()) >> testDurableCollect)
+
+-- main= keep $ initNode testDurableCollect
+testDurableCollect=   do
   runJobs
-  r <- local $ option "go" "go"
-  ttr ("OPTION",r)
-  r <-  collectp 0 60000000 $ do 
+  minput "go" "go" :: Cloud ()
+  r <- collectc 0 100000000 $ do
+          local $ onException $ \(e::SomeException) -> do
+            liftIO $ print ("error" ,e)
+            empty
+          r <- minput "test" "enter Int" :: Cloud Int
+          moutput "ok"
+          return r
 
-           r <- minput "test" "enter Int" :: Cloud Int
-           moutput "ok"
-           return r
-  ttr ("RESULT",r:: [Int])
   localIO $ print ("RESULT",r:: [Int])
+  minput "result" "see result" :: Cloud ()
+  moutput r
+  -- job $ return ()
 
-  job (Just "jobfin") $ local $ option "fin" "fin"
 
--- | persistent collect. Unlike Transient.collect, Transient.Move.collect  keeps the results across intended and unintended
--- shutdowns and restarts
-collectp n delta  mx=  do
-  onAll $ liftIO $ writeIORef save True
-  tinit <- local getMicroSeconds
-  ttr("COLLECTPP",n,delta)
 
-  let tfin= tinit +  delta
-      numbered= n > 0
+
+
+
+
+-- -- | persistent collect. Unlike Transient.collect, Transient.Move.collect  keeps the results across intended and unintended
+-- -- shutdowns and restarts
+-- collectp n delta  mx=  do
+--   onAll $ liftIO $ writeIORef save True
+--   tinit <- local getMicroSeconds
+--   tr("COLLECTPP",n,delta)
+
+--   let tfin= tinit +  delta
+--       numbered= n > 0
  
-      collectp' n  delta 
-       | n <= 0 && numbered = return []
-       | otherwise= do
-        (rs,delta') <- local $ do
-            t <-  getMicroSeconds
+--       collectp' n  delta 
+--        | n <= 0 && numbered = return []
+--        | otherwise= do
+--         (rs,delta') <- local $ do
+--             t <-  getMicroSeconds
 
-            let delta'=  tfin -t
-            ttr ("delta'",delta')
-            rs <- if delta' <= 0 then return [] else collectSignal True n (fromIntegral delta) $ unCloud mx
-            ttr ("RS",rs)
+--             let delta'=  tfin -t
+--             ttr ("delta'",delta')
+--             rs <- if delta' <= 0 then return [] else collectSignal True n (fromIntegral delta) $ unCloud mx
+--             ttr ("RS",rs)
 
-            -- tiene que obtener el delta historico dentro de local, para saber si tiene que recuperar mas jobs
-            -- Alabado sea Dios
-            return (rs,delta')
-        let len= length rs
-        ttr ("ITERATION",n,len)
-        if delta'<= 0 || (numbered && len>= n) then return rs else return rs <>  
-                    (job Nothing $  collectp' (n-len) delta')
+--             -- tiene que obtener el delta historico dentro de local, para saber si tiene que recuperar mas jobs
+--             -- Alabado sea Dios
+--             return (rs,delta')
+--         let len= length rs
+--         tr ("ITERATION",n,len)
+--         let n'= if numbered then n - len else 0
+--         if delta'<= 0 || (numbered && len>= n) then return rs else return rs <>  
+--                     (job $  collectp' n' delta')
   
-  ttr ("COLLECTP",n,delta)
-  collectp' n delta
+--   tr ("COLLECTP",n,delta)
+--   collectp' n delta
 
--- | persistent collect. Unlike Transient.collect, It keeps the results across intended and unintended
--- shutdowns and restarts
-collectpp n delta  mx=  do
-  tinit <- local getMicroSeconds
-  ttr("COLLECTPP",n,delta)
 
-  let tfin= tinit +  delta
-      numbered= n > 0
- 
-      collectp' n  delta 
-       | n <= 0 && numbered = return []
-       | otherwise= do
-        (rs,delta') <- local $ do
-            ttr ("COLLECTSIGNAL",n)
-            rs <- collectSignal True n (fromIntegral delta) $ unCloud mx
-            ttr ("RS",rs)
-            t <-  getMicroSeconds
-            let delta'=  tfin -t
-            ttr ("delta'",delta')
-            -- tiene que obtener el delta historico dentro de local, para saber si tiene que recuperar mas jobs
-            -- Alabado sea Dios
-            return (rs,delta')
-        let len= length rs
-        ttr ("ITERATION",n,len)
-        if delta'<= 0 || (numbered && len>= n) then return rs else return rs <> (job Nothing $ collectp' (n-len) delta')
-  
-  ttr ("COLLECTP",n,delta)
-  collectp' n delta
-  
-getMicroSeconds = liftIO $ do
-        (TOD seconds picos) <- getClockTime
-        return (seconds * 1000000 + picos `div` 1000000)
+-- getMicroSeconds = liftIO $ do
+--         (TOD seconds picos) <- getClockTime
+--         return (seconds * 1000000 + picos `div` 1000000)
       
 
 
@@ -1562,9 +1550,12 @@ mainexcepterr= keep  $ do
 mainjob= keep $ initNode $  do
   runJobs
   local $ option "go" "go"
-  job Nothing $  localIO $ print "hello"
-  job Nothing $ local $ option "c" "continue"   -- <|>( option "s" "stop" >> exit (); empty)
-  job Nothing $  localIO $ print "world"
+  job 
+  localIO $ print "hello"
+  job 
+  local $ option "c" "continue"   -- <|>( option "s" "stop" >> exit (); empty)
+  job 
+  localIO $ print "world"
 
 maincollect0= keep $ do
      option "go" "go"
@@ -1598,9 +1589,9 @@ pr x= liftIO $ putStr x
 -- mainlogdist= keep $ initNode $  go <|> restore1
 --   where
 --   runAt'' n x= loggedc $ do
---       logged $ do id <- genPersistId; let nam= n <> "-1-" <> show id in setcn nam >> tr nam >> return nam
+--       local $ do id <- genPersistId; let nam= n <> "-1-" <> show id in setcn nam >> tr nam >> return nam
 --       r <- x
---       logged $ do id <- genPersistId; let nam= n <> "-2-" <> show id in setcn nam >> tr nam >> return nam
+--       local $ do id <- genPersistId; let nam= n <> "-2-" <> show id in setcn nam >> tr nam >> return nam
 --       return r
 --   go=  do
 --     let node1="node1"; node2="node2";node3="node3"
@@ -1652,38 +1643,38 @@ pr x= liftIO $ putStr x
 
 --   proc1= proc "p1" <|> proc "p2"
 --   proc op= do
---     logged $ option op ("process "++ op)
---     r <- logged $ return HELLO
+--     local $ option op ("process "++ op)
+--     r <- local $ return HELLO
 
---     logged $ liftIO $ putStrLn $ show r ++ op
---     r <- loggedc $  loggedc $ logged $ return WORLD
---     logged $ liftIO $ putStrLn $ show r ++ op
+--     local $ liftIO $ putStrLn $ show r ++ op
+--     r <- loggedc $  loggedc $ local $ return WORLD
+--     local $ liftIO $ putStrLn $ show r ++ op
 --     loggedc $ do
---         logged $ return PRE
+--         local $ return PRE
 --         loggedc $ do
---             logged $ return  PRE1
---             logged setc
---             logged $ return POST1
---         logged $ return POSTT
+--             local $ return  PRE1
+--             local setc
+--             local $ return POST1
+--         local $ return POSTT
 
 --     showLog
 
---     logged $ return THAT
+--     local $ return THAT
 
---     r <- loggedc $  loggedc $ logged $ return WORLD
+--     r <- loggedc $  loggedc $ local $ return WORLD
 
---     logged $ liftIO $ putStrLn $ show r ++ op
+--     local $ liftIO $ putStrLn $ show r ++ op
 
 
---     logged setc
+--     local setc
 
---     r <- logged $ return HI
---     logged $ liftIO $ putStrLn $ show r ++ op
+--     r <- local $ return HI
+--     local $ liftIO $ putStrLn $ show r ++ op
 
 --     showLog
 --     return op
 
--- save= logged $ do
+-- save= local $ do
 --     option "save" "save execution state"
 --     liftIO  syncCache
 --     empty
@@ -1695,7 +1686,7 @@ pr x= liftIO $ putStr x
 --         noTrans $ restoreClosure 0 clos
 --         -- noTrans $ processMessage 0 clos 0 (BC.pack "closr") (Right mempty) False
 
--- restore1= logged $ do
+-- restore1= local $ do
 --         restoren
 --         empty
 
@@ -1707,7 +1698,7 @@ pr x= liftIO $ putStr x
 --     liftIO $ putStr  "0 ">> print (localClos lc)
 
 setcn n=  do
-    setCont (Just $ BC.pack n)  0
+    endpoint (Just $ BC.pack n) 
     liftIO $ putStr  "0 ">> print n
 
 -- setcc= do
@@ -1736,25 +1727,25 @@ showLog=do
 
 --   where
 --   proc= do
---     logged $ option "go" "go" >> setc
---     logged setc
+--     local $ option "go" "go" >> setc
+--     local setc
 
 -- main1= keep $ unCloud $ do
 --    onAll firstCont
 --    proc <|>  save <|>  restore1
 --  where
 --  proc= do
---   logged $ option "go" "go"
+--   local $ option "go" "go"
 --   r <- loggedc $ loggedc $ loggedc $ do
---               logged setc
---               logged $ return HELLO
+--               local setc
+--               local $ return HELLO
 
---   logged $ liftIO $ print r
+--   local $ liftIO $ print r
 
---   r1 <- logged $ do
+--   r1 <- local $ do
 --     setc
 --     return WORLD
---   logged $ liftIO $ print (r,r1)
+--   local $ liftIO $ print (r,r1)
 --   log <- getLog
 --   tr ("partLog",partLog log)
 
@@ -1804,7 +1795,7 @@ str= fromString
 mainremote= keep $ do
    (do d <- getState <|> return 0 :: TransIO Int
        tr ("-------",d)
-       ((unCloud $ logged $ gets execMode >>= tr)  <***  setState  d ))  <** modify (\s -> s {execMode = Remote})
+       ((unCloud $ local $ gets execMode >>= tr)  <***  setState  d ))  <** modify (\s -> s {execMode = Remote})
    tr "END"
 
 {-
@@ -1827,7 +1818,7 @@ hacer un local que sea mas rapido y
 
 wormhole                           wormhole
   teleport                            teleport
-  logged mx                           logged mx
+  local mx                           local mx
   teleport                            teleport
 -}
 
@@ -1957,16 +1948,16 @@ maincond= do
 --   teleport1 $ n ++ n
 --   return r
 
-mainmini= keep $ initNode  $ do
-  local $ return HELLO
-  onAll $ getLog >>= ttr
+-- mainmini= keep $ initNode  $ do
+--   local $ return HELLO
+--   onAll $ getLog >>= ttr
 
-  loggedc  $ do
-     void $ modifyState' (\(PrevClos a b c) -> PrevClos a True c) $ error "error"
-     local $ return "pepe"
+--   loggedc  $ do
+--      void $ modifyState' (\(PrevClos a b c) -> PrevClos a True c) $ error "error"
+--      local $ return "pepe"
 
-  local $ return WORLD
-  onAll $ getLog >>= ttr
+--   local $ return WORLD
+--   onAll $ getLog >>= ttr
 
 alea :: [TransIO String] -> Cloud ()
 alea [] = return ()
@@ -2582,8 +2573,8 @@ mainlog2= keep' $ unCloud $ do
 
   where
   proc= do
-    logged (do tr "empty"; empty) <|> logged (do tr "HELLO";return HELLO)
-    logged $ return WORLD
+    local (do tr "empty"; empty) <|> local (do tr "HELLO";return HELLO)
+    local $ return WORLD
 
 
 
@@ -2600,7 +2591,7 @@ mainjob3 = keep $ initNode $ do
 
 
   --  minput "input2"  "test2" :: Cloud()
-  job Nothing (process ev) <|> report ev
+  (job >> process ev) <|> report ev
 
   where
    process ev= do
@@ -2916,7 +2907,7 @@ mainauction = keep $ initNode $ do
     setIPFS
 
     POSTData (wallet :: Integer,name :: String) <- minput "enterw"  "enter wallet"
-    setSessionState wallet
+    setCloudState wallet
     guessgame name wallet <|> auction
     return ()
 
@@ -2925,8 +2916,8 @@ mainauction = keep $ initNode $ do
 
        minput "guessgame" "play guessgame"  <|> published "lock" :: Cloud ()
        lock  :: Int <- minput "enterlock" $ name <> ": lock a number to guess it"
-       guessn:: Int <- public "lock" $ minput "enterguess" $ "guess the number entered by: " <>  name
-       wallet' :: Integer <- local getSessionState
+       guessn:: Int <- publish "lock" $ minput "enterguess" $ "guess the number entered by: " <>  name
+       wallet' :: Integer <- local getState
        minput "entered"  [("entered number", show guessn)
                          ,("wallet lock", show wallet)
                          ,("wallet guess",show wallet')
@@ -2995,10 +2986,10 @@ maintest = keep $ initNode $ test -- <|>  restore1
 --         if (not $ recover log) || BS.null pstring
 --           then do
 --             receivee conn (Just $ BC.pack ident)  val
---             unCloud $ logged $ error "not enough parameters 2" -- read the response, error if response not logged
+--             unCloud $ local $ error "not enough parameters 2" -- read the response, error if response not local
 --           else do
 --             receivee conn (Just $ BC.pack ident)  val
---             unCloud $ logged $ error "insuficient parameters 3" -- read the response
+--             unCloud $ local $ error "insuficient parameters 3" -- read the response
 
 --       tr ("MINPUT RESULT",idcontext',result)
 --       return result `asTypeOf` return (type1 response)

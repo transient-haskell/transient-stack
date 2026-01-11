@@ -16,9 +16,9 @@
 #ifndef ghcjs_HOST_OS
 
 
-module Transient.Move.Web  (minput,moutput,public,published,showURL,getURL,ToHTTPReq(..),POSTData(..),HTTPReq(..),
+module Transient.Move.Web  (minput,moutput,publish,published,showURL,getURL,ToHTTPReq(..),POSTData(..),HTTPReq(..),
 AsJSON(..),{-getSessionState,setSessionState,newSessionState,-}rawHTTP,serializeToJSON,deserializeJSON,
- IsCommand,optionEndpoints,getCookie,setCookie,genNewSession) where
+ IsCommand,optionEndpoints,getCookie,setCookie) where
 
 import Control.Applicative
 import Control.Concurrent.MVar
@@ -40,7 +40,6 @@ import qualified Data.TCache.DefaultPersistence as TC
 import Data.Typeable
 import GHC.Generics
 import System.IO.Unsafe
-import System.Random
 import System.Time
 import Transient.Console
 import Transient.Internals
@@ -192,7 +191,7 @@ minput ident msg' = onAll $ sandboxData (ofType :: ClosToRespond) $ unCloud  res
                 inputParse deserialize $ BS.unpack msg
 
               else return $ unsafeCoerce ()
-          (_,r') <- unCloud $ logged $ return (idc,r)
+          (_,r') <- logged $ return (idc,r)
           return r'
 
     connected log {- ctx@(Context idcontext _)-} idSession conn closLocal  httpreq = do
@@ -227,7 +226,7 @@ minput ident msg' = onAll $ sandboxData (ofType :: ClosToRespond) $ unCloud  res
             case cdata of
               Just Self -> do
                 -- b <- getLog >>= return . recover
-                endpointWait  (Just $ BC.pack ident) idSession
+                endpoint  (Just $ BC.pack ident)
 
                 delState IsCommand
                 tr "SELF XXX"
@@ -237,8 +236,8 @@ minput ident msg' = onAll $ sandboxData (ofType :: ClosToRespond) $ unCloud  res
 
 
                 (string "e/" >> string "e/") <|> return "e/"
-                r <- unCloud $ logged $  liftIO $ do error "insuficient parameters 1"; empty -- read the response
-                genNewSession
+                r <- logged $  liftIO $ do error "insuficient parameters 1"; empty -- read the response
+                -- genNewSession
                 return r
               _ -> do
 
@@ -257,24 +256,24 @@ minput ident msg' = onAll $ sandboxData (ofType :: ClosToRespond) $ unCloud  res
                 -- store the msg and the url and the alias
                 -- se puede simular solo con los datos actuales
                 -- b <- getLog >>= return . recover
-                endpointWait  (Just $ BC.pack ident) idSession
+                endpoint  (Just $ BC.pack ident)
                 tr "after receive"
                 delState IsCommand
                 delRState InitSendSequence
-                r <- unCloud $ logged $ error "not enough parameters 2" -- read the response, error if response not logged
-                genNewSession
+                r <- logged $ error "not enough parameters 2" -- read the response, error if response not logged
+                -- genNewSession
                 return r
           else do
             -- the program has just restarted and recovered and this endpoint is active waiting for requests.
             -- Perhaps a request waked up that endpoint
             -- b <- getLog >>= return . recover
 
-            endpointWait  (Just $ BC.pack ident) idSession
+            endpoint  (Just $ BC.pack ident)
             delState IsCommand
             tr ("else",ident)
             -- logged will deserialize the request parameters
-            r <- unCloud $ logged $ error "insuficient parameters 3" -- read the response
-            genNewSession
+            r <- logged $ error "insuficient parameters 3" -- read the response
+            -- genNewSession
             return r
             -- maybe another user from other context continues the program
       ttr ("MINPUT RESULT",idcontext',result)
@@ -310,11 +309,11 @@ minput ident msg' = onAll $ sandboxData (ofType :: ClosToRespond) $ unCloud  res
 -- endpoints = unsafePerformIO $ newIORef M.empty
 
 
--- | makes a `minput`  to be discoverable by  `published` so that the endpoint may be available for other users.
+-- | makes a `minput`  to be discoverable by  `publish` so that the endpoint may be available for other users.
 -- The first parameter is the key where many endpoints may be published. The second parameter is the endpoint (`minput`) itself
 
-public :: Loggable a => String -> Cloud a -> Cloud a
-public key inp= inp  <|> add key
+publish :: Loggable a => String -> Cloud a -> Cloud a
+publish key inp= inp  <|> add key
   where
   add  :: Loggable a => String ->  Cloud a
   add k= local $ do
@@ -336,7 +335,7 @@ public key inp= inp  <|> add key
 -- new session. 
 -- pending key inp= do
 --   idata <- local getState
---   r <- public key inp
+--   r <- publish key inp
 --   local $ liftIO $ withResource(InputDatas key undefined) $ \case 
 --               Nothing                  -> InputDatas key []
 --               Just(InputDatas k lcks) -> InputDatas k $ delete  idata lcks
@@ -344,7 +343,7 @@ public key inp= inp  <|> add key
 
 
 
--- | send to the cllient all the endpoints published by `public` with the given key
+-- | send to the cllient all the endpoints published by `publish` with the given key
 published :: Loggable a => String -> Cloud a
 published k=  local $ do
     InputDatas _ inputdatas <-  liftIO $ getResource (InputDatas k undefined)  `onNothing` return (InputDatas k []) -- getRState
@@ -372,7 +371,7 @@ published k=  local $ do
            string "http://" ; tTakeWhile' (/='/')
            (,,,,) <$> tTakeWhile' (/='/') <*> tTakeWhile' (/='/')  <*> tTakeWhile' (/='/') <*> tTakeWhile' (/='/') <*> tTakeWhile' (/='/')
       tr ("CL S",cl,s,cl',s',ids)
-      Transient $ processMessage (read $ BS.unpack s) (BS.toStrict cl)  (read $ BS.unpack s') (BS.toStrict cl') (Right $ lazyByteString $ ids <> "/" <> pars) False
+      Transient $ processMessage (read $ BS.unpack s) (BS.toStrict cl)  (read $ BS.unpack s') (BS.toStrict cl') (Right $ [[lazyByteString $ ids <> "/" <> pars]]) False
       return ()
 
 getEndpoints= getRState <|> return (Endpoints M.empty) -- |error "NO ENDPOINT state: use optionEndpoints" -- return (Endpoints M.empty)
@@ -574,66 +573,7 @@ sendFragment tosend = do
   checkComposeJSON conn
   msend conn $ toHex l <> "\r\n" <> tosend <> "\r\n"
 
--- getSessionState :: (Typeable a, Loggable a) => TransIO a
--- getSessionState = res
---   where
---     res = Transient $ do
---       mc <- getData
---       case mc of
---         Nothing -> tr "NO MAP" >> return Nothing
---         Just (Context idcontext' mf) -> do
---           case M.lookup (show $ typeOf $ ty res) mf of
---             Just str -> runTrans $ withParseString str deserialize
---             Nothing -> return Nothing
---     -- return $ fmap read $ M.lookup (show $ typeOf $ ty res) mf
---     ty :: TransIO a -> a
---     ty = undefined
 
--- newSessionState :: (Loggable a, Typeable a) => a -> Cloud ()
--- newSessionState x = local $ do
---   ctx <- Context <$> genSessionId <*> return (M.singleton (show $ typeOf x) (toLazyByteString $ serialize x))
---   setState ctx
-
--- -- | set a session value of the given type that last across all the Web navigation of a given user
--- setSessionState :: (MonadState TranShip m, Loggable a) => a -> m ()
--- setSessionState x = do
---   modifyData'
---     (\(Context n map) -> Context n $ M.insert (show $ typeOf x) (toLazyByteString $ serialize x) map)
---     (Context 0 $ M.singleton (show $ typeOf x) $ toLazyByteString $ serialize x)
---   return ()
-
--- genSessionId :: MonadIO m => m Int
-genSessionId = liftIO $ do
-    n <- randomIO
-    return $ if n < 0 then - n else n 
-
--- genNewSession1= genSessionId >>= genNewSession
-
--- genNewSession newSession=  do
---     -- newSession <-  genSessionId
---   ttr ("GEN NEW SESSION", newSession)
---   modifyData' (\(PrevClos p mf l i) -> 
---     case mf of
---       Just _  -> PrevClos p mf l i :: PrevClos
---       Nothing -> PrevClos p  (Just newSession) l i)
---     (error "newSession: no Previous closure")
---   PrevClos _ mn _ _ <- getData `onNothing` noExState "genNewSession" :: TransIO PrevClos
---   ttr ("NEW SESSION SET", mn)
-
-logged1 :: Loggable a => TransIO a -> TransIO a
-logged1= unCloud . logged
-
-
-genNewSession =  do
-    newSession <- logged1 genSessionId
-    tr ("GEN NEW SESSION", newSession)
-    modifyData' (\prev@(PrevClos p mf l i) -> 
-      case mf of
-        Just _  -> prev
-        Nothing -> PrevClos p  (Just newSession) l i)
-      (error "genNewSession: no Previous closure")
-    -- PrevClos _ mn _ _ <- getData `onNothing` noExState "genNewSession" :: TransIO PrevClos
-    -- ttr ("NEW SESSION SET", mn)
 
 class  Typeable a => ToHTTPReq a where
   toHTTPReq :: a -> TransIO HTTPReq
@@ -667,6 +607,7 @@ instance ToHTTPReq a => ToHTTPReq [a] where
     where
     f :: [a] -> a
     f= undefined
+
 
 instance  (Default a, ToJSON a, Typeable a
           ,Default b, ToJSON b, Typeable b) => ToHTTPReq (POSTData(a,b)) where

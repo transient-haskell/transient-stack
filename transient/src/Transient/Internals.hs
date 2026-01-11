@@ -137,6 +137,7 @@ color x= unsafePerformIO $ do
 ttr x= trace1 ( "=======>" <> color x) $ return ()
 
 tracec x f= Debug.trace (color x) f
+
 ofType = error ": proxy data being evaluated"  -- used as   ofType :: TypeNeeded
 
 type StateIO = StateT TranShip IO
@@ -193,6 +194,9 @@ delistener id (LF st ls) finst= LF finst $ delete id ls
 --             -- else DeadParent
 --     | otherwise= l
 
+-- | The 'Log' data type represents the current log data, which includes information about whether recovery is enabled, the partial log builder, and the hash closure.
+data Log  = Log{ recover :: Bool , partLog :: Builder, restLog :: [[Builder]],  hashClosure :: Int} deriving (Show)
+
 
 -- delistener id (Listener ids) final= Listener $ delete id ids
 -- delistener _ s _= s
@@ -207,18 +211,36 @@ merge = M.unionWithKey combine
 
 data Backtrack1 a = Backtrack1 (Maybe a) [SData]
 combine :: TypeRep -> SData -> SData -> SData
-combine t x y =  tracec ("Merging type: " ++ show t) $ 
+combine t x y =   -- tracec ("Merging type: " ++ show t) $ 
   
-  let tc = typeRepTyCon  t
-      tc'= typeRepTyCon (typeOf (ofType :: Backtrack ()))
-  in if tc ==  tc'
-      then    
+  let tc = typeRepTyCon  t in
+  if tc ==  typeRepTyCon (typeOf (ofType :: Backtrack ())) then    
         let list  = case unsafeCoerce x :: Backtrack1 () of
                         Backtrack1 _ list  -> list
             list' = case unsafeCoerce y :: Backtrack1 () of
                         Backtrack1 _ list' -> list'
-        in  unsafeCoerce $ Backtrack1 Nothing ( list ++  list')
-      else y -- Default behavior: take the second value
+        in  tracec("comb",tc) $ unsafeCoerce $ Backtrack1 Nothing ( list' ++ list)
+
+  else if tc == typeRepTyCon (typeOf(ofType :: Log)) then
+        let log= unsafeCoerce x  :: Log
+            log'= unsafeCoerce y :: Log
+        in  tracec("comb",tc) $ unsafeCoerce $ log'{restLog = restLog log ++ restLog log'} 
+
+  else y -- Default behavior: take the second value
+
+-- mix :: TyTypeRep -> a -> a -> a
+-- mix t=
+--   let t = typeRepTyCon t
+--   case t of
+--     Backtrack1 -> do
+--       let list  = case unsafeCoerce x :: Backtrack1 () of
+--                       Backtrack1 _ list  -> list
+--           list' = case unsafeCoerce y :: Backtrack1 () of
+--                       Backtrack1 _ list' -> list'
+--       in  unsafeCoerce $ Backtrack1 Nothing ( list ++ list')
+--     Log -> do
+
+
 
 -- | TranShip describes the context of a TransientIO computation:
 data TranShip = forall a b. TranShip
@@ -1469,6 +1491,9 @@ getIndexData n= do
   tr ("len indexdata", M.size clsmap)
   return $ M.lookup n clsmap
 
+-- {-# SPECIALIZE getIndexData :: Int  -> StateIO (Maybe Closure) #-}
+
+
 -- | set a pure state identified by his type and an index.
 setIndexData :: (MonadState TranShip m, Typeable k, Typeable a, Ord k) => k -> a -> m (M.Map k a)
 setIndexData n val= modifyData' (M.insert n val) (M.singleton n val)
@@ -2617,6 +2642,7 @@ collectSignal saveOnSignal  number time proc'=  localBack (Finish "") $ do
           Exit _ _ <- getMailbox -- readEVar'  False idev evexit
 
           liftIO $ readIORef res
+          
         timer =  do
           guard (time > 0)
           anyThreads abduce
@@ -2765,16 +2791,16 @@ backCut reason= Transient $ do
 undoCut ::  TransientIO ()
 undoCut = backCut ()
 
--- | The 'Log' data type represents the current log data, which includes information about whether recovery is enabled, the partial log builder, and the hash closure.
-data Log  = Log{ recover :: Bool , partLog :: Builder,  hashClosure :: Int} deriving (Show)
+-- -- | The 'Log' data type represents the current log data, which includes information about whether recovery is enabled, the partial log builder, and the hash closure.
+-- data Log  = Log{ recover :: Bool , partLog :: Builder, rest :: [[builder]],  hashClosure :: Int} deriving (Show)
 
 -- data LogDataElem= LE  Builder  | LX LogData deriving (Read,Show, Typeable)
 
--- | Get the current log data.
-getLog :: TransMonad m => m Log
-getLog= getData `onNothing` return emptyLog
+-- -- | Get the current log data.
+-- getLog :: TransMonad m => m Log
+-- getLog= getData `onNothing` return emptyLog
 
-emptyLog= Log False  mempty  0
+-- emptyLog= Log False  mempty []  0
 
 -- -- contains a log tree which includes intermediate results caputured with `logged` `local` and `loggedc`.
 -- -- these primitives can invoque code that call recursively further `logged` etc primitives at arbitrary deeep

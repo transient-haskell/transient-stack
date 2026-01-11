@@ -12,7 +12,7 @@
 -- Author: Alabado sea Dios que inspira todo lo bueno que hago. Porque Él es el que obra en mi
 --
 {-# LANGUAGE ScopedTypeVariables #-}
-module Transient.Move.Job where -- (job, config, runJobs) where
+module Transient.Move.Job(job, config, runJobs,collectc,getMicroSeconds) where
 import Transient.Internals
 import Transient.Move.Internals
 import Transient.Move.Defs
@@ -26,6 +26,7 @@ import Data.TCache.IndexQuery
 import qualified Data.TCache.DefaultPersistence as TC
 
 import Control.Applicative
+import Control.Monad.State
 import Control.Exception.Base hiding (onException)
 import Control.Monad
 import Data.List
@@ -34,6 +35,7 @@ import Data.Maybe
 import Data.Typeable
 import Data.IORef
 import System.Time
+import System.IO
 
 -- newtype Job= Job (Int,BC.ByteString)  deriving (Typeable,Read,Show,Eq)
 data Job= Job {jobClosure :: DBRef LocalClosure,jobNode :: Node, jobError :: Maybe SomeException}  deriving (Typeable,Read,Show)
@@ -82,7 +84,7 @@ job' mname  =  local $  do
   when (isJust mprev) $ jobRemove $ fromJust mprev
   -- PrevClos dbprevclos _ _ isapp <- getData `onNothing` noExState "job"
   -- let(idSession,_) = getSessClosure dbprevclos
-  endpoint (fmap BC.pack mname) -- void $ setCont Nothing idSession 
+  endpoint (fmap BC.pack mname) <|> return () -- void $ setCont Nothing idSession 
   tr "AFTER ENDPOINT"
   p@(PrevClos thisclos ms _ isapp) <- getData `onNothing` noExState "job 2"
   -- -- false to force the log Not to recreate this endpoint after replaying
@@ -124,11 +126,11 @@ jobRemove job= do
 
 -- A node notify that it is ready to continue unfinished jobs
 newtype Ping= Ping Node
-data AllJobsExecuted= AllJobsExecuted
+newtype AllJobsExecutedFor= AllJobsExecutedFor Node
 
 runJobs= do
   onAll $ onException $ \(e :: SomeException) -> do
-          liftIO $ print ("job exception", e)
+          liftIO $ hPutStrLn stderr $ show ("job exception", e)
   -- onAll $ newRState $ Endpoints M.empty
 
   local $ fork $ do
@@ -154,14 +156,14 @@ runJobs= do
       job@(Job dbr _ _) <- (liftIO $  atomically $ readDBRef j) `onNothing` error ("runJobs(commJobs): job not found " ++ show j)
 
       let (s,clos) = getSessClosure dbr ::  (SessionId, IdClosure)
-      (log,clos') <- getClosureLog s clos
+      (logs,clos') <- getClosureLog s clos
       conn <- getData `onNothing` noExState "runJobs(commJobs): conn not found"
       setState job
-
-      Transient $ sendToClosure  log s mempty conn False clos'
+      ttr ("JOB LOG",logs)
+      Transient $ sendToClosure  logs s mempty conn False clos'
     -- jobRemove job  -- don't remove because it could have spawned new processes
     -- ttr ("END JOB",job)
-    putMailbox' node AllJobsExecuted 
+    putMailbox' node $ AllJobsExecutedFor node
 
 
 
@@ -200,40 +202,82 @@ config name mx = do
   
 
 
--- | persistent collect. Unlike Transient.collect, Transient.Move.collect  keeps the results across intended and unintended
--- shutdowns and restarts
-collectp :: Loggable a => Int -> Integer -> Cloud a -> Cloud [a]
-collectp n delta  mx=  do
-  onAll $ liftIO $ writeIORef save True
-  tinit <- local getMicroSeconds
-  tr("COLLECTPP",n,delta)
+-- | persistent non recursive collect that preserves backtracking handlers
+collectc :: Loggable a => Int -> Int -> Cloud a -> Cloud [a]
+collectc n delta action= do
+  tinit <- local $ fromIntegral <$> getMicroSeconds
 
   let tfin= tinit +  delta
-      numbered= n > 0
- 
-      collectp' n  delta 
-       | n <= 0 && numbered = return []
-       | otherwise= do
-        (rs,delta') <- local $ do
-            t <-  getMicroSeconds
 
-            let delta'=  tfin -t
-            ttr ("delta'",delta')
-            rs <- if delta' <= 0 then return [] else collectSignal True n (fromIntegral delta) $ unCloud mx
-            ttr ("RS",rs)
+  t <- onAll $ fromIntegral <$> getMicroSeconds
+  let timeleft= let t'= tfin - t in if t' <0 then 0 else t'
+  ttr("TIMELEFT",timeleft)
+  -- node <- onAll getMyNode
+  initState <- gets mfData
+  states <- onAll $ liftIO $ newIORef M.empty
+  removeBacktracking
 
-            -- tiene que obtener el delta historico dentro de local, para saber si tiene que recuperar mas jobs
-            -- Alabado sea Dios
-            return (rs,delta')
-        let len= length rs
-        tr ("ITERATION",n,len)
-        let n'= if numbered then n - len else 0
-        if delta'<= 0 || (numbered && len>= n) then return rs else return rs <>  
-                    (job >>  collectp' n' delta')
-  
-  tr ("COLLECTP",n,delta)
-  collectp' n delta
-  
+  r <- local $ collect' n timeleft $ unCloud $ do
+          r <- action
+
+          modifyState' (\prevclos -> prevclos{preservePath=True}) $ noExState "collectc"
+
+          job
+          -- onAll $ liftIO $ threadDelay 10000
+          onAll $  do
+            s <- gets mfData
+            s' <-liftIO $ readIORef states
+
+            liftIO $ writeIORef states $ Transient.Internals.merge  s' s
+          return r
+
+  s <- onAll $ liftIO $ readIORef states
+  modify $ \st -> st{mfData= Transient.Internals.merge initState s}
+  return r
+  where
+
+  removeBacktracking :: TransMonad m => m ()
+  removeBacktracking =  modify $ \st -> st{mfData= M.filterWithKey f $ mfData st}  
+    where
+    -- change to filterKeys, currently websockets needs Data.Map < 0.8
+    f t _=   -- t == typeOf(ofType :: Backtrack Finish)  ||
+            typeRepTyCon  t /=  typeRepTyCon (typeOf (ofType :: Backtrack ()))
+
 getMicroSeconds = liftIO $ do
         (TOD seconds picos) <- getClockTime
         return (seconds * 1000000 + picos `div` 1000000)
+
+-- -- | persistent collect. Unlike Transient.collect, Transient.Move.collect  keeps the results across intended and unintended
+-- -- shutdowns and restarts
+-- collectp :: Loggable a => Int -> Integer -> Cloud a -> Cloud [a]
+-- collectp n delta  mx=  do
+--   onAll $ liftIO $ writeIORef save True
+--   tinit <- local getMicroSeconds
+--   tr("COLLECTPP",n,delta)
+
+--   let tfin= tinit +  delta
+--       numbered= n > 0
+ 
+--       collectp' n  delta 
+--        | n <= 0 && numbered = return []
+--        | otherwise= do
+--         (rs,delta') <- local $ do
+--             t <-  getMicroSeconds
+
+--             let delta'=  tfin -t
+--             ttr ("delta'",delta')
+--             rs <- if delta' <= 0 then return [] else collectSignal True n (fromIntegral delta) $ unCloud mx
+--             ttr ("RS",rs)
+
+--             -- tiene que obtener el delta historico dentro de local, para saber si tiene que recuperar mas jobs
+--             -- Alabado sea Dios
+--             return (rs,delta')
+--         let len= length rs
+--         tr ("ITERATION",n,len)
+--         let n'= if numbered then n - len else 0
+--         if delta'<= 0 || (numbered && len>= n) then return rs else return rs <>  
+--                     (job >>  collectp' n' delta')
+  
+--   tr ("COLLECTP",n,delta)
+--   collectp' n delta
+  

@@ -26,7 +26,7 @@ import           Network.Socket.ByteString          as NS
 
 import           Network.TLS                        as TLS
 import           Network.TLS.Extra                  as TLSExtra
-import qualified Crypto.Random.AESCtr               as AESCtr
+
 
 import qualified Network.Socket.ByteString.Lazy     as SBSL
 

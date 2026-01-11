@@ -1,8 +1,8 @@
 -- packages: */*.cabal
 packages: transient/transient.cabal transient-universe/transient-universe.cabal
 
--- profiling: True
--- library-profiling: True
--- executable-profiling: True
+profiling: False
+library-profiling: False
+executable-profiling: False
 -- tests: True
 

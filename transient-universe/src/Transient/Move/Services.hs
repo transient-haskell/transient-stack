@@ -444,13 +444,13 @@ callService' node params =  loggedc $ do
           modifyData' (\log -> log{recover=True}) $ error "No log????"
           -- log <- getState
           -- setParseString $ toLazyByteString $ buildLog log -- ??? to test
-          r <- unCloud $ logged empty
+          r <- logged empty
 
           return r
 
       else do
 
-          log <- Transient.Internals.getLog    -- test
+          log <- Transient.Move.Logged.getLog    -- test
           setData emptyLog
           local $ return ()
 

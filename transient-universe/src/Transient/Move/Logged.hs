@@ -25,7 +25,7 @@
 {-# LANGUAGE InstanceSigs #-}
 module Transient.Move.Logged(Cloud(..),
 Loggable(..), logged, endpoint, received, param, getLog, exec,wait, emptyLog,
- Log(..),hashExec,genPersistId,persistDBRef,setCont,setCont',endpointWait,firstCont,
+ Log(..),hashExec,genPersistId,persistDBRef,firstCont,genNewSession,
   firstEndpoint,dbClos0, noExState, setLastClosureForConnection,getLastClosureForConnection,updateLastClosureForConnection,setLog) where
 
 import Data.Typeable
@@ -45,13 +45,14 @@ import Control.Exception
 import Control.Monad
 import qualified Data.ByteString.Lazy.Char8 as BS
 import qualified Data.ByteString.Char8 as BSS
-import qualified Data.ByteString                        as B(ByteString)
+import qualified Data.ByteString as B(ByteString)
 import qualified Data.Map as M
 import Data.TCache hiding (onNothing)
 import qualified Data.TCache.DefaultPersistence as TC
 
 import Data.IORef
 import System.IO.Unsafe ( unsafePerformIO )
+import System.Random
 import GHC.Stack
 
 import Data.ByteString.Builder
@@ -161,12 +162,12 @@ getLastClosureForConnection c = do
 
 -- | a endpoint that blocks waiting for input. It expect a session identifier too
 -- it is used by `minput` since a web application can use different sessions/users
-endpointWait ::   Maybe B.ByteString -> Int -> TransIO ()
-endpointWait  mclos idSession = do
-  -- tr ("RECEIVE FROM",unsafePerformIO $ readIORef $ remoteNode conn)
-  (mlc, log) <-   setCont mclos idSession
-  -- guard to continue restoring the execution stack in case of recovery
-  receive1 mlc  <|> guard  (recover log)
+-- endpointWait ::   Maybe B.ByteString -> Int -> TransIO ()
+-- endpointWait  mclos idSession = do
+--   -- tr ("RECEIVE FROM",unsafePerformIO $ readIORef $ remoteNode conn)
+--   (mlc, log) <-   setCont mclos idSession
+--   -- guard to continue restoring the execution stack in case of recovery
+--   receive1 mlc  <|> guard  (recover log)
  
   {-|
   The 'endpoint' function saves the current execution state and validates
@@ -187,25 +188,39 @@ endpointWait  mclos idSession = do
 
   
   -}
-endpoint :: Maybe B.ByteString -> TransIO ()
-endpoint maybeName= do
+-- endpoint :: Maybe B.ByteString -> TransIO ()
+-- endpoint maybeName= do
 
-  PrevClos dbr mn _ _ <- getData `onNothing` error "teleport: please use `initNode to perform distrubuted computing"
-  -- idSession <- localSession <$> liftIO (atomically $ readDBRef dbr `onNothing` error "logApp: no prevClos")
-  let idSession = if isJust mn then fromJust mn else fst $ getSessClosure dbr
-  ttr ("ENDPOINT", maybeName, idSession)
-  -- closLocal <- maybe (unCloud $ logged $  liftIO $ BSS.pack . show <$> liftIO (randomRIO (0,100000) :: IO Int)) return maybeName -- hashClosure log
-  log <- getLog
-  closLocal <- maybe ( return $ BSS.pack . show $ hashClosure log) return maybeName -- hashClosure log
-  -- log <-  getLog
+--   PrevClos dbr mn _ _ <- getData `onNothing` error "teleport: please use `initNode to perform distrubuted computing"
+--   -- idSession <- localSession <$> liftIO (atomically $ readDBRef dbr `onNothing` error "logApp: no prevClos")
+--   let idSession = if isJust mn then fromJust mn else fst $ getSessClosure dbr
+--   ttr ("ENDPOINT", maybeName, idSession)
+--   -- closLocal <- maybe (unCloud $ logged $  liftIO $ BSS.pack . show <$> liftIO (randomRIO (0,100000) :: IO Int)) return maybeName -- hashClosure log
+--   log <- getLog
+--   closLocal <- maybe ( return $ BSS.pack . show $ hashClosure log) return maybeName -- hashClosure log
+--   -- log <-  getLog
 
-  -- let closLocal= fromMaybe (BSS.pack $ show $ hashClosure log) maybeName
+--   -- let closLocal= fromMaybe (BSS.pack $ show $ hashClosure log) maybeName
 
-  mlc <- setCont' (partLog log) closLocal idSession
-  receive1 mlc <|> return ()
+--   mlc <- setCont' (partLog log) closLocal idSession
+--   receive1 mlc <|> return ()
   -- Alabado sea Dios
 
-
+-- | generates a new session id.
+genNewSession =  do
+    newSession <- logged genSessionId
+    tr ("GEN NEW SESSION", newSession)
+    modifyData' (\prev@(PrevClos p mf l i) -> 
+      case mf of
+        Just _  -> prev
+        Nothing -> PrevClos p  (Just newSession) l i)
+      (error "genNewSession: no Previous closure")
+    -- PrevClos _ mn _ _ <- getData `onNothing` noExState "genNewSession" :: TransIO PrevClos
+    -- ttr ("NEW SESSION SET", mn)
+    where
+    genSessionId = liftIO $ do
+      n <- randomIO
+      return $ if n < 0 then - n else n 
 
 newtype PersistId = PersistId Integer deriving (Read, Show, Typeable)
 
@@ -243,22 +258,24 @@ receive1  lc = do
   case mr of
     Right (SDone, _, _, _)    -> error "endpoint/teleport: SDone not expected"
     Right (SError e, _, _, _) -> error $ show ("unexpected remote error:",e)
-    Right (SLast log, s2, closr, conn') -> do
+    Right (SLast logs, s2, closr, conn') -> do
       cleanEVar ev
-      tr ("RECEIVED <------- SLAST", log)
+      ttr ("RECEIVED <------- SLAST", logs)
       liftIO $ writeResource lc{localEvar = Nothing}
       setData conn'
       empty
 
 
-    Right (SMore log, s2, closr, conn') -> do
+    Right (SMore logs, s2, closr, conn') -> do
+      ttr ("RECEIVED <------- SMORE", logs)
       -- cdata <- liftIO $ readIORef $ connData conn'
       -- liftIO $ writeIORef (connData conn) cdata
       setData conn'{calling= calling conn}
       -- tr ("receive REMOTE NODE", unsafePerformIO $ readIORef $ remoteNode conn,idConn conn)
       -- tr ("receive REMOTE NODE'", unsafePerformIO $ readIORef $ remoteNode conn',idConn conn')
-
-      setLog (idConn conn') log s2 closr
+      setLog (idConn conn') logs s2 closr
+      
+      
 
     Left except -> do
       throwt except
@@ -266,43 +283,103 @@ receive1  lc = do
 
 
 -- setLog :: Int -> Builder -> Int -> B.ByteString -> TransIO ()
-setLogFromFile :: (MonadState TranShip m, MonadIO m, Show a) => Int -> Builder -> a -> B.ByteString -> m ()
-setLogFromFile idConn log sessionId closr = do
-  tr ("setLog for",idConn,"Closure",sessionId, closr )
-  void $ updateLastClosureForConnection idConn (getDBRef $ kLocalClos sessionId closr) --  (Closure sessionId closr [])
+setLogFromFile :: (Show a) => Int -> [[Builder]] -> a -> B.ByteString -> TransIO ()
+setLogFromFile idConn logs sessionId closr = do
+  tr ("setLog for",idConn,"Closure",sessionId, closr,logs  )
+  -- void $ updateLastClosureForConnection idConn (getDBRef $ kLocalClos sessionId closr) --  (Closure sessionId closr [])
+  log <- for $ head logs
+  ttr ("SENDING LOG",log)
   setParseString $ toLazyByteString log
 
-  modifyData' (\l -> l {recover = True}) emptyLog
+  modifyData' (\l -> l {recover = True,restLog= tail logs}) emptyLog{recover = True,restLog= tail logs}
   tr "setLog done"
   return ()
-  
+
 setLog idConn log sessionId closr = do
-  setLogFromFile idConn log sessionId closr
+  void $ updateLastClosureForConnection idConn (getDBRef $ kLocalClos sessionId closr) --  (Closure sessionId closr [])
   setState $ ClosToRespond $ getDBRef $ kLocalClos sessionId closr
-
-  {-|
-    Stores the computation state for the current session id and names it with the given name. If the name is not provided, a name is generated. The state is stored in the database and the computation continues. The computation can be recovered later and executed with `getClosureLog`.
-  -}
-setCont :: Maybe B.ByteString -> Int -> TransIO  ( LocalClosure, Log)
-setCont mclos idSession =do
-  log <- getLog
-  closLocal <- case mclos of
-                    Just cls -> return cls
-                    _ -> return $  BSS.pack . show $ hashClosure log -- BSS.pack . show <$> liftIO (randomRIO (0,100000) :: IO Int) -- 
+  setLogFromFile idConn log sessionId closr
 
 
+--   {-|
+--     Stores the computation state for the current session id and names it with the given name. If the name is not provided, a name is generated. The state is stored in the database and the computation continues. The computation can be recovered later and executed with `getClosureLog`.
+--   -}
+-- setCont :: Maybe B.ByteString -> Int -> TransIO  ( LocalClosure, Log)
+-- setCont mclos idSession =do
+--   log <- getLog
+--   closLocal <- case mclos of
+--                     Just cls -> return cls
+--                     _ -> return $  BSS.pack . show $ hashClosure log -- BSS.pack . show <$> liftIO (randomRIO (0,100000) :: IO Int) -- 
 
-  -- let dblocalclos = getDBRef $ kLocalClos idSession closLocal :: DBRef LocalClosure
+--   lc <- setCont' (partLog log) closLocal idSession
+--   return (lc, log)
 
-  -- log <- getLog
+-- setCont' :: Builder -> B.ByteString -> Int -> TransIO   LocalClosure
+-- setCont' logstr closName idSession=   noTrans $ do
 
-  lc <- setCont' (partLog log) closLocal idSession
-  return (lc, log)
+--   tr("SETCONT INIT",closName, idSession,logstr)
+--   let dblocalclos = getDBRef $ kLocalClos idSession closName :: DBRef LocalClosure
 
-setCont' :: Builder -> B.ByteString -> Int -> TransIO   LocalClosure
-setCont' logstr closName idSession=   noTrans $ do
+--   -- tr "RESET LOG"
+--   modifyState' (\log -> log{partLog= mempty}) (error "setCont: no log")
 
-  tr("SETCONT INIT",closName, idSession,logstr)
+--   PrevClos dbprevclos _ _ isapp <- getData `onNothing` noExState "setCont"
+--   -- ctr <- getData :: StateIO (Maybe ClosToRespond)
+--   cont <- get
+
+
+--   mr <- liftIO $ atomically $ readDBRef dblocalclos
+--   case mr of
+--     Just locClos@LocalClosure {..} -> do
+--       tr "found dblocalclos"
+--       closure <- if toLazyByteString logstr== mempty -- two consecutive endpoints
+--         then return locClos
+--         else do
+          
+--           ev <- runTrans newEVar 
+--           return locClos {localEvar = ev, localCont = Just cont,localLog= logstr:localLog}
+--       setState $ PrevClos dblocalclos Nothing True isapp
+--       liftIO $ atomically $ writeDBRef dblocalclos closure
+      
+--       liftIO $ tryPutMVar localMvar ()   -- getClosurelog blocks on the MVar, so we need to release it here when it has been restored
+
+--       return  closure
+--     _ -> do
+--   -- do
+--       mv <- liftIO  newEmptyMVar
+--       ev <- runTrans newEVar -- if isNothing ctr then runTrans newEVar else return Nothing
+--       tr ("createEVar",closName)
+
+--       let closure=
+--             LocalClosure
+--               { localSession = idSession,
+--                 prevClos = dbprevclos,
+--                 localLog =  [logstr],
+--                 localClos = closName,
+--                 localEvar = ev,
+--                 localMvar = mv,
+--                 localCont = Just cont
+--               }
+
+
+--       ttr ("SETCONT", closName, idSession,"PREVCLOS",dbprevclos,logstr)
+--       -- here the flag True is set to preserve the endpoint/teleport/continuation si that every log restore pass trough this continuation
+--       setState $ PrevClos dblocalclos Nothing True isapp
+
+--       liftIO $ atomically $ writeDBRef dblocalclos closure
+--       liftIO $ tryPutMVar (localMvar closure) ()   -- getClosurelog blocks on the MVar, so we need to release it here when it has been restored
+
+--       return  closure
+
+endpoint :: Maybe IdClosure  -> TransIO ()
+endpoint  maybeName =    do
+  log@Log{..} <- getLog
+  ttr("endpoint",maybeName,log)
+  closName <- maybe ( return $ BSS.pack . show $ hashClosure ) return maybeName
+  PrevClos dbr mn _ _ <- getData `onNothing` error "teleport: please use `initNode to perform distrubuted computing"
+  let idSession = if isJust mn then fromJust mn else fst $ getSessClosure dbr :: SessionId
+
+  tr("SETCONT INIT",closName, idSession,partLog,restLog)
   let dblocalclos = getDBRef $ kLocalClos idSession closName :: DBRef LocalClosure
 
   -- tr "RESET LOG"
@@ -314,49 +391,66 @@ setCont' logstr closName idSession=   noTrans $ do
 
 
   mr <- liftIO $ atomically $ readDBRef dblocalclos
-  case mr of
-    Just locClos@LocalClosure {..} -> do
-      tr "found dblocalclos"
-      closure <- if toLazyByteString logstr== mempty -- two consecutive endpoints
-        then return locClos
-        else do
+  closure <- do
+      case mr of
+        Just locClos@LocalClosure {..} -> do
+          tr "found dblocalclos"
+          closure <- if toLazyByteString partLog== mempty -- two consecutive endpoints
+            then return locClos
+            else do
+              
+              ev <-  newEVar 
+              return locClos {localEvar = Just ev, localCont = Just cont,localLog= (if not recover then partLog:localLog else localLog)}
+          setState $ PrevClos dblocalclos Nothing True isapp
+          liftIO $ atomically $ writeDBRef dblocalclos closure
           
-          ev <- runTrans newEVar -- if isNothing ctr then runTrans newEVar else return Nothing
-          return locClos {localEvar = ev, localCont = Just cont,localLog= logstr}
-      setState $ PrevClos dblocalclos Nothing True isapp
-      liftIO $ atomically $ writeDBRef dblocalclos closure
-      
-      liftIO $ tryPutMVar localMvar ()   -- getClosurelog blocks on the MVar, so we need to release it here when it has been restored
+          liftIO $ tryPutMVar localMvar ()   -- getClosurelog blocks on the MVar, so we need to release it here when it has been restored
 
-      return  closure
-    _ -> do
-  -- do
-      mv <- liftIO  newEmptyMVar
-      ev <- runTrans newEVar -- if isNothing ctr then runTrans newEVar else return Nothing
-      tr ("createEVar",closName)
+          return  closure
+        _ -> do
+      -- do
+          mv <- liftIO  newEmptyMVar
+          ev <-  newEVar -- if isNothing ctr then runTrans newEVar else return Nothing
+          tr ("createEVar",closName)
 
-      let closure=
-            LocalClosure
-              { localSession = idSession,
-                prevClos = dbprevclos,
-                localLog =  logstr,
-                localClos = closName,
-                localEvar = ev,
-                localMvar = mv,
-                localCont = Just cont
-              }
+          let closure=
+                LocalClosure
+                  { localSession = idSession,
+                    prevClos = dbprevclos,
+                    localLog =  [partLog],
+                    localClos = closName,
+                    localEvar = Just ev,
+                    localMvar = mv,
+                    localCont = Just cont
+                  }
 
 
-      ttr ("SETCONT", closName, idSession,"PREVCLOS",dbprevclos,logstr)
-      -- here the flag True is set to preserve the endpoint/teleport/continuation si that every log restore pass trough this continuation
-      setState $ PrevClos dblocalclos Nothing True isapp
+          ttr ("SETCONT", closName, idSession,"PREVCLOS",dbprevclos,partLog)
+          -- here the flag True is set to preserve the endpoint/teleport/continuation si that every log restore pass trough this continuation
+          setState $ PrevClos dblocalclos Nothing True isapp
 
-      liftIO $ atomically $ writeDBRef dblocalclos closure
-      liftIO $ tryPutMVar (localMvar closure) ()   -- getClosurelog blocks on the MVar, so we need to release it here when it has been restored
+          liftIO $ atomically $ writeDBRef dblocalclos closure
+          liftIO $ tryPutMVar (localMvar closure) ()   -- getClosurelog blocks on the MVar, so we need to release it here when it has been restored
 
-      return  closure
+          return  closure
+
+  conn <- getState <|> error "endpoint: No connection" :: TransIO Connection
 
 
+  (do receive1 closure; ttr "AFTER RECEIVE1") <|> (do
+    guard (recover  && not (null restLog)) 
+    
+    let rest=  tail restLog 
+        msg= Right $ (SMore restLog  :: StreamData [[Builder]]
+                     , idSession  :: SessionId
+                     , closName   :: IdClosure
+                     , conn       :: Connection )
+    writeEVar (fromJust $ localEvar closure) msg
+    empty)
+                                        
+  ttr "AFTER ENDPOINT"
+  return ()
+  -- (EVar (Either CloudException (StreamData [[Builder]], SessionId, IdClosure, Connection)))
 -- dbClos0= getDBRef $ kLocalClos 0 "0"
 
 -- | first endpoint for cloud applications. It is internally used by initNode
@@ -379,7 +473,7 @@ firstCont =  do
         LocalClosure
           { localSession = 0,
             prevClos = dbClos0,
-            localLog = partLog log,
+            localLog = [partLog log],
             localClos = BSS.pack "0", -- hashClosure log,
             localEvar = Just ev,
             localMvar = mv,
@@ -411,8 +505,8 @@ noExState s= error $ s <> ": no execution state. Use initNode to init the Cloud 
 --
 
 
-logged :: Loggable a => TransIO a -> Cloud a
-logged mx =  Cloud $ sandboxDataCond handle $ do
+logged :: Loggable a => TransIO a -> TransIO a
+logged mx =  sandboxDataCond handle $ do
 
     -- JesusChrist loves you
 
