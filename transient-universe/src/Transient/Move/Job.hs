@@ -82,8 +82,7 @@ job' mname  =  local $  do
   mprev :: Maybe Job <- getData 
   liftIO $ writeIORef save True
   when (isJust mprev) $ jobRemove $ fromJust mprev
-  -- PrevClos dbprevclos _ _ isapp <- getData `onNothing` noExState "job"
-  -- let(idSession,_) = getSessClosure dbprevclos
+
   endpoint (fmap BC.pack mname) <|> return () -- void $ setCont Nothing idSession 
   tr "AFTER ENDPOINT"
   p@(PrevClos thisclos ms _ isapp) <- getData `onNothing` noExState "job 2"
@@ -129,13 +128,12 @@ newtype Ping= Ping Node
 newtype AllJobsExecutedFor= AllJobsExecutedFor Node
 
 runJobs= do
-  onAll $ onException $ \(e :: SomeException) -> do
-          liftIO $ hPutStrLn stderr $ show ("job exception", e)
-  -- onAll $ newRState $ Endpoints M.empty
+  -- onAll $ onException $ \(e :: SomeException) -> do
+  --         liftIO $ hPutStrLn stderr $ show ("job exception", e)
 
   local $ fork $ do
     liftIO $ index jobNode
-    startJobs  <|> commJobs
+    startJobs <|> commJobs
   where
   startJobs= do
     mynode <- getMyNode
@@ -149,21 +147,20 @@ runJobs= do
   launchJobsForNode :: Node -> TransIO ()
   launchJobsForNode node= do
     dbrjobs <- liftIO $ atomically $  jobNode .==. node :: TransIO [DBRef Job]
-    ttr ("runJobs(commJobs): jobs found", length dbrjobs, node)
-    collect 0 $ do
+    ttr ("runJobs(commJobs): jobs found",  dbrjobs, node)
+    do -- collect 0 $ do
       j <- for $ reverse dbrjobs
-
       job@(Job dbr _ _) <- (liftIO $  atomically $ readDBRef j) `onNothing` error ("runJobs(commJobs): job not found " ++ show j)
 
-      let (s,clos) = getSessClosure dbr ::  (SessionId, IdClosure)
+      let (s,clos) = getSessClosure dbr ::  (SessionId, ClosureId)
       (logs,clos') <- getClosureLog s clos
       conn <- getData `onNothing` noExState "runJobs(commJobs): conn not found"
       setState job
       ttr ("JOB LOG",logs)
-      Transient $ sendToClosure  logs s mempty conn False clos'
+      Transient $ sendToClosure  logs s closureId0 conn False clos'
     -- jobRemove job  -- don't remove because it could have spawned new processes
-    -- ttr ("END JOB",job)
-    putMailbox' node $ AllJobsExecutedFor node
+    -- tttr "end job initializations"
+    -- putMailbox' node $ AllJobsExecutedFor node
 
 
 
@@ -206,7 +203,7 @@ config name mx = do
 collectc :: Loggable a => Int -> Int -> Cloud a -> Cloud [a]
 collectc n delta action= do
   tinit <- local $ fromIntegral <$> getMicroSeconds
-
+ 
   let tfin= tinit +  delta
 
   t <- onAll $ fromIntegral <$> getMicroSeconds
