@@ -25,7 +25,7 @@
 {-# LANGUAGE InstanceSigs #-}
 module Transient.Move.Logged(Cloud(..),
 Loggable(..), logged, endpoint, received, param, getLog, exec,wait, emptyLog,
- Log(..),hashExec,genPersistId,persistDBRef,firstCont,genNewSession,
+ Log(..),hashExec,genPersistId,persistDBRef,firstCont,newSession,setSession,
   firstEndpoint,dbClos0, noExState, setLastClosureForConnection,getLastClosureForConnection,updateLastClosureForConnection,setLog) where
 
 import Data.Typeable
@@ -207,20 +207,26 @@ getLastClosureForConnection c = do
   -- Alabado sea Dios
 
 -- | generates a new session id.
-genNewSession =  do
-    newSession <- logged genSessionId
-    tr ("GEN NEW SESSION", newSession)
+newSession :: TransIO ()
+newSession =  do
+    newSession <- (liftIO genSessionId)
+    setSession newSession
+   where
+    genSessionId =  BSS.pack <$> replicateM 5 (randomRIO ('a', 'z'))
+
+setSession :: BSS.ByteString -> TransIO ()
+setSession s'= do
+    tr ("NEW SESSION", s')
+    s <- logged $ return s'
     modifyData' (\prev@(PrevClos p mf l i) -> 
-      case mf of
-        Just _  -> prev
-        Nothing -> PrevClos p  (Just newSession) l i)
-      (error "genNewSession: no Previous closure")
+                  case mf of
+                    Just _  -> prev
+                    Nothing -> PrevClos p  (Just $ SessionId s) l i)
+                (error "genNewSession: no Previous closure")
+    return()
     -- PrevClos _ mn _ _ <- getData `onNothing` noExState "genNewSession" :: TransIO PrevClos
     -- ttr ("NEW SESSION SET", mn)
-    where
-    genSessionId = liftIO $ do
-      n <- randomIO
-      return $ if n < 0 then - n else n 
+ 
 
 newtype PersistId = PersistId Integer deriving (Read, Show, Typeable)
 
@@ -243,7 +249,7 @@ receive1  lc = do
   conn <- getState
 
   tr ("RECEIVE1'",localClos lc)
-  labelState $ "endpoint " <> localClos lc
+  labelState $ "endpoint " <> let ClosureId id =localClos lc in id
 
   -- when (synchronous conn) $ liftIO $ takeMVar $ localMvar lc 
   -- tr ("EVAR waiting in", localSession lc, localClos lc)
@@ -283,22 +289,22 @@ receive1  lc = do
 
 
 -- setLog :: Int -> Builder -> Int -> B.ByteString -> TransIO ()
-setLogFromFile :: (Show a) => Int -> [[Builder]] -> a -> B.ByteString -> TransIO ()
-setLogFromFile idConn logs sessionId closr = do
-  tr ("setLog for",idConn,"Closure",sessionId, closr,logs  )
+setLogFromFile ::   [[Builder]]  -> TransIO ()
+setLogFromFile  logs   = do
   -- void $ updateLastClosureForConnection idConn (getDBRef $ kLocalClos sessionId closr) --  (Closure sessionId closr [])
-  log <- for $ head logs
-  ttr ("SENDING LOG",log)
+  log <- for $ head logs   -- stream of logs
+  tr ("SENDING LOG",log)
   setParseString $ toLazyByteString log
 
   modifyData' (\l -> l {recover = True,restLog= tail logs}) emptyLog{recover = True,restLog= tail logs}
   tr "setLog done"
   return ()
 
-setLog idConn log sessionId closr = do
+setLog idConn log sessionId  closr = do
+  tr ("setLog for",idConn,"Closure",sessionId, closr,log  )
   void $ updateLastClosureForConnection idConn (getDBRef $ kLocalClos sessionId closr) --  (Closure sessionId closr [])
   setState $ ClosToRespond $ getDBRef $ kLocalClos sessionId closr
-  setLogFromFile idConn log sessionId closr
+  setLogFromFile  log  
 
 
 --   {-|
@@ -371,7 +377,7 @@ setLog idConn log sessionId closr = do
 
 --       return  closure
 
-endpoint :: Maybe IdClosure  -> TransIO ()
+endpoint :: Maybe BSS.ByteString  -> TransIO ()
 endpoint  maybeName =    do
   log@Log{..} <- getLog
   ttr("endpoint",maybeName,log)
@@ -380,7 +386,7 @@ endpoint  maybeName =    do
   let idSession = if isJust mn then fromJust mn else fst $ getSessClosure dbr :: SessionId
 
   tr("SETCONT INIT",closName, idSession,partLog,restLog)
-  let dblocalclos = getDBRef $ kLocalClos idSession closName :: DBRef LocalClosure
+  let dblocalclos = getDBRef $ kLocalClos idSession (ClosureId closName) :: DBRef LocalClosure
 
   -- tr "RESET LOG"
   modifyState' (\log -> log{partLog= mempty}) (error "setCont: no log")
@@ -418,14 +424,14 @@ endpoint  maybeName =    do
                   { localSession = idSession,
                     prevClos = dbprevclos,
                     localLog =  [partLog],
-                    localClos = closName,
+                    localClos = ClosureId closName,
                     localEvar = Just ev,
                     localMvar = mv,
                     localCont = Just cont
                   }
 
 
-          ttr ("SETCONT", closName, idSession,"PREVCLOS",dbprevclos,partLog)
+          tr ("SETCONT", closName, idSession,"PREVCLOS",dbprevclos,partLog)
           -- here the flag True is set to preserve the endpoint/teleport/continuation si that every log restore pass trough this continuation
           setState $ PrevClos dblocalclos Nothing True isapp
 
@@ -443,15 +449,16 @@ endpoint  maybeName =    do
     let rest=  tail restLog 
         msg= Right $ (SMore restLog  :: StreamData [[Builder]]
                      , idSession  :: SessionId
-                     , closName   :: IdClosure
+                     , ClosureId closName   :: ClosureId
                      , conn       :: Connection )
     writeEVar (fromJust $ localEvar closure) msg
     empty)
                                         
   ttr "AFTER ENDPOINT"
   return ()
-  -- (EVar (Either CloudException (StreamData [[Builder]], SessionId, IdClosure, Connection)))
--- dbClos0= getDBRef $ kLocalClos 0 "0"
+  -- where 
+  -- unhash s=  BSS.map (\b -> if b == '/' then '&' else b) s
+
 
 -- | first endpoint for cloud applications. It is internally used by initNode
 firstEndpoint= firstCont >>= receive1
@@ -471,10 +478,10 @@ firstCont =  do
 
   let this =
         LocalClosure
-          { localSession = 0,
-            prevClos = dbClos0,
-            localLog = [partLog log],
-            localClos = BSS.pack "0", -- hashClosure log,
+          { localSession = sessionId0,
+            prevClos  = dbClos0,
+            localLog  = [partLog log],
+            localClos = closureId0, -- hashClosure log,
             localEvar = Just ev,
             localMvar = mv,
             localCont = Just cont
@@ -521,7 +528,7 @@ logged mx =  sandboxDataCond handle $ do
 
     where
 
-    handle (Just mnow) (Just mprev) = Just $ PrevClos (dbref mnow) (newSession mnow) ( preservePath mnow || preservePath mprev) False
+    handle (Just mnow) (Just mprev) = Just $ PrevClos (dbref mnow) (pnewSession mnow) ( preservePath mnow || preservePath mprev) False
     handle _ _ = error "no log initialized: use initNode before logging"
     logit = do
           initialLog <- getLog
