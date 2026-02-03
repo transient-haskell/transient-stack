@@ -265,9 +265,9 @@ dropTillEndOfLine= withGetParseString $ \str -> return ((),BS.dropWhile ( /= '\n
 -- | drop spaces and return a String delimited by the next space
 parseString= do
     dropSpaces
-    r <- tTakeWhile (not . isSpace)
+    tTakeWhile (not . isSpace)
     -- tr ("PARSESTRING",r)
-    if BS.null r then empty else return r
+    -- if BS.null r then empty else return r
 
 
 -- | take characters while they meet the condition. if no char matches, it returns empty
@@ -389,10 +389,10 @@ withGetParseString parser=  Transient $ do
     let loop = unsafeInterleaveIO $ do
           r <-readIORef done
           if r  then do
-              -- tr "DONE in withGetParseString" 
+              tr "DONE in withGetParseString" 
               return mempty else do
             (mr,_) <- runTransient readMore
-            -- tr ("READMORE1",mr)
+            tr ("READMORE1",mr)
             case mr of
               Nothing -> mempty
               Just(SMore r) ->  return r <> do
@@ -404,7 +404,7 @@ withGetParseString parser=  Transient $ do
 
     -- str <-  liftIO $ (s <> ) `liftM`  loop
     str <- liftIO $ return s <> loop
-    -- tr ("gparseString",if BS.null str then "null str" else BS.take 3 str)
+    -- tr ("giveParseString",if BS.null str then "null str" else BS.take 3 str)
 
     -- when (BS.null str) $ error $ "withGetParseString: null parse string" 
 
@@ -471,9 +471,10 @@ tPutStr s'= withGetParseString $ \s -> return ((),s'<> s)
 -- | True if the stream has finished
 isDone :: (MonadIO m,TransMonad m) => m Bool
 isDone=   do
-    ParseContext _ _ done<- gets parseContext
+    ParseContext _ str done<- gets parseContext
     -- tr "ISDONE"
-    liftIO $ readIORef done
+    d <- liftIO $ readIORef done
+    return $ d || BS.null str
 
 
 dropUntilDone= (withGetParseString $ \s -> do
