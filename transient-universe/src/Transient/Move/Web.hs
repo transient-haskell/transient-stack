@@ -16,8 +16,8 @@
 #ifndef ghcjs_HOST_OS
 
 
-module Transient.Move.Web  (minput,moutput,publish,published,showURL,getURL,ToHTTPReq(..),POSTData(..),HTTPReq(..),
-AsJSON(..),{-getSessionState,setSessionState,newSessionState,-}rawHTTP,serializeToJSON,deserializeJSON,
+module Transient.Move.Web  (minput,followup,output, moutput,publish,publishn,published,showURL,getURL,ToHTTPReq(..),POSTData(..),HTTPReq(..),
+AsJSON(..),rawHTTP,serializeToJSON,deserializeJSON,
  IsCommand,optionEndpoints,getCookie,setCookie) where
 
 import Control.Applicative
@@ -118,8 +118,8 @@ instance Semigroup HTTPReq where
 -- It is the main way to interact with users and programs which do not share the same base code.
 -- Otherwise, a transient program distributed among different nodes, including web nodes, would use `runAt` and other
 -- distributed primitives..
-
-minput :: (Loggable a, ToHTTPReq a,ToJSON b,Typeable b) => String -> b -> Cloud a
+--
+-- The name minput pays tribute to the brilliant programmers of the 60s and 70s who built the languages and multitasking systems we rely on today. Without their work, we’d still be writing RPG programs on single-user machines that froze completely during any I/O operation.minput :: (Loggable a, ToHTTPReq a,ToJSON b,Typeable b) => String -> b -> Cloud a
 minput ident msg' = onAll $ sandboxData (ofType :: ClosToRespond) $ unCloud  response
   where
     msg= encode msg'
@@ -131,21 +131,20 @@ minput ident msg' = onAll $ sandboxData (ofType :: ClosToRespond) $ unCloud  res
         conn <- getState -- if connection not available, execute alternative computation
         let closLocal = hashClosure log
         mynode <- getMyNode
-        
         PrevClos dbprevclos mn _  _ <- getData `onNothing` noExState "minput"
-        let idSession = if isJust mn then fromJust mn else fst $ getSessClosure dbprevclos
-        ttr ("ENDPOINTWAIT", idSession)
+        ttr ("prevclos",dbprevclos,keyObjDBRef dbprevclos)
+        let SessionId idSession = if isJust mn then fromJust mn else fst $ getSessClosure dbprevclos
         let urlbase =
               str "http://" <> str (nodeHost mynode) <> str ":" <> intt (nodePort mynode)
                 </> str ident
-                </> "S" <> intt idSession
+                </> "S" <> BS.fromStrict idSession
                 -- </> BL.fromStrict closRemote
                 -- </> intt sess
                 -- </> intt idcontext ::
                 -- BS.ByteString
 
         params <- toHTTPReq $ type1 response
-
+        ttr ("params",params)
         let httpreq = mempty {requrl = urlbase} <> params :: HTTPReq
             msgdat
               | typeOf msg' == typeRep (Proxy :: Proxy String) = BS.pack  $ unsafeCoerce  msg'
@@ -153,7 +152,7 @@ minput ident msg' = onAll $ sandboxData (ofType :: ClosToRespond) $ unCloud  res
               | otherwise = msg
         setState $ InputData ident msgdat httpreq
 
-        connected log  idSession conn closLocal  httpreq <|> commandLine conn log httpreq
+        connected log  idSession conn closLocal  httpreq  <|> commandLine conn log httpreq
 
     commandLine conn log httpreq = do
       guard (not $ recover log)
@@ -216,7 +215,7 @@ minput ident msg' = onAll $ sandboxData (ofType :: ClosToRespond) $ unCloud  res
       Endpoints endpts <- getEndpoints
       setRState $ Endpoints  $ M.insert (str ident) httpreq endpts
       ttr ("ADDED ENDPOINT",ident,httpreq, "previous endpoints:", M.keys endpts)
-      (idcontext' :: Int, result) <- do
+      (idcontext' :: BC.ByteString, result) <- do
         pstring <- giveParseString
         if not (recover log) || BS.null pstring
           then do
@@ -276,7 +275,7 @@ minput ident msg' = onAll $ sandboxData (ofType :: ClosToRespond) $ unCloud  res
             -- genNewSession
             return r
             -- maybe another user from other context continues the program
-      ttr ("MINPUT RESULT",idcontext',result)
+      tr ("MINPUT RESULT",idcontext',result)
       -- mncontext <- recoverContext idcontext'
       -- when (isJust mncontext) $ setState (fromJust mncontext :: Context)
       return result `asTypeOf` return (type1 response)
@@ -305,26 +304,35 @@ minput ident msg' = onAll $ sandboxData (ofType :: ClosToRespond) $ unCloud  res
 
 
 
+-- | in a sequence of minputs it may be mind bending to have inputs without outpts
+-- since each minput send the response of the previous minput.
+-- It is more natural to invert the minput arguments so that the second argument (the response) becomes the first
+-- and the endpoint string becomes the second so that:
+--
+-- >  name <- minput "name" "enter your name"
+-- >  surname <- folloup ("ok " <> name <> " send your surname now")  2surname"
+-- >  mooutput $ "great " <> name <> " " <> surname <> " thanks!"
 
--- endpoints = unsafePerformIO $ newIORef M.empty
-
+followup :: (Loggable a, ToHTTPReq a,ToJSON b,Typeable b) => b ->String  -> Cloud a
+followup = flip minput
 
 -- | makes a `minput`  to be discoverable by  `publish` so that the endpoint may be available for other users.
 -- The first parameter is the key where many endpoints may be published. The second parameter is the endpoint (`minput`) itself
-
-publish :: Loggable a => String -> Cloud a -> Cloud a
-publish key inp= inp  <|> add key
+publish k i= publishn [k] i
+publishn :: Loggable a => [String] -> Cloud a -> Cloud a
+publishn keys inp= inp  <|> local (do
+      idata :: InputData  <-  getState <|> error "no inputdata"
+      tr idata
+      adds idata keys
+      empty)
   where
-  add  :: Loggable a => String ->  Cloud a
-  add k= local $ do
-        idata :: InputData  <-  getState
-        tr idata
-        liftIO $ withResource (InputDatas k undefined) $ \case
+  adds idata keys= mapM_ (add idata) keys
+  add idata k=  liftIO $ withResource (InputDatas (k :: String) undefined) $ \case
                     Nothing                  -> InputDatas k [idata]
                     Just(InputDatas k lcks) -> InputDatas k $ idata:lcks
 
 
-        empty
+        
 
 -- | set a pending endpoint for a key. if the endpoint is executed, it dissapears from the list for this key. 
 -- For example an userid or a wallet may be the key. 
@@ -344,8 +352,8 @@ publish key inp= inp  <|> add key
 
 
 -- | send to the cllient all the endpoints published by `publish` with the given key
-published :: Loggable a => String -> Cloud a
-published k=  local $ do
+published1 :: Loggable a => String -> TransIO a
+published1 k=  do
     InputDatas _ inputdatas <-  liftIO $ getResource (InputDatas k undefined)  `onNothing` return (InputDatas k []) -- getRState
     tr ("PUBLISHED", inputdatas)
 
@@ -369,11 +377,26 @@ published k=  local $ do
       let p = requrl url
       (cl,s,cl',s',ids) <- withParseString p $  do
            string "http://" ; tTakeWhile' (/='/')
+          --  (,,,,) <$> deserialize <*> deserialize <*> deserialize <*> deserialize <*> deserialize 
            (,,,,) <$> tTakeWhile' (/='/') <*> tTakeWhile' (/='/')  <*> tTakeWhile' (/='/') <*> tTakeWhile' (/='/') <*> tTakeWhile' (/='/')
       tr ("CL S",cl,s,cl',s',ids)
-      Transient $ processMessage (read $ BS.unpack s) (BS.toStrict cl)  (read $ BS.unpack s') (BS.toStrict cl') (Right $ [[lazyByteString $ ids <> "/" <> pars]]) False
+      Transient $ processMessage (SessionId $ BS.toStrict s) 
+                                 (ClosureId $ BS.toStrict cl)  
+                                 (SessionId $ BS.toStrict s') 
+                                 (ClosureId $ BS.toStrict cl') 
+                                 (Right $ [[lazyByteString $ ids <> "/" <> pars]]) False
       return ()
 
+published ::  String -> TransIO ()
+published k=  do
+  -- mcommand <- getData :: TransIO (Maybe IsCommand)
+
+  -- do -- when (isNothing mcommand) $ do
+    InputDatas _ inputdatas <-  liftIO $ getResource (InputDatas k undefined)  `onNothing` return (InputDatas k []) -- getRState
+    tr ("PUBLISHED", inputdatas)
+    foldr ((<>) . (\(InputData id msg url) ->  sendOption msg url)) mempty inputdatas
+    
+    
 getEndpoints= getRState <|> return (Endpoints M.empty) -- |error "NO ENDPOINT state: use optionEndpoints" -- return (Endpoints M.empty)
 
 -- | show the URL that may be called to access that functionality within a program 
@@ -383,13 +406,13 @@ showURL= getURL >>= liftIO . print
 getURL :: TransIO String
 getURL = do
   mprev <- getState
-  (sess, clos) <- case mprev of
-    Nothing -> return (0, BC.pack "0")
+  (SessionId sess, ClosureId clos) <- case mprev of
+    Nothing -> return (sessionId0, closureId0)
     Just prev -> liftIO $ do
       mprevClos <- atomically $ readDBRef prev
       case mprevClos of
         Just prevClos -> return (localSession prevClos, localClos prevClos)
-        Nothing -> return (0, BC.pack "0")
+        Nothing -> return (sessionId0,closureId0)
   
   log <- getLog  -- get path
   n <- getMyNode
@@ -447,7 +470,7 @@ optionEndpoints = do
     where
     printURL req= liftIO $ putStrLn $ "\n" <> BS.unpack (("curl " <>
                       (if reqtype req== GET then mempty else ("-H 'content-type: application/json' -XPOST -d " <>
-                        "\"" <> reqbody req) <> "\" ")) <> requrl req)
+                        "\"" <> encode(reqbody req)) <> "\" ")) <> requrl req)
 
 -- | add the chunked fragments of the beguinning '[', the comma separator and the end ']' of the JSON packet for a set of `minput` statements
 -- that are sent in parallel (for example, with the alterenative operator)
@@ -526,8 +549,8 @@ cookies  sesion de programaa - sesion remota
 sendOption :: BS.ByteString -> HTTPReq -> TransIO ()
 sendOption msg req = do
   PrevClos dbr _ _ _ <- getData `onNothing` noExState "sendOption"
-  let (id,_) = getSessClosure dbr
-  -- Context id _ <- getState <|> error "sendOption:no minput context, use `minput`"
+  let (SessionId id',_) = getSessClosure dbr
+      id= BS.fromStrict id'
   url' <- withParseString (requrl req) $ short id <|> long id
   sendFragment $ "{ \"msg\":\"" <>  msg <> "\", \"req\":" <> encode (req {requrl = url'}) <> "}"
 
@@ -537,22 +560,34 @@ sendOption msg req = do
     ses <-tTakeUntilToken "/"
     tDropUntilToken ("/")
     rest <- giveParseString
-    return $ s <> "/T" <> ses <> "/" <>  intt id <> "/" <> rest
+    return $ s <> "/T" <> ses <> "/" <>   id <> "/" <> rest
 
   short id= do
     s <- tTakeUntilToken "/S" -- "/0/0/"
     ses <-tTakeUntilToken "/"
     rest <- giveParseString
-    return $ s <> "/T" <> ses <> "/" <> intt id <> "/" <> rest
+    return $ s <> "/T" <> ses <> "/" <>  id <> "/" <> rest
 
 
-  intt = BS.pack . show
 
--- | include JSON data in the response.
+-- | append JSON data to the response.
 output :: ToJSON a => a -> TransIO ()
 output= sendFragment . encode
 
--- | It is  used as the last response in a flow
+-- | It is  used as the last response in a flow.
+-- it is used to stream to the client since the response is sent using chunked encoding and
+-- until all minputs and moutputs have finised the HTTP response is not closed.
+--
+-- >   auctionStream prod= do
+-- >    stateBid <- getStateAuction prod
+-- >    minput "/enterAuction" stateBid   -- the user opt for that product
+-- >    (minput "/enterBid" "send a bid" >>= updateState >> empty)  <|> streamBids
+-- >  where
+-- >    streamBids = do bid <- readEVar bids; moutput bid
+-- >    updataState bid= do setStateAuction bid prod; writeEVar bids bid
+-- >
+--  This produces a bidirectional stream: it can send bids and it receives a stream of bids (with chunked encoding)
+--  from all the users
 moutput :: ToJSON a => a -> Cloud ()
 moutput = local . output
 
@@ -579,6 +614,7 @@ class  Typeable a => ToHTTPReq a where
   toHTTPReq :: a -> TransIO HTTPReq
   toHTTPReq x= do
       v <- varunique $ lowertype x
+      ttr ("varunique",v)
       return $ mempty{requrl= "/" <> v}
     where
     lowertype x = "$" <> BS.pack (map toLower (typeOfR x))
@@ -695,11 +731,12 @@ instance  {-# OVERLAPPING #-} (Default a, ToJSON a, Typeable a) => ToHTTPReq (PO
   toHTTPReq (POSTData x) =
     do
       setState $ Vars []
-      pc <- process $ encode (def `asTypeOf` x)
-      return $ mempty {reqtype = POST, reqbody = pc}
-     <|> do
-       t <- jsonType  x
-       return mempty{reqtype=POST,reqbody= t}
+      -- pc <- jsonObject $ encode (def `asTypeOf` x)
+      -- ttr ("JSONOBJECT TO PARSE",encode (def `asTypeOf` x), pc)
+      return $ mempty {reqtype = POST, reqbody =  (toJSON $ def `asTypeOf` x)}
+    --  <|> do
+    --    t <- jsonType  x
+    --    return mempty{reqtype=POST,reqbody= t}
 
     where
 
@@ -733,7 +770,7 @@ instance  {-# OVERLAPPING #-} (Default a, ToJSON a, Typeable a) => ToHTTPReq (PO
 
     -- use a default value to generate a JSON pattern, with variables $NNN where N is a number, that are
     -- placeholders to insert the actual values, given as paramenters.
-    process json = withParseString json $ do
+    jsonObject json = withParseString json $ do
         sandbox' $ tChar '{'
         BL.concat
           <$> withParseString
@@ -751,7 +788,9 @@ instance  {-# OVERLAPPING #-} (Default a, ToJSON a, Typeable a) => ToHTTPReq (PO
 
                 sep <- anyChar -- tChar ',' <|> tChar '}'
                 var' <- varunique var
-                let r = prev <> "\\\"" <> var <> "\\\": " <> q isq <> "$" <> var' <> q isq <> BS.singleton sep
+                -- let r = prev <> "\\\"" <> var <> "\\\": " <> q isq <> "$" <> var' <> q isq <> BS.singleton sep
+                let r = prev <> "\"" <> var <> "\": " <> q isq <> "$" <> var' <> q isq <> BS.singleton sep
+
                 return r
             )
         where
