@@ -385,7 +385,7 @@ callService service params = loggedc $ do
 setRemoteJob :: BSS.ByteString -> Node -> TransIO ()
 setRemoteJob thid node= do
       JobGroup map  <- getRState <|> return (JobGroup M.empty)
-      setRState $ JobGroup $ M.insert thid (node,BSS.pack "0-0") map
+      setRState $ JobGroup $ M.insert thid (node,closureId0) map
 
 data KillRemoteJob = KillRemoteJob BSS.ByteString deriving (Read,Show, Typeable)
 instance Loggable KillRemoteJob

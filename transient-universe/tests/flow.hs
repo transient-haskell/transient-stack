@@ -831,21 +831,21 @@ mainabduceteleport= keep $ initNodes $ do
 
 
 
-testProcessMessage :: IO (Either String ())
-testProcessMessage= keep $ initNode $ Cloud $ do
-    abduce
-    r <- endpoint $ Just $ BC.pack "cont" -- (Just $ BC.pack "cont") 0
-    ttr "after setcont"
-    ttr ("FIN",r)
-  <|> restor  "cont"
+-- testProcessMessage :: IO (Either String ())
+-- testProcessMessage= keep $ initNode $ Cloud $ do
+--     abduce
+--     r <- endpoint $ Just $ BC.pack "cont" -- (Just $ BC.pack "cont") 0
+--     ttr "after setcont"
+--     ttr ("FIN",r)
+--   <|> restor  "cont"
 
 
-  where
-  restor clos= do 
-     option "g" "go" 
-     ttr ("restore",clos)
-     noTrans $ processMessage 0 ( BC.pack clos) 0 (BC.pack "closr") (Right mempty) False
-     empty
+--   where
+--   restor clos= do 
+--      option "g" "go" 
+--      ttr ("restore",clos)
+--      noTrans $ processMessage 0 ( BC.pack clos) 0 (BC.pack "closr") (Right mempty) False
+--      empty
 
 
 -- main= keep $ do
@@ -1017,13 +1017,24 @@ testCollectJob= keep $ initNode $ do
   minput "results" "see results" :: Cloud ()
   moutput ("results",r :: [String])
 
+-- main=testInit
+testInit= keep $ initNode $ do
+  minput "init" ("init" :: String) :: Cloud ()
+
+  POSTData val  <- minput "dat" "dat" 
+  ttr(val :: String)
+  moutput ("OK", "OK2", val)
+  
 
 
-main= testcollectc
+
+
+  
+-- main= testcollectc
 testcollectc= keep $ initNode $ do
   runJobs
   return() `onBackc` \Navigation -> ttr ("Navigation", "INIT")
-  minput "g" "go" <|> published "res" :: Cloud ()
+  minput "g" "go" <|> local (published "res") :: Cloud ()
   r <- collectc 2 0 $ do
             r <- minput "inp" "inp" `onBackc` \Navigation -> do ttr ("Navigation");  onAll $ forward Navigation; return "cccc" :: Cloud String
             moutput "ok" 
@@ -1152,6 +1163,7 @@ main1= keep' $ it <|> trigger ( 1)  -- <|> callb 2
     empty
   
 data Resp= Resp{content:: String} deriving (Generic, ToJSON)
+main= testMinputSpeed
 testMinputSpeed= keep $ initNode $ do
    r <- minput "test" "call test"
    moutput  (("content",r :: String),("value",1::Int)) 
@@ -1969,7 +1981,7 @@ alea tests= do
 
 tests :: [Cloud String]
 tests=
-  [testLocalExceptionHandlers
+  [testlocalExceptions
   -- distributed
   ,checkWormholeTeleportComposition
   ,checkApplicativeWithRemote
@@ -2315,7 +2327,7 @@ maindist=  keep $ initNode $ inputNodes <|> do
     local $ option "go" "go"
     ttr nodes
 
-    -- testLocalExceptionHandlers
+    -- testlocalExceptions
     -- checkWormholeTeleportComposition 
     -- checkApplicativeWithRemote 
     -- checkAlternativesWithAtRemote
@@ -2780,7 +2792,7 @@ syncFlush= do
 
 
 
-data Dat= Dat{field1:: Int,field2 :: Int} deriving (Typeable, Generic,Default)
+data Dat= Dat{field1:: Int,field2 :: String} deriving (Typeable, Generic,Default,Loggable)
 
 instance ToJSON Dat
 
@@ -2914,7 +2926,7 @@ mainauction = keep $ initNode $ do
     where
     guessgame name wallet= do
 
-       minput "guessgame" "play guessgame"  <|> published "lock" :: Cloud ()
+       minput "guessgame" "play guessgame"  <|> local (published "lock") :: Cloud ()
        lock  :: Int <- minput "enterlock" $ name <> ": lock a number to guess it"
        guessn:: Int <- publish "lock" $ minput "enterguess" $ "guess the number entered by: " <>  name
        wallet' :: Integer <- local getState
@@ -3205,12 +3217,12 @@ maindbref= do
 
 
 
-testLocalExceptionHandlers=  local $ do
+testlocalExceptions=  local $ do
     r <-  collect 0 $ verify <|> play
 
     ttr r
     assert (r==["HELLO"]) $ ttr "OK"
-    return "testLocalExceptionHandlers"
+    return "testlocalExceptions"
     where
     verify= do ttr "GET"; r <- getMailbox :: TransIO String; ttr r; return r
 
@@ -3219,7 +3231,7 @@ testLocalExceptionHandlers=  local $ do
     play= do
             onException $ \(SomeException e) -> do lastPutMailbox "HELLO" ; empty
 
-            localExceptionHandlers $
+            localExceptions $
                 onException $ \(SomeException e) -> putMailbox "WORLD"
 
             throw $ userError "errrr"

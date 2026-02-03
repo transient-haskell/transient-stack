@@ -32,11 +32,12 @@ import qualified Data.ByteString.Char8                  as BC
 import qualified Data.ByteString.Lazy.Char8             as BL
 import qualified Data.ByteString                        as B(ByteString)
 import qualified Data.Text                              as TE
+import qualified Data.Text.Encoding                     as TE
 import Control.Concurrent.MVar
 import Data.IORef
 import Data.Aeson
 import qualified Data.Map                               as M
-
+import qualified Data.Vector                            as V
 import Control.Monad.State
 import Control.Applicative
 
@@ -78,18 +79,34 @@ newtype Cloud a = Cloud {unCloud :: TransIO a}
 --         -- modifyState' (\(PrevClos dbr _ _) -> PrevClos dbr False True) (PrevClos dbClos0 False True)
 --         f <*> g
 
+instance ToJSON B.ByteString where
+  toJSON = Data.Aeson.String . TE.decodeUtf8
+
+instance FromJSON B.ByteString where
+  parseJSON = Data.Aeson.withText "ByteString" $ \t ->
+    pure (TE.encodeUtf8 t)
+
+newtype ClosureId = ClosureId BC.ByteString deriving (Typeable,Read,Show,Eq,Ord,Generic,FromJSON,ToJSON)
+newtype SessionId = SessionId BC.ByteString deriving (Typeable,Read,Show,Eq,Ord,Generic,FromJSON,ToJSON)
+
+instance Loggable ClosureId where
+  serialize (ClosureId i)= serialize i
+  deserialize= ClosureId <$> deserialize
+
+instance Loggable SessionId where
+  serialize (SessionId s)= serialize s
+  deserialize = SessionId <$> deserialize
+
 
 
 -- | previous local checkpointed closure in the execution flow
-data PrevClos = PrevClos{dbref:: DBRef LocalClosure, newSession :: Maybe Int, preservePath :: Bool, isApplicative :: Bool} deriving Show
+data PrevClos = PrevClos{dbref          :: DBRef LocalClosure
+                        , pnewSession   :: Maybe SessionId
+                        , preservePath  :: Bool
+                        , isApplicative :: Bool} deriving Show
 
 -- | last remote closure in a teleport waiting for responses in the execution flow
-newtype ClosToRespond= ClosToRespond (DBRef LocalClosure) -- {remSession :: SessionId, remClosure :: IdClosure}
-
-
-
-type IdClosure = BC.ByteString
-type SessionId = Int
+newtype ClosToRespond= ClosToRespond (DBRef LocalClosure) -- {remSession :: SessionId, remClosure :: ClosureId}
 
 
 
@@ -134,7 +151,7 @@ instance Ord Node where
 
 
 
-data CloudException = CloudException Node SessionId IdClosure String deriving (Typeable, Show, Read)
+data CloudException = CloudException Node SessionId ClosureId String deriving (Typeable, Show, Read)
 
 instance Exception CloudException
 
@@ -201,21 +218,21 @@ data ConnectionData
    deriving (Show)
 
 data LocalClosure = LocalClosure
-  { localClos     :: IdClosure,
-    localSession  :: Int,
+  { localClos     :: ClosureId,
+    localSession  :: SessionId,
     prevClos      :: DBRef LocalClosure,
     localLog      :: [Builder],
     localMvar     :: MVar (),
-    localEvar     :: Maybe (EVar (Either CloudException (StreamData [[Builder]], SessionId, IdClosure, Connection))),
+    localEvar     :: Maybe (EVar (Either CloudException (StreamData [[Builder]], SessionId, ClosureId, Connection))),
     localCont     :: Maybe TranShip
   }
   -- | ListPrecessors [DBRef LocalClosure]
 
-kLocalClos idSess clos = BC.unpack clos <> "-" <> show idSess
+kLocalClos (SessionId idSess) (ClosureId clos) = BC.unpack clos <> "-" <> BC.unpack idSess
 
-getSessClosure :: DBRef LocalClosure -> (Int, IdClosure)
+getSessClosure :: DBRef LocalClosure -> (SessionId, ClosureId)
 getSessClosure dbref= let (c,s)= span (/= '-') $ keyObjDBRef dbref
-                      in  (read $ tail s, BC.pack  c)
+                      in  (SessionId $ BC.pack $ tail s, ClosureId $ BC.pack  c)
 
 instance TC.Indexable LocalClosure where
   key LocalClosure {..} = kLocalClos localSession localClos
@@ -225,14 +242,16 @@ instance (Show a, Read a) => TC.Serializable a where
   deserialize = read . BL.unpack
 
 instance TC.Serializable LocalClosure where
-  serialize LocalClosure {..} = TC.serialize (localClos,localSession, prevClos, localLog)
+  serialize LocalClosure {localClos=ClosureId c,localSession=SessionId s,..} = TC.serialize (c,s, prevClos, localLog)
   deserialize str =
     let (localSession, prevClos, localLog,  localClos) = TC.deserialize str
         block = unsafePerformIO $ newMVar ()
-     in LocalClosure localSession prevClos localLog  localClos block Nothing Nothing
+     in LocalClosure (ClosureId prevClos) (SessionId localSession)  localLog  localClos block Nothing Nothing
 
-dbClos0= getDBRef $ kLocalClos 0 "0" :: DBRef LocalClosure
+dbClos0= getDBRef $ kLocalClos sessionId0 closureId0 :: DBRef LocalClosure
 
+sessionId0= SessionId "0"
+closureId0= ClosureId "0"
 
 type Pool = [Connection]
 type SKey = String
@@ -254,30 +273,36 @@ instance Default [Service] where
 instance Default TE.Text where
   def=mempty
 
-data NodeMSG = ClosureData IdClosure SessionId IdClosure SessionId [[Builder]] deriving (Read, Show)
+data NodeMSG = ClosureData ClosureId SessionId ClosureId SessionId [[Builder]] deriving (Read, Show)
 
 instance Loggable NodeMSG where
   serialize :: NodeMSG -> Builder
-  serialize (ClosureData clos s1 clos' s2 build) =
-    byteString clos <> "/" <> intDec s1 <> "/"
+  serialize (ClosureData (ClosureId clos) 
+                         (SessionId s1) 
+                         (ClosureId clos') 
+                         (SessionId s2) build) =
+    byteString clos <> "/" <> byteString s1 <> "/"
       <> byteString clos'
       <> "/"
-      <> intDec s2
+      <> byteString s2
       <> "/"
       <> serialize build
 
   deserialize :: TransIO NodeMSG
   deserialize =
-    ClosureData <$> (BL.toStrict <$> tTakeWhile (/= '/') <* tChar '/') <*> (int <* tChar '/')
-      <*> (BL.toStrict <$> tTakeWhile (/= '/') <* tChar '/')
-      <*> (int <* tChar '/')
+    ClosureData 
+      <$> (ClosureId <$> readit) 
+      <*> (SessionId <$> readit)
+      <*> (ClosureId <$> readit)
+      <*> (SessionId <$> readit)
       <*> deserialize
     where
+      readit= BL.toStrict <$> tTakeWhile (/= '/') <* tChar '/'
       restOfIt = lazyByteString <$> giveParseString
 
 
 -- The remote closure ids for each node connection
-type Closure = DBRef LocalClosure -- Closure SessionId IdClosure [Int] deriving (Read, Show, Typeable)
+type Closure = DBRef LocalClosure -- Closure SessionId ClosureId [Int] deriving (Read, Show, Typeable)
 
 
 data ConnectionError = ConnectionError String Node deriving (Read)
@@ -294,11 +319,26 @@ instance Loggable HTTPMethod
 instance ToJSON HTTPMethod
 
 newtype Endpoints= Endpoints (M.Map BL.ByteString HTTPReq) deriving Show
+
 data HTTPReq = HTTPReq
   { reqtype :: HTTPMethod,
     requrl :: BL.ByteString,
     reqheaders :: BL.ByteString,
-    reqbody :: BL.ByteString
+    reqbody :: Value -- BL.ByteString
   }
   deriving (Read, Show, Typeable, Generic)
 
+instance Semigroup Value where
+  Null <> val= val
+  val  <> Null= val
+  v <> v' = error "Value monoid"
+ 
+
+instance Monoid Value where
+  mempty  = Null
+  mappend = (<>)
+
+
+type RemoteClosure = (Node, ClosureId)
+
+newtype JobGroup = JobGroup (M.Map BC.ByteString RemoteClosure) deriving (Typeable)

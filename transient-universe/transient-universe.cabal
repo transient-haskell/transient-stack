@@ -1,5 +1,5 @@
 name: transient-universe
-version: 0.7.0.4
+version: 0.8.0.0
 cabal-version: >=1.10
 build-type: Simple
 license: MIT
@@ -174,7 +174,7 @@ executable test-transient1
 
         build-depends:
             base >4,
-            transient == 0.9.0.2,
+            transient,
             transient-universe,
             random -any,
             text -any,

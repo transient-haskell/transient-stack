@@ -32,6 +32,12 @@ packages to install:
 sudo apt-get install zlib1g-dev
 cabal install  --lib  --package-env . random directory bytestring containers mtl stm bytestring aeson case-insensitive network websockets network-uri old-time base64-bytestring TCache data-default  network-uri network-bsd     text mime-types process vector TCache hashable signal deepseq data-default HTTP time hashtables
 
+for cardano-cloud:
+  cardano-api-10.19.1.0
+  base16-bytestring-1.0.2.0
+
+
+
 for transient-universe-tls:   tls 
 
 
@@ -988,3 +994,171 @@ quitarback = d0
   let mfData'= M.mapWithKey f mfData
   where
   f k x = if tipo backtrack r l then l vacio
+
+
+collect para que haga caso a los forward de onBack:
+
+
+caso de uso: situaciones donde un back llega al codigo dentro de collect y necesita un forward para corregir
+   la situacion
+  ahora mismo no se gestiona ya que collect es un entorno cerrado. collect se desactiva cuando se acaba de ejecutar
+
+  caso de uso:
+  votacion: hasta que no acaba la votacion, no se tiene un seguimiento de resultados
+    cuando un usuario cambia su voto, se añade a resultados, no cambia el voto anterior
+    por lo que hay que guardar tanto los votos como los identificativos para hacer el recuento
+      considerando el orden de los votos
+      pero no se pueden saber los resultados intermedios
+    
+    solucion: un collect reactivo, que reaccione tanto a cada voto parcial como a forward dentro de su cuerpo
+
+    alternativa: usar un EVar dentro el cuerpo que que de resultado reactivamente
+
+    collectreactive:
+
+    collectr comp= do
+      follow comp <|> gather
+      where
+      follow comp= do
+        evnew <- newEVar
+        r <- comp 
+        modifyState' (\Total t -> r <> t)
+        writeEVar evnew r
+        empty
+
+      gather= do
+        r <- readEVar evnew
+        total <- read results 
+        -- return the last produced data and the total
+        return(r,total)
+    
+    este reaccionaria a todo evento en comp incluidos los forward
+
+integrarlo en collect/collectc para tener todas sus propiedades
+
+ahora en collect:
+  r <- signal <|> timer <|> (proc `onBack` check)
+
+  r <- signal <|> timer <|> gather <|> (proc `onBack` check)
+
+mientras no salga por numero de resultados, tiempo por no haber threads, collect será reactivo
+en lugar de dar una unica respuesta.
+
+Como hacerlo mas compositivo:
+
+poner results y la EVar al alcance desde el exterior:
+
+collect...= do
+crear results :: RState, evar :: evar
+antes del primer abduce, y poner gather fuera de collect,
+  de manera que:
+
+  results <- collect <|> gather
+
+  gather devolverá cada resultado y collect el resultado final?
+
+pero hay casos de uso en que incluso despues del resultado final, es necesario reaccionar a un back
+  eso creo que lo puede garantizar gather ya que está fuera del collect.
+  hay que envolverlo bien dentro de la monada cloud para que sea persistente
+
+
+descomponer collect en componentes:
+
+
+
+collect n t proc= checkNoActivity n proc <|> signal <|> timer  t <|> gather
+
+para que timer (signal) puedan matar tod el proceso accediendo al parent thread
+
+checkNoActivity :: Int -> TransIO a -> TransIO (Collect [a]) 
+checkNoActivity n proc= proc `onBack` check
+
+--
+gather  ::  TransIO (Collect [a])
+   Buffer ref ev <- getState <|> "gather :: no buffer defined"
+   events <- 
+   ..
+   ..
+
+timer :: Int -> TransIO (Collect [a])
+  Buffer ref .. <- getState...
+
+
+
+como se pasa la sesion al cliente 
+ usar el id de sesion? al dar de alta la wallet?
+ cookie?
+ como se maneja cuando convergen varios usarios 
+    ... varias sesiones
+          |
+          v
+    collectc $ minput
+          |
+          v
+    unica sesion
+    sesion no puede ser la de un usuario hay que poner una nueva sesion
+    todos convergen en una
+    que sesion muestra minput en un collect?
+       la suya propia.
+       collectc tiene que generar su sesion antes de llamar a minput. hecho
+         pero ese flujo  generará un collect para cada usuario. no vale
+         
+         como tener un collect unico para todos los usuarios?
+
+         la app se ejecuta al principio por el usuario master que inicia la aplicacion
+         ese usuario se le da la opcion de iniciar.
+
+         los demás usuarios solo ven el link dentro del collect gracias a publish
+
+         keep $ initNode $ userInit <|> do
+               |  single main system session (sistem init etc)
+               v
+         r <- collect.. $ publish ... minput a
+         ...
+         ..minput b
+
+
+runghc -w  -threaded -rtsopts -itransient-stack/transient/src -itransient-stack/transient-universe/src -icardano-cloud/src cardano-cloud/tests/test.hs --start localhost:8080 --cardanoparams   /ipc/node.socket  preview ./cardano-cloud/tests/payment.skey
+
+        /-----userInit/allEndpoints
+        |        |  
+        |        v  init, system session
+        |----> collect (1)
+        |      | | | |    user sessions (1)
+        |     v v v v    
+        |    end collect
+        |       |   system session
+        |       v
+        |----> collect
+         
+
+como se maneja cada user sesion cuando pinchan un minput de un collect?
+  mandan la cookie en el envio
+  la cookie está relacionada con el estado
+  en  collect despues del minput:
+    userEnv <-getIndexData cookie
+    setState userEnv
+    -- no se cambia la session
+    
+el primer endpoint dentro de collect entra en la system session
+luego el segundo si hay, no tiene que cambiar la session 
+  porque un solo registro de endpoint admite cualquier numero de paths
+  se hace setState userEnv (no se loguea)
+  si hay que logear algo, ids , accounts etc de userEnv se logea y eso es suficiente
+
+para que sirve entonces la sesion? 
+  Para distinguir distintos flujos en el tiempo o paralelos
+    por ejemplo cuando se ejecuta el flujo desde el principio dos veces y queremos tener 
+    ambos funcionando por separado
+  merece la pena mandarlo como cookie????
+    si el session el id no aparece en la url, no se pueden distinguir links entre distintas sesiones
+      por ejemplo, dos subastas de dos productos
+      todo lo que esté en la monad cloud y vaya a usarse varias veces tiene que tener sesiones distintas
+system session
+collect...
+     minput   <- todos lo usan
+
+
+generacion de JSON maqueta
+usar           
+

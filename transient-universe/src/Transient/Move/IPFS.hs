@@ -160,7 +160,7 @@ ripnsid= unsafePerformIO $ newIORef "No saved data yet"
 -- > program -p start/localhost/8000/keyipfs/{KEY}
 --
 -- By default, the progran look for the data by inspecting the local KEY  "dappflowlockup" 
-setIPFS = local $ localExceptionHandlers $ do
+setIPFS = local $ localExceptions $ do
       onException $ \(ConnectionError _ _) -> do
             liftIO $ putStrLn $ "Is the ipfs daemon running?"
             empty

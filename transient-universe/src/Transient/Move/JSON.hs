@@ -19,7 +19,7 @@ import Data.ByteString.Builder
 import qualified Data.ByteString.Char8 as BC
 import qualified Data.ByteString.Lazy as BL
 import qualified Data.ByteString.Lazy.Char8 as BS
-
+import Data.Default
 import Control.Monad.State
 import Control.Applicative
 
@@ -65,6 +65,10 @@ instance {-# OVERLAPPING #-} Loggable Value where
   serialize = serializeToJSON
   deserialize = deserializeJSON
 
+-- instance ToJSON SessionId where
+--   toJSON(SessionId x)= toJSON x
+
+-- instance FromJSON
 
 
 instance {-# OVERLAPPABLE #-} ToJSON a => Show a where
@@ -89,3 +93,5 @@ instance FromJSON a => FromJSON  (AsJSON a) where
 
 instance ToJSON a => ToJSON (AsJSON a) where
   toJSON (AsJSON x)= toJSON x
+
+instance Default a => Default (AsJSON a) where  def= AsJSON def

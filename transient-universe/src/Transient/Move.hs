@@ -66,7 +66,7 @@ getMyNode, getWebServerNode, getNodes, getEqualNodes, nodeList, isBrowserInstanc
 
 
 -- * Running Local Computations
-local, localIO,Loggable(..),onAll, logged,loggedc, localIO, 
+local, localIO,Loggable(..),onAll, onAllNodes, logged,loggedc, localIO, 
 
 -- * Moving Computations
 wormhole, teleport,
