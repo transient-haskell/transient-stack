@@ -50,7 +50,6 @@ import Unsafe.Coerce
 import System.Signal
 import Transient.Mailboxes (putMailbox)
 
-
 {-# NOINLINE outputlock #-}
 outputlock :: MVar ()
 outputlock  = unsafePerformIO $ newMVar ()
@@ -90,13 +89,13 @@ optionf ::
   b ->
   String ->
   TransIO b
-optionf remove ret message = do
-  let sret = if typeOf ret == typeOf "" then unsafeCoerce ret else show ret
-  let msg = "Enter\t" ++ "\x1b[1;31m" ++ sret ++ "\x1b[0m" ++ "\t\tto: " ++ message ++ "\n"
-  inputf remove sret msg Nothing (== sret)
-  liftIO $ putStr "\noption: " >> putStrLn sret
-  -- abduce
-  return ret
+optionf remove ret message =  do
+      let sret = if typeOf ret == typeOf "" then unsafeCoerce ret else show ret
+          msg = "Enter\t" ++ "\x1b[1;31m" ++ sret ++ "\x1b[0m" ++ "\t\tto: " ++ message ++ "\n"
+
+      inputf remove sret msg Nothing (== sret)
+      liftIO $ putStr "\noption: " >> putStrLn sret
+      return ret
 
 -- a new option/input has been added. should be applied to the line if none has parsed the last fragment
 {-# NOINLINE newInput #-}
@@ -124,11 +123,11 @@ inputfm remove ident message mv cond = do
   -- when remove $ void hang
   -- labelState $ BS.pack ident
   liftIO $ do
-    prompt <- readIORef rprompt
+    -- prompt <- readIORef rprompt
     lockOut $ do
 
        putStr message;
-       putStr prompt;
+      --  putStr prompt;
        hFlush stdout
   when (isJust mv) $ do
      liftIO $ writeIORef rdefault $
@@ -147,18 +146,6 @@ inputfm remove ident message mv cond = do
 
         return $ Left str -- control character. Señor, si tus planes no son los míos, destruyelos
     otherwise -> do
-      -- cont <- getCont
-
-      -- let removeIt=  do
-            -- topState >>= showThreads
-            -- liftIO $ delListener ident
-            -- changeStatusCont cont $ \(stat,lab) -> (Alive,lab)
-            -- th <- liftIO myThreadId
-            -- tr ("removeit",th, unsafePerformIO $ readIORef $ labelth cont)
-            -- void delListener
-            -- let rpar = parent cont
-            -- mrparent <- liftIO $ readIORef rpar
-            -- when (isJust mrparent) $ void $ freelogic (threadId cont) rpar (fromJust mrparent) (labelth cont)
 
       when (remove && ident /= "input") $ void $ delListener ident
 
@@ -180,17 +167,11 @@ inputfm remove ident message mv cond = do
              when (isJust mv) $ do putChar ' '; print $ fromJust mv
           returnm mv
         else do
-          -- let res = read2 str
-          -- use seriañize/deserialize instead of Read/Show.  El que ama a Dios, guarda su palabra. Conviertete y conoce la paz y el amor de Dios.
 
           res <- withParseString (BSL.pack str) $ optional ((,) <$> deserialize <*> giveParseString)
 
           case res of
             Nothing ->
-              -- if (ident=="input")  -- retry. "Venid a Mi los cansados y abatidos y yo os aliviaré, porque mi yugo es llevadero y mi cargal ligera"
-              --   then do liftIO $ writeIORef rconsumed $ Nothing ; inputfm remove ident message mv cond
-                -- else do 
-
                     case mv of    -- ***
                       Nothing -> do
                          when (ident == "input") $ do
@@ -216,14 +197,6 @@ inputfm remove ident message mv cond = do
                     echo <- readIORef recho
                     when echo $ lockOut $ do putStr ": "; BSL.putStrLn $ toLazyByteString $ serialize x
 
-                    -- when remove $ do
-                    --     -- remove the react task this also remove the remaining option1 composed with this one
-                    --     -- Alabado sea Jesucristo
-                    --     par <- readIORef $ parent cont
-                    --     when (isJust par) $ do liftIO $ free (threadId cont) $ fromJust par; return ()
-
-                  -- print x
-                  -- hFlush stdout
                   return $ Right x
                 else do
                   if ident == "input"   -- XXX considerar si hay default value, meter lo mismo que ***
@@ -449,9 +422,9 @@ rconsumed = unsafePerformIO $ newIORef Nothing
 -- | execute a set of console commands separated by '/', ':' or space that are consumed by the console input primitives
 processLine line' = liftIO $ do
   let line= subst line'
-  -- tr ("subst",line)
-  mbs <- consoleCallbacks
+  tr ("processline",line)
 
+  mbs <- consoleCallbacks
   process  mbs line
   writeIORef recho False
   where
@@ -460,6 +433,7 @@ processLine line' = liftIO $ do
 
     process  [] line = do
       threadDelay 100000
+      tr ("line",line)
       consumed <- readIORef rconsumed
       r <- readIORef newInput
       if r && isNothing consumed then do
@@ -484,44 +458,9 @@ processLine line' = liftIO $ do
       process  mbs' restLine
       where
         trd (_, _,_,_,x) =  x -- castit x
-        -- castit :: Callback -> String -> IO()
-        -- castit= unsafeCoerce
 
 
-
-
-
-
--- data Exit  = forall a. Exit TypeRep (MVar a) deriving Typeable
-
-
--- -- | Exit the keep and keep' thread with a result, and thus all the Transient threads (and the
--- -- application if there is no more code). The result should have the type expected. Otherwise an error will be produced at runtime.
--- exit :: Typeable a => a -> TransIO ()
--- exit x= do
---   Exit typeofIt rexit <- getState <|> error " no Exit state: use keep or keep'"
---   when (typeOf x /= typeofIt) $ error $ " exit of type not expected. (expected, sent)= ("<> show typeofIt <> ", "<>  show (typeOf x)
---   liftIO $  do
---     putMVar  rexit  $ unsafeCoerce $ Right x
---     myThreadId >>= killThread
---   stop
-
--- -- | exit the keep and keep' blocks with no result. keep will return Nothing and keep' will return []
--- exitLeft :: (Typeable a, Show a) => a -> TransIO ()
--- exitLeft cause= do
---   tr "exitLeft"
---   Exit typeofIt rexit <- getState <|> error " no Exit state: use keep or keep'"
---   -- when(typeOf x /= typeofIt) $ error $ " exit of type not expected. (expected, sent)= ("<> show typeofIt <> ", "<>  show (typeOf x)
---   liftIO $ do
---      putMVar  rexit  $ unsafeCoerce $ Left $ show1 cause
---      myThreadId >>= killThread
-
-
--- show1 x
---   |typeOf x== typeOf (ofType :: String)= unsafeCoerce x
---   |otherwise= show x
-
--- | Runs the transient computation in a child thread and keeps the main thread
+-- | Run the transient computation in a child thread and keeps the main thread
 -- running until all the user threads exit or some thread `exit`.
 --
 -- The main thread provides facilities for interpreting keyboard input in a
@@ -554,7 +493,8 @@ processLine line' = liftIO $ do
 
 keep :: Typeable a => TransIO a -> IO (Either String a)
 keep mx = do
-  liftIO $ hSetBuffering stdout LineBuffering
+  isTerminal <- hIsTerminalDevice stdout
+  when isTerminal $ liftIO $ hSetBuffering stdout LineBuffering
   rexit <- newEmptyMVar
   putStrLn banner
   -- void $ 
@@ -565,16 +505,16 @@ keep mx = do
       void $
         runTransient1 $ do
           liftIO $ removeFile logFile `catch` \(e :: IOError) -> return ()
+          hLogFile <- liftIO $ openFile  logFile AppendMode
 
           onException $ \(e :: SomeException) -> do
                 liftIO $ do
                   th <- myThreadId
-                  putStrLn $ show e <> "\nin: "<> show th  -- ++ ": state: " ++ show ths
-                  -- topState >>= showThreads
+                  tttr e -- putStrLn $ show e <> "\nin: "<> show th  -- ++ ": state: " ++ show ths
                   showAllThreads
-                  appendFile logFile $ show e ++ "\n" -- `catch` \(e:: IOError) -> exc
-                -- log <- getLog
-                -- liftIO $ print log
+                  hPutStrLn hLogFile $ show e  -- `catch` \(e:: IOError) -> exc
+                log <- getLog
+                tttr  log
                 empty
 
           onException $ \(e :: IOException) -> do
@@ -590,98 +530,99 @@ keep mx = do
             empty
 
           --  onException $ \(Finish _) -> empty
-          st <- get
           let typevar :: MVar (Either String a) -> a
               typevar = error "typevar: should not be executed"
           setData $ Exit (typeOf $ typevar rexit ) rexit
 
           do
               -- readFromFile <|>
-              option "options" "show all options"
+              option "alloptions" "show all options"
               mbs <- consoleCallbacks
               let filteryn x = x == "y" || x == "n" || x == "Y" || x  == "N"
               prefix <- input' "" (not . filteryn) "command prefix? (default none) "
               liftIO $ mapM_ ((\c -> when (prefix `isPrefixOf` c) $ do putStr c; putStr "|") . (\(fst, _, _,_,_) -> fst)) mbs
-
+          
               d <- input' "n" filteryn "\nDetails? N/y "
               when (d == "y" || d =="Y") $
                 let line (x,_, y, _,_) = when (prefix `isPrefixOf` x) $ putStr y -- do putStr x; putStr "\t\t"; putStrLn y
-                 in liftIO $ mapM_ line  mbs
+                in liftIO $ mapM_ line  mbs
               liftIO $ putStrLn ""
               empty
-            <|> do
-              option "ps" "show threads"
-              liftIO $ showThreads st
-              empty
-            <|> do
-              option "errs" "show exceptions log"
-              c <- liftIO $ readFile logFile `catch` \(e :: IOError) -> return ""
-              liftIO . putStrLn $ if null c then "no errors logged" else c
-              empty
+          <|> do
+              option "coreoptions" "core options"
+              do
+                  option "ps" "show threads"
+                  liftIO $ showAllThreads
+                  empty
+                <|> do
+                  option "errs" "show exceptions log"
+                  c <- liftIO $ readFile logFile `catch` \(e :: IOError) -> return ""
+                  liftIO . putStrLn $ if null c then "no errors logged" else c
+                  empty
 
-            <|> do
-              option "savepol" "configure saving execution state"
-              maxnum <- input' 1000 (const True) "max number of cached objects?"
-              time   <- input' 10   (const True) "seconds between check for objects to be saved?"
-              liftIO $ clearSyncCacheProc time defaultCheck maxnum
-              liftIO $ writeIORef save True
-              delListener "savepol"
-              liftIO $ do
-                  putStr "\n- syncing each "
-                  putStr $ show time
-                  putStrLn " seconds."
-                  putStr "- Max objects: "
-                  print maxnum
-                  putStrLn ""
+                <|> do
+                  option "savepol" "configure saving execution state"
+                  maxnum <- input' 1000 (const True) "max number of cached objects?"
+                  time   <- input' 10   (const True) "seconds between check for objects to be saved?"
+                  liftIO $ clearSyncCacheProc time defaultCheck maxnum
+                  liftIO $ writeIORef save True
+                  delListener "savepol"
+                  liftIO $ do
+                      putStr "\n- syncing each "
+                      putStr $ show time
+                      putStrLn " seconds."
+                      putStr "- Max objects: "
+                      print maxnum
+                      putStrLn ""
 
-              liftIO $ do
-                putStrLn "- saving cache at the end of the 'keep' execution"
-                writeIORef save True
-              empty
-            <|> do
+                  liftIO $ do
+                    putStrLn "- saving cache at the end of the 'keep' execution"
+                    writeIORef save True
+                  empty
+                <|> do
 
-              -- let installHand sig callback= installHandler sig (Catch $ callback ()) Nothing
-              -- sig <-  react (installHand keyboardSignal) (return ())  -- <|> react (System.Signal.installHandler sigTERM) (return ())
-              -- sig <- react (System.Signal.installHandler sigINT) (return ())  <|> react (System.Signal.installHandler sigTERM) (return ())
-              let react' h= react h (return ())
-              sig <- foldl' (<|>) empty $ map  (react' . installHandler) [sigINT, sigTERM,sigABRT,sigFPE,sigILL,sigINT,sigSEGV]
-              let sigmsg= "signal: "<> show sig <> " received"
-              liftIO $ hPutStrLn  stderr $ "\n" <> sigmsg
-              exitLeft sigmsg
-              empty
-            <|> do
-              option "saveonexit" "commit the current execution state to permanent storage on exit"
-              liftIO $ writeIORef save True
-              empty
-            <|> do
+                  -- let installHand sig callback= installHandler sig (Catch $ callback ()) Nothing
+                  -- sig <-  react (installHand keyboardSignal) (return ())  -- <|> react (System.Signal.installHandler sigTERM) (return ())
+                  -- sig <- react (System.Signal.installHandler sigINT) (return ())  <|> react (System.Signal.installHandler sigTERM) (return ())
+                  let react' h= react h (return ())
+                  sig <- foldl' (<|>) empty $ map  (react' . installHandler) [sigINT, sigTERM,sigABRT,sigFPE,sigILL,sigINT,sigSEGV]
+                  let sigmsg= "signal: "<> show sig <> " received"
+                  liftIO $ hPutStrLn  stderr $ "\n" <> sigmsg
+                  exitLeft sigmsg
+                  empty
+                <|> do
+                  option "saveonexit" "commit the current execution state to permanent storage on exit"
+                  liftIO $ writeIORef save True
+                  empty
+                <|> do
 
-              option "save" "commit the current execution state to permanent storage now"
-              liftIO  syncCache
-              liftIO $ putStrLn "saved the execution state"
-              empty
-            {-
-            <|> do
-                   option "log" "inspect the log of a thread"
-                   th <- input (const True)  "thread number>"
-                   ml <- liftIO $ getStateFromThread th st
-                   liftIO $ print $ fmap (\(Log _ _ log _) -> reverse log) ml
-                   empty
-                   -}
+                  option "save" "commit the current execution state to permanent storage now"
+                  liftIO  syncCache
+                  liftIO $ putStrLn "saved the execution state"
+                  empty
+                {-
+                <|> do
+                      option "log" "inspect the log of a thread"
+                      th <- input (const True)  "thread number>"
+                      ml <- liftIO $ getStateFromThread th st
+                      liftIO $ print $ fmap (\(Log _ _ log _) -> reverse log) ml
+                      empty
+                      -}
 
-            <|> do
-              option "end" "exit"
-              liftIO $ putStrLn "exiting..."
-              abduce
+                <|> do
+                  option "end" "exit"
+                  liftIO $ putStrLn "exiting..."
+                  abduce
 
-              -- st <- threadState $ fromString "input"
-              -- liftIO $ killThread $ threadId st
-              --  killChilds
-              -- top <- topState
-              -- liftIO $ killChildren  top
-              -- liftIO $ killThread $ threadId top
-              -- liftIO $ putMVar rexit $ Left "end"
-              exitLeft "end"
-              empty
+                  -- st <- threadState $ fromString "input"
+                  -- liftIO $ killThread $ threadId st
+                  --  killChilds
+                  -- top <- topState
+                  -- liftIO $ killChildren  top
+                  -- liftIO $ killThread $ threadId top
+                  -- liftIO $ putMVar rexit $ Left "end"
+                  exitLeft "end"
+                  empty
             <|> do
               abduce
               st <- getCont
@@ -803,8 +744,8 @@ execCommandLine :: IO ()
 execCommandLine = do
       writeIORef commandLine True
       path <- thereIsArgPath
-      --print $ drop (i-1) args
-      --putStr "Executing: " >> print  path
+      putStr "Executing: " >> print  path
+      ttr ("path",path)
       threadDelay 10000
       processLine    path
 
@@ -813,13 +754,13 @@ subst = subst1
             where
             subst2 []=[]
             subst2  (h:t)
-                  | h== '\"' = let (s,r)= span (/= '\"') t in h : s ++  h: subst1 (tail r)
+                  | h== '\"' = let (s,r)= span (/= '\"') t in h : s <> "\"" ++ (if null  r then "" else  subst1 (tail r))
                   | h `elem` separators = subst2 t        -- eliminate repeated spaces/separators
                   | otherwise = h:subst1 t
             subst1 []=[]
             subst1  (h:t)
-                  | h== '\"' = let (s,r)= span (/= '\"') t in h : s ++  h: subst1 (tail r)
-                  | h `elem` separators = whyNot (recho =: True) `seq` '/':subst2 t
+                  | h== '\"' = let (s,r)= span (/= '\"') t in h : s <> "\"" ++ (if null  r then "" else   subst1 (tail r))
+                  | h `elem` separators = whyNot (recho =: True) `seq` if null t then "" else '/':subst2 t
                   | otherwise= h: subst1 t
 
 (=:) = writeIORef
@@ -827,10 +768,56 @@ whyNot= unsafePerformIO
 
 thereIsArgPath=  do
   args <- getArgs
-  let mindex = findIndex (\o -> o == "-p" || o == "--path") args
-  if isNothing mindex then return [] else do
-    let i = fromJust mindex + 1
-    return $ if length args >= i then   args !! i else []
+  ttr ("args",args)
+  -- let mindex = findIndex (\o -> o == "-p" || o == "--path") args
+  --     line = if isNothing mindex then return [] else do
+  --             let i = fromJust mindex + 1
+  --             in length args >= i then   args !! i else []
+  let r = concatMap(\s -> process s) args
+  ttr ("argpath",r)
+  return r
+  where
+  process "-p" = ""
+  process s= 
+    let sc= dropWhile (=='-') s
+        scq= if not("start" `isPrefixOf` s )  && '/' `elem` sc then '\"':sc <> "\"" else sc
+    in scq <> "/"
+
+  -- let sret=show1 ret
+  -- ttr ("sret",sret)
+  -- let mindex = findIndex (\o -> head o== '-' && dropWhile (== '-') o == sret) args
+  -- ttr ("mindex",mindex)
+  -- if isNothing mindex then empty else  do
+  --   let i= fromJust mindex 
+  --       rest= drop (i+1) args
+  --       fin= case findIndex (\o -> head o == '-') $ tail rest of
+  --           Nothing -> length rest
+  --           Just i -> if i == 0 then 0 else i - 1
+  --       toinsert= tail $concatMap (\s -> "/\"" <> s <> "\"") $ take (fin+1) rest
+  --   ttr ("fin",fin)
+  --   ttr("toinsert",toinsert)
+  --   liftIO $ writeIORef injectedFromCommandLine toinsert
+  --   return ret
+  -- where 
+  -- show1 x 
+  --   |typeOf x== typeOf (ofType :: String)= unsafeCoerce x
+  --   |otherwise= show x
+
+-- thereIsArgPath= do
+--   args <- getArgs
+--   let tup = parseArgs args
+--   (path, tup')= filter (\(o,_) ->o == "-p" || o == "--path") tup
+--   let path <- concatMap (\t ->fst t<> '/'snd t) tup' <> snd path
+
+--   where
+--   parseArgs :: [String] -> [(String, String)]
+--   parseArgs args = concatMap parseFlag args
+--     where
+--       parseFlag ('-':'-':opt) = [(opt, "")]
+--       parseFlag ('-':opt:rest)
+--         | null rest = [(opt, "")]
+--         | otherwise = [(opt, rest)]
+--       parseFlag arg = [("?", arg)] 
 
 -- | write a message and parse a complete line from the console. The parser is constructed with 'Transient.Parse' primitives
 inputParse :: (Typeable b) => TransIO b -> String -> TransIO b
@@ -846,7 +833,7 @@ inputParse parse message = r
       -- liftIO $ putStrLn str
       liftIO $ print str
       (r, rest) <- withParseString (BSL.pack str) $ (,) <$> parse <*> giveParseString
-      tr ("REST",rest)
+      ttr ("REST",rest)
       liftIO $ do writeIORef rconsumed $ Just  $ BSL.unpack rest
       return r
 
