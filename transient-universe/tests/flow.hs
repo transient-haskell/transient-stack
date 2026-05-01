@@ -317,14 +317,14 @@ showNetworkRequest conn= do
     Just (HTTPS2Node ctx) -> "HTTPS2Node"
     Just (HTTP2Node _ sock _ _) -> "HTTP2Node"
     _ ->  "Other"
-guardNetworkRequest conn= do
-    cdata <- liftIO $ readIORef $ connData conn
-    case cdata of
-      Nothing   -> do liftIO $ print "Nothing"; empty
-      Just Self -> do liftIO $ print "Self";empty
-      -- Just (HTTPS2Node ctx) -> return()
-      -- Just (HTTP2Node _ sock _) -> return()
-      _ ->  return ()
+-- guardNetworkRequest conn= do
+--     cdata <- liftIO $ readIORef $ connData conn
+--     case cdata of
+--       Nothing   -> do liftIO $ print "Nothing"; empty
+--       Just Self -> do liftIO $ print "Self";empty
+--       -- Just (HTTPS2Node ctx) -> return()
+--       -- Just (HTTP2Node _ sock _) -> return()
+--       _ ->  return ()
 
 -- maingetClos= keep' $ do
 --    closCheckpoint
@@ -1000,22 +1000,31 @@ debe guardarse el orden en la ejecucion de los jobs y ejecutarse en un solo thre
 --   ttr s
 
 
+main=testCollectJob
 
--- main= testCollectJob
 testCollectJob= keep $ initNode $ do
   runJobs
-  t <- local $ option "g" "go"
-  ttr ("STARTING testCollectJob1",t)
+  return() `onBackc` \Navigation -> ttr ("IN HANDLER","main") 
+  s <- local $ do 
+    option "g" "go"
+    input (const True) "session name? >" 
+  onAll $ setSession s
+  onAllNodes $ onException $ \(e:: SomeException) -> ttr ("EX2",e)
+
+
   r <- collectc 2 0 $ do
+          onAllNodes $ onException $ \(e:: SomeException) -> ttr ("EX1",e)
           r <- minput "test" "enter string" 
-          moutput "ok"  `onBackc` \Navigation -> ttr ("IN HANDLER",r) 
+          moutput "ok"  `onBackc` \Navigation -> do ttr ("IN HANDLER",r)
           return r
   
   ttr ("RESULT",r) 
-  -- onAll $ back Navigation
 
   minput "results" "see results" :: Cloud ()
   moutput ("results",r :: [String])
+  -- onAll $ back Navigation
+  error "err"
+  return()
 
 -- main=testInit
 testInit= keep $ initNode $ do
@@ -1163,7 +1172,7 @@ main1= keep' $ it <|> trigger ( 1)  -- <|> callb 2
     empty
   
 data Resp= Resp{content:: String} deriving (Generic, ToJSON)
-main= testMinputSpeed
+-- main= testMinputSpeed
 testMinputSpeed= keep $ initNode $ do
    r <- minput "test" "call test"
    moutput  (("content",r :: String),("value",1::Int)) 
