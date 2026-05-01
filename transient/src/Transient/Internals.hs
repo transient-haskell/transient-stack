@@ -1,8 +1,8 @@
---  Transient.Internals was divided into Transient.Engine and Transient.Core. This simulates the original Transient.Internals
+--  Transient.Internals was divided into Transient.LEngine and Transient.Core. This simulates the original Transient.Internals
 module Transient.Internals (
-  module Transient.Engine,
+  module Transient.LEngine,
   module Transient.Core
 )
 where
-import Transient.Engine
+import Transient.LEngine
 import Transient.Core

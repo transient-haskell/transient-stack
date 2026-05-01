@@ -51,7 +51,9 @@ library
                      Transient.Mailboxes
                      Transient.Indeterminism
                      Transient.Internals
-                     Transient.Engine
+                     Transient.LEngine
+                     Transient.FEngine
+                     Transient.CEngine
                      Transient.Core
                      Transient.Parse
                      Transient.Console

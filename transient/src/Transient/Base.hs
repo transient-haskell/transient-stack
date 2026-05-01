@@ -232,37 +232,40 @@
 
 module Transient.Base(
 -- * The Monad
-TransIO, TransientIO
+TransIO
 
 -- * Task Composition Operators
 , (**>), (<**), (<***)
 
 -- * Running the monad
-,keep, keep',keepCollect, stop, exit,exitFailure
+,keep, keep',keepCollect, stop, exit,exitFailure, runTransient
 
 -- * Asynchronous console IO
 ,option,option1, input,input'
 
--- * Task Creation
+-- * threaded effects
 , StreamData(..)
-,parallel, async, waitEvents, sample, spawn, react, abduce, fork,sync
+,parallel, for, async, waitEvents, sample, spawn, react,react1,reactId, abduce, fork,sync
 
--- * State management
-,setData, getSData, getData, delData, modifyData, modifyData', try, setState, getState, delState, newRState,getRState,setRState, modifyState
-,labelState, findState, removeState
+-- * State management, not reactive
+,setData, getSData, getData, delData, modifyData, modifyData', try, setState, getState, delState, newRState,getRState,setRState,delRState, modifyState
+,labelState, findState, removeState, getIndexData,getIndexState,withIndexRData,setIndexRData,getIndexRData
 
 -- * Thread management
-, threads, anyThreads, addThreads, freeThreads, hookedThreads,oneThread
+, threads, anyThreads, addThreads, freeThreads, hookedThreads,oneThread, showAllThreads,showThreads
 
 -- * backtracking
-,undo,onUndo,retry,back,onBack,forward,finish,onFinish,localBack -- ,backPoint,onBackPoint
+,undo,onUndo,retry,back,onBack,onBack1,forward,finish,onFinish,onWaitThreads,localBack,backtrack -- ,backPoint,onBackPoint
 
 -- * Exceptions
 
 ,localExceptions, onException, onException', cutExceptions, continue, catcht, throwt -- ,exceptionPoint, onExceptionPoint
 
+,module Transient.EVars
+,module Transient.Mailboxes
+
 -- * Utilities
-,genId, tr, ttr, tttr,ofType,color
+,genId, tr, ttr, tttr, tracec,ofType,color
 )
 
 where
@@ -270,4 +273,6 @@ where
 
 import    Transient.Internals
 import    Transient.Console
+import    Transient.EVars
+import    Transient.Mailboxes
 import System.Directory.Internal.Prelude (exitFailure)
