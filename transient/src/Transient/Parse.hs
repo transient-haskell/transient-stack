@@ -383,7 +383,7 @@ withGetParseString3 parser=  do
 
 {-#INLINE withGetParseString#-}
 withGetParseString ::   (BS.ByteString -> TransIO (a,BS.ByteString)) -> TransIO a
-withGetParseString parser=  Transient $ do
+withGetParseString parser=  transient $ do
     ParseContext readMore s done <- gets parseContext
 
     let loop = unsafeInterleaveIO $ do
@@ -590,24 +590,32 @@ producer |- qonsumer =  sandbox $ do
 makeParseContextFromStream :: MonadIO m => IO BS.ByteString -> m ParseContext
 makeParseContextFromStream rec = liftIO $ do
   done <- newIORef False
-  let receive = liftIO $ do
-        -- tr "receive"
-        d <- readIORef done
-        -- tr ("receive done", d)
-        if d
-          then return SDone
-          else
-            ( do
-                r <- rec
-                -- tr ("receive, r=", r)
-                if BS.null r
-                  then liftIO $ do writeIORef done True; return SDone
-                  else return $ SMore r
-            )
-              `catch` \(SomeException e) -> do
-                liftIO $ writeIORef done True
-                putStr "Parse: "
-                print e
-                return SDone
+  let loop = unsafeInterleaveIO $ do
+           r <-   rec
+           (r <>) `liftM` loop
 
-  return $ ParseContext receive mempty done
+  str <-  loop
+  return $ ParseContext (return SDone) str done
+
+
+  -- let receive = liftIO $ do
+  --       -- tr "receive"
+  --       d <- readIORef done
+  --       -- tr ("receive done", d)
+  --       if d
+  --         then return SDone
+  --         else
+  --           ( do
+  --               r <- rec
+  --               -- tr ("receive, r=", r)
+  --               if BS.null r
+  --                 then liftIO $ do writeIORef done True; return SDone
+  --                 else return $ SMore r
+  --           )
+  --             `catch` \(SomeException e) -> do
+  --               liftIO $ writeIORef done True
+  --               putStr "Parse: "
+  --               print e
+  --               return SDone
+
+  -- return $ ParseContext receive mempty done
