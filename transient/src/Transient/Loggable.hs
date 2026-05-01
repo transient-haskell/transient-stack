@@ -74,16 +74,7 @@ fragment s
 -- instance Show Builder where
 --  show b= show $ toLazyByteString b
 
--- -- | The 'Log' data type represents the current log data, which includes information about whether recovery is enabled, the partial log builder, and the hash closure.
--- data Log  = Log{ recover :: Bool , partLog :: Builder, restLog :: [[Builder]],  hashClosure :: Int} deriving (Show)
 
--- data LogDataElem= LE  Builder  | LX LogData deriving (Read,Show, Typeable)
-
--- | Get the current log data.
-getLog :: TransMonad m => m Log
-getLog= getData `onNothing` return emptyLog
-
-emptyLog= Log False  mempty []  0
 
 
 
@@ -285,9 +276,13 @@ undupSlash = do
        return s <> "/" <> undupSlash
      <|> return s
 
-instance Loggable BS.ByteString  where
+instance Loggable BS.ByteString where
         serialize str =   dupSlash str !> "serialize bytestring"
         deserialize= undupSlash
+
+newtype QuotedBS= Quoted Builder deriving (Read,Show,Typeable)
+
+instance Loggable QuotedBS
 
 instance Loggable Text where
     serialize =  byteString . TE.encodeUtf8 
@@ -313,3 +308,4 @@ instance Loggable Raw where
 instance Loggable Builder where
   serialize= id
   deserialize = byteString <$> deserialize
+
