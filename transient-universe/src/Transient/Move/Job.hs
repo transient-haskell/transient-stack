@@ -16,7 +16,7 @@ module Transient.Move.Job(job, config, runJobs,collectc,getMicroSeconds) where
 import Transient.Internals
 import Transient.Move.Internals
 import Transient.Move.Defs
-import Transient.Indeterminism
+import Transient.Console
 import Transient.Move.Logged
 import qualified Data.ByteString.Char8 as BC
 import Control.Monad.IO.Class
@@ -36,9 +36,10 @@ import Data.Typeable
 import Data.IORef
 import System.Time
 import System.IO
+import Unsafe.Coerce 
 
 -- newtype Job= Job (Int,BC.ByteString)  deriving (Typeable,Read,Show,Eq)
-data Job= Job {jobClosure :: DBRef LocalClosure,jobNode :: Node, jobError :: Maybe SomeException}  deriving (Typeable,Read,Show)
+data Job= Job {jobClosure :: DBRef LocalClosure,jobNode :: Node, jobError :: Maybe String}  deriving (Typeable,Read,Show)
 instance TC.Indexable Job where key (Job dbr  _ _)= 'J':keyObjDBRef dbr
 -- data Jobs= Jobs{pending :: [Job]}  deriving (Read,Show)
 -- instance TC.Indexable Jobs where key _= "__Jobs"
@@ -77,49 +78,42 @@ job= job' Nothing
 
 
 
-job' :: (Maybe String) -> Cloud ()
+job' :: Maybe String -> Cloud ()
 job' mname  =  local $  do
-  mprev :: Maybe Job <- getData 
-  liftIO $ writeIORef save True
+  -- the next job checkpoint eliminates the previous to reflect the advancement of the computation
+  mprev :: Maybe Job <- getData
   when (isJust mprev) $ jobRemove $ fromJust mprev
+
+  ttr "save"
+  liftIO $ writeIORef save True
 
   endpoint (fmap BC.pack mname) <|> return () -- void $ setCont Nothing idSession 
   tr "AFTER ENDPOINT"
-  p@(PrevClos thisclos ms _ isapp) <- getData `onNothing` noExState "job 2"
+  p@(PrevClos thisclos ms _ isapp isCollect) :: PrevClos <- getData `onNothing` error "no job state 2"
   -- -- false to force the log Not to recreate this endpoint after replaying
   ttr ("JOB PREVCLOS",p )
-  setState $ PrevClos thisclos ms False isapp
+  setState (PrevClos thisclos ms False isapp isCollect :: PrevClos)
 
-  -- PrevClos thisclos _ _ <- getState 
-  -- conn <- getData `onNothing` noExState "job conn"
+
   myNode <- getMyNode
-  -- let (s,c) = getSessClosure thisclos
   let this= Job thisclos myNode Nothing
   liftIO $ atomically $ newDBRef this
-  --    Jobs  pending <- readDBRef rjobs `onNothing` return (Jobs [])
-  --    tr  ("creating job",pending,this)
-  --    writeDBRef rjobs $ Jobs $   this:pending
+
   setData  this
   onException $ \(e :: SomeException) -> do
-    ttr ("job exception", e)
+    ttr ("job exception", e,"adding this to the list of tasks to retry")
      -- distinguish connection errors to reschedule jobs when nodes recover   
     case fromException e of
-      Just (ConnectionError _ node) -> liftIO $ atomically $ writeDBRef (getDBRef $ keyResource this)  this{jobNode=node, jobError= Just e}
-      Nothing ->                       liftIO $ atomically $ writeDBRef (getDBRef $ keyResource this)  this{jobError= Just  e}
-  -- onException $ \e@(ConnectionError _ node) -> do
-  --    -- store node in job to be rescheduled when the node recovers
-  --    liftIO $ atomically $ newDBRef  this{jobNode=node, jobError= Just $ toException e}
-      
-    empty
+      Just (ConnectionError _ node) -> liftIO $ atomically $ writeDBRef (getDBRef $ keyResource this)  this{jobNode=node, jobError= Just $ show e}
+      Nothing ->                       liftIO $ atomically $ writeDBRef (getDBRef $ keyResource this)  this{jobError= Just $ show e}
 
 
-  
-  
 jobRemove :: Job -> TransIO ()
 jobRemove job= do
       ttr ("jobRemove", job)
-      liftIO $ atomically $ delDBRef $ (getDBRef $ keyResource job :: DBRef Job)
+      liftIO $ atomically $ delDBRef  (getDBRef $ keyResource job :: DBRef Job)
       delState job
+      -- TODO: the endpoint of the job should receive a SDone
 
 
 
@@ -127,12 +121,11 @@ jobRemove job= do
 newtype Ping= Ping Node
 newtype AllJobsExecutedFor= AllJobsExecutedFor Node
 
-runJobs= do
-  -- onAll $ onException $ \(e :: SomeException) -> do
-  --         liftIO $ hPutStrLn stderr $ show ("job exception", e)
 
+runJobs= do
   local $ fork $ do
     liftIO $ index jobNode
+
     startJobs <|> commJobs
   where
   startJobs= do
@@ -154,10 +147,11 @@ runJobs= do
 
       let (s,clos) = getSessClosure dbr ::  (SessionId, ClosureId)
       (logs,clos') <- getClosureLog s clos
-      conn <- getData `onNothing` noExState "runJobs(commJobs): conn not found"
+      -- conn :: Connection <- getData `onNothing` error "runJobs(commJobs): conn not found"
+      map <- gets mfData
       setState job
-      ttr ("JOB LOG",logs)
-      Transient $ sendToClosure  logs s closureId0 conn False clos'
+      ttr ("JOB LOG",logs,"send to closure",localClos clos',isJust $ localEvar clos',isJust $ localCont clos',TC.key clos',dbr)
+      noTrans $ sendToClosure logs s closureId0 map False clos'
     -- jobRemove job  -- don't remove because it could have spawned new processes
     -- tttr "end job initializations"
     -- putMailbox' node $ AllJobsExecutedFor node
@@ -180,7 +174,7 @@ runJobs= do
 
 -- >  localIO $ putStr "hello "; putStr s; putStr " "; putStrLn s
 --
--- Once this functionality is finished, there would be a reconfiguration option so that this menu ould be possible:
+-- Once this functionality is finished, there would be a reconfiguration option so that this menu could be possible:
 --
 --   config -> implantation; acceptance ; reimplantation if needed
 --          -> configuration  port, hostname etc ...
@@ -188,64 +182,130 @@ runJobs= do
 --
 --   All of this before initNode and ordinary code could start with these parameters
 --
---   These config parameters could be provided in the command line as well. Instead, reading them from edited configuration files is not programatic. Configuration files are an antipattern. While command line options can be assigned from environment variables along the execution of a shell program, istead configuration files demand manual edition and revision which is prone to errors and it is a major part of how hard is to install and manage programs. Moreover if the configuration is part of the program, it is ever in sync with that the program really expects, without deprecations, old documentation, confusing mismatch between program options, file configurations and versions of executables. The dialog with the program could be self explanatory without separate documentation. A separate configutation program even if it is explanatory and intuitive, it is prone of being out of sync with what a new version of the real program expects, and need to maintain two separate programs. having the configuration as a part of the whole program eliminates this possibility since the entered configuration becomes part of the stack of variables which the program will really use and it will recover from the TCache database whenever it restarts
+--   These config parameters could be provided in the command line as well. Instead, reading them from edited configuration files is not programatic. 
+--   Configuration files are an antipattern. While command line options can be assigned from environment variables along the execution of a shell program, 
+--   instead configuration files demand manual edition and revision which is prone to errors and it is a major part of how hard is to install and manage programs. Moreover if the configuration is part of the program, it is ever in sync with that the program really expects, without deprecations, old documentation, confusing mismatch between program options, file configurations and versions of executables. The dialog with the program could be self explanatory without separate documentation. A separate configutation program even if it is explanatory and intuitive, it is prone of being out of sync with what a new version of the real program expects, and need to maintain two separate programs. having the configuration as a part of the whole program eliminates this possibility since the entered configuration becomes part of the stack of variables which the program will really use and it will recover from the TCache database whenever it restarts
 
 -- A more complete explanation https://matrix.to/#/!kThWcanpHQZJuFHvcB:gitter.im/$DARXcz9ny51BVT1L7RNH7HTa35JQNtatnCaHGFR9LfM?via=gitter.im&via=matrix.org&via=matrix.freyachat.eu
 
 config :: Loggable a => String -> Cloud a -> Cloud a
 config name mx = do
-   job' $ Just  name
-   mx
-  
+  localIO $ putStr $ "Configuring: " <> name
+  r <- mx
+  job' $ Just  name
+  resp <- local $ input' 'Y' (\r -> r== 'Y' || r== 'y' || r == 'n' || r == 'N')   "ok with this configuration? (Y/n) "
+  if resp== 'Y' || resp== 'y' then return r else config name mx
 
 
--- | persistent non recursive collect that preserves backtracking handlers
+newtype CollectJobs= CollectJobs [Job]
+-- | persistent non recursive collect that preserves backtracking handlers. Unlike Transient.collect, it keeps the results across 
+-- intended and unintended shutdowns and restarts.
 collectc :: Loggable a => Int -> Int -> Cloud a -> Cloud [a]
-collectc n delta action= do
+collectc n delta action= Cloud $ sandboxDataCond preserveCollectFlag $ unCloud $ do
+  modifyData' (\p -> p{isCollect=True}) $ error "collectc: no Previous closure"
+
   tinit <- local $ fromIntegral <$> getMicroSeconds
- 
+
   let tfin= tinit +  delta
 
   t <- onAll $ fromIntegral <$> getMicroSeconds
-  let timeleft= let t'= tfin - t in if t' <0 then 0 else t'
-  ttr("TIMELEFT",timeleft)
+  let timeleft= let t'= tfin - t in max t' 0
+  ttr ("TIMELEFT",timeleft)
   -- node <- onAll getMyNode
   initState <- gets mfData
   states <- onAll $ liftIO $ newIORef M.empty
-  removeBacktracking
-
+  -- remove duplicate backtracking handlers
+  -- removeBacktracking
+  onAll $ newRState $ CollectJobs []
   r <- local $ collect' n timeleft $ unCloud $ do
           r <- action
 
-          modifyState' (\prevclos -> prevclos{preservePath=True}) $ noExState "collectc"
+          modifyState' (\prevclos -> prevclos{preservePath=True}) $ error "no CollectJobs state"
 
           job
-          -- onAll $ liftIO $ threadDelay 10000
+
+          onAll $ do
+
+            j ::  Job <- getState <|> error "collectc: no Job stete"
+
+            
+            -- add to the list of collect jobs to delete at the end of collect
+            Ref ref  <- getState <|> error "collectc: no state Ref CollectJobs"
+            CollectJobs jobs <- liftIO $ readIORef ref
+            liftIO $ writeIORef ref $ CollectJobs $ j:jobs
+
+          -- merge all states for the result
           onAll $  do
             s <- gets mfData
             s' <-liftIO $ readIORef states
-
-            liftIO $ writeIORef states $ Transient.Internals.merge  s' s
+            liftIO $ writeIORef states $ merge  s' s
           return r
 
   s <- onAll $ liftIO $ readIORef states
-  modify $ \st -> st{mfData= Transient.Internals.merge initState s}
+  modify $ \st -> st{mfData= merge initState s}
+  
+  -- remove all the jobs inside  collectc
+  CollectJobs js <- onAll $ getRState <|> return (CollectJobs []) 
+  ttr ("JOBS TO DELETE",js)
+  onAll $ mapM_ jobRemove js
+
   return r
   where
+  merge :: PolyMap -> PolyMap -> PolyMap
+  merge = M.unionWithKey combine
 
-  removeBacktracking :: TransMonad m => m ()
-  removeBacktracking =  modify $ \st -> st{mfData= M.filterWithKey f $ mfData st}  
-    where
-    -- change to filterKeys, currently websockets needs Data.Map < 0.8
-    f t _=   -- t == typeOf(ofType :: Backtrack Finish)  ||
-            typeRepTyCon  t /=  typeRepTyCon (typeOf (ofType :: Backtrack ()))
+
+  isOfTypeBacktrack t= typeRepTyCon t == typeRepTyCon (typeOf (ofType :: Backtrack ()))
+
+  isOfTypeLog t= typeRepTyCon t == typeRepTyCon (typeOf(ofType :: Log))
+
+  combine :: TypeRep -> SData -> SData -> SData
+  combine t x y =   -- tracec ("Merging type: " ++ show t) $ 
+    
+    if isOfTypeBacktrack t then    
+          let list  = case unsafeCoerce x :: Backtrack1 () of
+                          Backtrack1 _ list  -> list
+              list' = case unsafeCoerce y :: Backtrack1 () of
+                          Backtrack1 _ list' -> list'
+          in   unsafeCoerce $ Backtrack1 Nothing ( list' ++ list)
+
+    else if isOfTypeLog t then
+          let log= unsafeCoerce x  :: Log
+              log'= unsafeCoerce y :: Log
+          in   unsafeCoerce $ log'{restLog = restLog log ++ restLog log'} 
+
+    else y -- Default behavior: take the second value
+
+  -- preserve the previous isCollect if we are in a anidated collectc
+  preserveCollectFlag (Just mnow) (Just mprev) = Just mnow{isCollect=isCollect mprev}
+
+  preserveCollectFlag _ _ = error "PrevClos information"
+
+data Backtrack1 a = Backtrack1 (Maybe a) [SData]
+
+  -- removeBacktracking :: TransMonad m => m ()
+  -- removeBacktracking =  modify $ \st -> st{mfData= M.filterWithKey f $ mfData st}
+  --   where
+  --   -- change to filterKeys, currently websockets needs Data.Map < 0.8
+  --   f t _=   -- t == typeOf(ofType :: Backtrack Finish)  ||
+  --           typeRepTyCon  t /=  typeRepTyCon (typeOf (ofType :: Backtrack ()))
 
 getMicroSeconds = liftIO $ do
         (TOD seconds picos) <- getClockTime
         return (seconds * 1000000 + picos `div` 1000000)
 
--- -- | persistent collect. Unlike Transient.collect, Transient.Move.collect  keeps the results across intended and unintended
--- -- shutdowns and restarts
+-- | a endpoint should remove the previous job since it is a on-demand job
+endpointc mname= do
+  mprev :: Maybe Job <- getData
+  when (isJust mprev) $
+    let prev= fromJust mprev
+    in do jobRemove prev ; delData prev
+  endpoint mname
+
+
+
+-- -- | persistent collect. Unlike Transient.collect,  keeps the results across intended and unintended
+-- -- shutdowns and restarts.  It was substituted by collectc
 -- collectp :: Loggable a => Int -> Integer -> Cloud a -> Cloud [a]
 -- collectp n delta  mx=  do
 --   onAll $ liftIO $ writeIORef save True
@@ -254,7 +314,7 @@ getMicroSeconds = liftIO $ do
 
 --   let tfin= tinit +  delta
 --       numbered= n > 0
- 
+
 --       collectp' n  delta 
 --        | n <= 0 && numbered = return []
 --        | otherwise= do
@@ -274,7 +334,7 @@ getMicroSeconds = liftIO $ do
 --         let n'= if numbered then n - len else 0
 --         if delta'<= 0 || (numbered && len>= n) then return rs else return rs <>  
 --                     (job >>  collectp' n' delta')
-  
+
 --   tr ("COLLECTP",n,delta)
 --   collectp' n delta
-  
+
