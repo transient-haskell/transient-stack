@@ -1,4 +1,4 @@
-currently testing transient-universe
+currently testing transient-universe (2025)
 
 extensiones vscode: ANSI colors, Log analysis
 
@@ -35,6 +35,7 @@ cabal install  --lib  --package-env . random directory bytestring containers mtl
 for cardano-cloud:
   cardano-api-10.19.1.0
   base16-bytestring-1.0.2.0
+  cardano-ledger-binary-1.7.0.0
 
 
 
@@ -93,6 +94,11 @@ test de TCache que salva un estado coherente: si
 runAt service  que es una compilacion concreta del programa, con macros
 
 cojer los services de las closures?
+
+idea: type AsyncIO=TransIO   para etiquetar comp TransIO que son asincromas
+           EmptyIO = TransIO
+           StreamIO= TransIO
+           ReactIO
 
     
 Idea: definir TransIO a = Statet EventF (StreamData a)  (newmnoad.hs)
@@ -944,6 +950,31 @@ en un collect
       data Log  = Log{ recover :: Bool , partLog :: Builder,  hashClosure :: Int} deriving (Show)
       permanece igual
 
+
+endpoint cuando lo que sigue es empty, como envia log al alternativo?
+  tiene que haber un local que lea  un "w"
+  
+
+prolongar el log cuando se ejecuta wait para que no ejecute endpoint
+pero cuando se ejecuta wait, endpoint ya se ha ejecutado
+como detectar endpoint y desviar el log antes de que se ejecute?
+el mismo endpoint tiene que detectarlo
+  si en recover llega el endpoint, tiene que detectar si el log que sigue es
+  para si mismo o para un alternativo. como lo sabe?
+    casos en los que se recupera el endpoint
+       puede que el log acabe en ese endpoint
+       puede que el log se extienda mas alla de ese endpoint
+       tiene que poner un signo, un "w" quiza para indicar que lo que viene es para el alternativo?
+       en que momento se introduce ese w?
+       cuando se genera?
+       como tratar un endpoint?
+       el endpoint debe ejecutarse siempre
+        cuando no esta en recover, añadir un signo  "w" en endpoint? 
+          
+          no, si el no está en recover y partLog esta vacio, y el log no proviene de un receive, llenarlo con el anterior obviando el teleport 
+          el el alternativo, poner que su anterior dbref es el endpoint anterior
+          abduce al principio de endpoint
+
       data LocalClosure = LocalClosure
   { localClos     :: IdClosure,
     localSession  :: Int,
@@ -962,6 +993,9 @@ en un collect
      la logica de combine
 
 
+serilalization de byteString
+   crear un newtype  Unquoted a = Unquoted a
+   quoted a= case a of 
 1
 collect
    2 2
@@ -1118,6 +1152,8 @@ como se pasa la sesion al cliente
          ..minput b
 
 
+publish no puede ser un RState simplemente. tiene que ser una variable global indexRState -> map en un IORef
+
 runghc -w  -threaded -rtsopts -itransient-stack/transient/src -itransient-stack/transient-universe/src -icardano-cloud/src cardano-cloud/tests/test.hs --start localhost:8080 --cardanoparams   /ipc/node.socket  preview ./cardano-cloud/tests/payment.skey
 
         /-----userInit/allEndpoints
@@ -1149,11 +1185,37 @@ luego el segundo si hay, no tiene que cambiar la session
 para que sirve entonces la sesion? 
   Para distinguir distintos flujos en el tiempo o paralelos
     por ejemplo cuando se ejecuta el flujo desde el principio dos veces y queremos tener 
-    ambos funcionando por separado
+    ambos funcionando por separado (dos wallets de dos usuarios)
   merece la pena mandarlo como cookie????
     si el session el id no aparece en la url, no se pueden distinguir links entre distintas sesiones
       por ejemplo, dos subastas de dos productos
       todo lo que esté en la monad cloud y vaya a usarse varias veces tiene que tener sesiones distintas
+
+los links exportados por otros tienen la sesion del que los creó.
+  El que lo pincha entra en la sesión del que creó el link, lo cual esta mal
+  como resolver eso
+    necesitamos un estado mas que es lo que pretendia solucionar el codigo anterior
+    hay closure = nombre del endpoint
+    sesion que lo creo= despues del S
+    sesion/stableptr del que accede
+    necesitamos codificarlo en una cookie?
+    el link siempre coje el contexto del que lo exporto. 
+      por tanto no pudemos encontrar nuestra wallet en nuestro contexto despues de un link si fue generado por otro
+        como podemos recoger nuestro contexto:
+        antes: context en tcache con todas las variables serializadas
+               pero como se transladaba el idcontext a la url y vuelta?
+               el navegador tiene que tener una cookie de idcontext cargado al generar el HTML de su web
+               OOOOOKKKk la cookie tiene que generarse al inicion de la sesion, cuando se da de alta la wallet/login:
+                     el servidor contesta a la primera llamada con una cookie que es el idsession.
+                     el servidor asocia ese idsession con su mfdata actual.
+                        puede tener varios estados? algunos endpoints han sido guardados por otros, otrios por uno mismo.
+                          cuando son guardados por uno mismo, no se hace caso a la cookie y sigue con el mismo.
+                        de momento un solo mfdata por sesion.
+
+
+    antes la sesion estaba codificada en Context
+      como se sabia el contexto del llamante
+
 system session
 collect...
      minput   <- todos lo usan
@@ -1162,3 +1224,216 @@ collect...
 generacion de JSON maqueta
 usar           
 
+
+
+endpoint sin <|> return() alternativo
+  ahora endpoint no tiene "<|> return()" cada segmento se aplica a cada nuevo endpoint para segir la comp.
+  pero
+    endpoint <|> local otra cosa logeada
+    1) no funciona ya que el resto del log lo capta endpoint para seguir monadicamente
+
+    2) teleport necesita <|> return()  pero al ponerlo fuera de teleport
+    la llamada de vuelta ejecuta el return() y sigue. Y al mismo tiempo el segmento tiene un e/ adicional que el endpoint lo inyecta y fuerza la ejecución una segunda vez de lo que hay detrás de enndpoint
+    antes eso no pasaba ya que el log no venia en fragmentos y el endpoint no inyectaba el siguiente fragmento sino que continuaba por <|> que era en unico camino.
+
+    poner un abduce al principio de teleport resuelve 1) ya que el endpoint no captura el log alternativo
+         pero depende del endpoint anterior, no del nuevo creado, haciendolo mas largo
+         no resuelve el problema 2 
+
+    eliminar el "e/" evitaría lanzar otra vez la continuacion de teleport
+    pero al eliminar el e/ que es el partlog es facil, pero corta el log y el teleport de recepcion se cree que
+    no esta en modo recuperacion sino en directo y manda una nueva request al nodo llamado
+
+  problema: teleport
+
+  como saber si el teleport envia o recibe sin mirar recover
+    partlog y restlog y parseString
+    alguno de los dos es nulo en elguno de los dos casos?
+       restlog es el log previo que ha sido generado o que está siendo consumido
+       partLog es el que se está generando ahora 
+          si está nulo es que esta en recover no porque se genera en ambos casos
+       parseString es nulo siempre que está en endpoint
+
+    añadir un "e/" al final del mismo segmento, en teleport, resuelve el problema
+
+problema job:
+  endpoint con abduce al principio no coje el endpoint suyo creado dentro de job
+    alguna opcion para que el job coja el endpoint?
+    si: endpoint <|> writeEvar endp SMore 
+    (1)pero ese writeEVar necesita saber cual es el endpoint del primer termino, pero se lo ha saltado
+
+    poner el abduce de endpoint ants de receive1
+    en modo directo ya esta seteado el endpoint y al alternativo le permite writeEVar...
+    en modo recovery, si se pone el primer término como predecesor, estamos en las mismas
+    queremos que un endpoint se contruya a partir de otro en la misma expresion aplicativa o no?
+      idealmente si
+      pero eso lleva a que el endpoint pueda inyectar hacia abajo (monadico) o hacia la derecha (aplicativo) (2=)
+
+      el caso contrario necesitamos writeEVar (evar del primer termino) y eso lleva a 1)
+    
+    2) como hacer streaming a la derecha:
+    streamright left right = do
+        
+ma <-> mb =
+     Transient $ do
+       ma <|> mb
+
+el problema es que el segundo termino es desconocido
+puedo acceder a toda la computacion, no al segundo termino aislado
+en recovery tengo un receive1<|> injectmonadic
+
+el injectmonadic.. puedo hacer un alternativo
+
+hace falta el inject alternative? cuando se está ejecutando un segmento y encuentr un u/ 
+
+[seg1,seg2,seg3] en modo directo solo puede haber un segmento con alternativo que  es el primero del modo directo
+por ejemplo en   endpoint  <|> otro  por tanto no hay problema. un endpoint no puede generar caminos alternativos solo
+el directo pasa por el. luego se
+
+       
+
+    
+    .
+  si se quita el abduce, como está ahora, el endpoint recien creado por el recovery toma el siguiente segmento como suyo y no del alternativo
+  
+
+  señalar con w el inicio del alternativo, pero cuando
+    deberia incorporarlo el logged. por que no lo hace?
+    cuando hay un endpoint en el primer termino de <|> y hay un alternativo
+       addWait de logged ve un preservePath y no graba el "w"
+       endpoint deberia lanzar dejar paso al alternativo. eso lo hace en modo directo pero no en modo recover
+       por que no lo hace en modo recover? 
+        porque detecta que hay log sobrante y eso lo captura para seguir
+        por tanto o el propio endpoint graba un "w" o endpoint avisa con un flag a logged para que lo grabe
+        mas sencillo que lo grabe endpoint aunque se rompa la responsabilidad
+        en donde lo graba? en partLog. tiene que grabarlo en modo recover tambien
+          en modo recover en inject debe mirar ese "w/"
+          en que momento se pone "w/"
+          en partLog en el <|> despues del inject
+          antes, que chequee partLog por "w/" y en ese caso que no ejecute inject
+          todo eso se puede codificar en inject
+
+            
+          
+tcache delDBRef:  que pasa si borro dentro de un atomic y la transaccion hace rollback?
+no pasa nada a condicion de que al final se lleve a cabo y sea el mismo registro
+para delete, crear un nuevo registro con clave delete:
+
+newtype Deleted a= Deleted a 
+
+instance IResource a => IResource (Deleted a) where
+   keyResource (Deleted x)= "DELETED#" <> keyResource x
+   readResource (Deleted x)= readResource x
+   writeResource (Deleted x)= writeResource
+   delResource (Deleted x)= delResource x
+
+instance Indexable a => IResource (Deleted a) where
+   key (Deleted x) = "DELETED#" <> keyResource x
+   defPath (Deletec x)= defPath x <>"/deleted"
+
+instance (Serializable a) => Serializabla (Deleted a) where
+   serialize (Deleted x)= serialize x
+   deserialize (Deleted x)= deserialize x
+   setPersist (Deleted x)= setPersist x
+
+sustituir 
+    safeIOToSTM . criticalSection saving $ delResource x
+por
+    -- tiene que acceder a la clase para poder restaurar, no vale safeIOToSTMComp
+    safeIOToSTMComp( writeResource (Deleted x) >> delResource x)  (readResource (Deleted x) >> writeResource x >> deleteResouce(Deleted x))
+
+    recover x=
+      readResource (Deleted x)
+      writeResource x
+
+
+data Transf= forall a.Transf (a -> a -> a)
+
+merge :: [Transf] -> PolyMap -> PolyMap -> PolyMap
+
+secondConn :: Connection -> Connection -> Connection
+secondConn _ c2= c2
+
+transf f
+combine t x y= do
+  tc = typeRepTyCon t
+  para cada dato del map pasarle todas las formulas
+  if tc == typeRepTyCon (typef f)
+    then
+        f x y
+    else continue
+
+
+  typef :: (a -> a -> a) -> a
+  typef _ = undefined
+
+
+si la primera  vez el browser tiene una cookie de estado, como detectarlo?
+   cuando llama la primera closure. 
+      no, puede llamar cualqioera.
+    el noparam leer dbref si no existe, asignarle 0
+   cuando viene de listen Socket
+   caundo conecta la wallet?
+     la gestion de sesion iene que ser especifica de cada aplicacion
+   hacer la cookie que sea de sesion.
+   en processMessage:
+
+como gestionar urls con paths y noparams?:  usar # y ## en lugar de S y T
+
+quitar el endpoint de minput y sacarlo fuera
+
+endpoint Just "wallet"
+
+minput verb payload= do
+v <- logged $ return verb
+guard v== verb
+..
+..
+
+...
+
+endpoint (Just "wallet") 
+minput "connect ...  <|> minput "assets" ...
+se verian endpoints /wallet/connect/....   /wallet/assets/....
+
+
+minput segments="wallet/connect"...
+log <- getLog
+guard $ segments `isPrefixOf` log
+setLog drop length segments log
+ añadir segmentos a la url
+
+no funciona porque no ejecuta el alternativo 
+
+crear varios endpoints con el mismo nombre
+
+usar el path completo como nombre
+
+http://localhost:8080/wallet/connect/#u
+
+
+------- services called with runAt
+
+crear un named endpoint: endpoint $ Just "syncServices"
+
+service "blockSpitter" blockSpitter
+
+
+remoteBlockSpitter= runAtNamed "blockSpitter" syncNode blockSpitter
+
+runAtNamed serviceString node proc= do
+  wormhole  node $ do
+     teleportNamed serviceString session
+
+teleportNamed service= do
+  setLastClosureForConnection conn service session
+  -- si llamo ahora a teleport, va a crear un endpoint local y eso no interesa o si, si cambiamos la sesion
+  -- pero eso crea un nuevo endpoint en cada invocacion. newSession deberia ser unico en funcion de la localizacion eso lo asegura el hash del log
+  hash <- hashClosure <$> getLog
+  setSession hash
+  teleport
+
+    
+
+escritura recursiva de DBRefs
+writeResource 
