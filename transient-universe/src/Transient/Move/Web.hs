@@ -1,12 +1,11 @@
-{-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE CPP #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
-{-# LANGUAGE OverlappingInstances #-}
+-- {-# LANGUAGE OverlappingInstances #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE UndecidableInstances #-}
-{-# LANGUAGE CPP, LambdaCase #-}
 {-# LANGUAGE InstanceSigs #-}
 {-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
 {-# HLINT ignore "Use typeRep" #-}
@@ -16,9 +15,30 @@
 #ifndef ghcjs_HOST_OS
 
 
-module Transient.Move.Web  (minput,followup,output, moutput,publish,publishn,published,showURL,getURL,ToHTTPReq(..),POSTData(..),HTTPReq(..),
-AsJSON(..),rawHTTP,serializeToJSON,deserializeJSON,
- IsCommand,optionEndpoints,getCookie,setCookie) where
+module Transient.Move.Web
+  ( minput,
+    followup,
+    output,
+    moutput,
+    publish,
+    publishn,
+    published,
+    showURL,
+    getURL,
+    ToHTTPReq (..),
+    POSTData (..),
+    HTTPReq (..),
+    AsJSON (..),
+    rawHTTP,
+    serializeToJSON,
+    deserializeJSON,
+    IsCommand,
+    optionEndpoints,
+    getCookie,
+    setCookie,
+    
+  )
+where
 
 import Control.Applicative
 import Control.Concurrent.MVar
@@ -53,34 +73,22 @@ import Transient.Move.Job
 import Unsafe.Coerce
 import Data.List
 
+-- for set/getCookieData
+
+import Foreign.StablePtr
+import GHC.Stable (newStablePtr, deRefStablePtr, freeStablePtr)
+import Foreign.Ptr (Ptr, ptrToIntPtr, intPtrToPtr)
+import Data.Time.Clock
+import Data.Word (Word64)
+import Text.Read (readMaybe)
+
 import Control.Exception hiding(try,onException)
 
 data InitSendSequence = InitSendSequence
 
 data IsCommand = IsCommand deriving (Show)
 
-data InputData = InputData {idInput :: String, message :: BS.ByteString, hTTPReq :: HTTPReq} deriving (Show, Read, Typeable)
-data InputDatas= InputDatas String [InputData]deriving (Show, Read, Typeable)
-instance TC.Indexable InputDatas where key (InputDatas key _)= key
 
-instance Loggable InputData
-
--- data Context = Context Int (M.Map String BS.ByteString) deriving (Read, Show, Typeable)
-
-
--- instance TC.Indexable Context where key (Context k _) = show k
-
--- newtype URL= URL BS.ByteString  deriving (Read, Show, Typeable) -- for endpoint urls
--- data HTTPReq = HTTPReq
---   { reqtype :: HTTPMethod,
---     requrl :: BS.ByteString,
---     reqheaders :: BS.ByteString,
---     reqbody :: BS.ByteString
---   }
---   deriving (Read, Show, Typeable, Generic)
-
-instance ToJSON BL.ByteString where
-  toJSON = toJSON . BS.unpack
 
 
 instance ToJSON HTTPReq
@@ -96,34 +104,76 @@ instance Semigroup HTTPReq where
       (c <> c')
       (d <> d')
 
--- | Multiple input. It accepts a console option as well as a GET or POST web request at the point where it
--- is inserted.
+-- | A composable web input endpoint.
 --
--- `minput` is fully composable with other `minput` calls and/or other transient primitives.
+-- Registers an HTTP endpoint (GET or POST)
 --
--- The first parameter is the identifier of the endpoint. It is used to identify the endpoint in the URL as well
--- as in the console.
+-- @minput@ calls are fully composable: they can be combined with '<|>', '>>=',
+-- and other transient/cloud primitives to build interactive flows that are
+-- streamed to the client as chunked HTTP responses.
 --
--- The second parameter is the message that will be sent to the client. It can be a string, or any JSON object. Normally
--- this message is the response to the previous minput and/or a message explaining what comes next if the user invoque
--- the endpoint. More content can be added to the mesage by composing more content with other minput or`moutput` using
--- applicative, alternative and algebraic operators. Mainly the alternative operator <|> is used. Example:
+-- = Parameters
 --
--- > (minput "this" message1 >>= process) <|> (minput "that" message2 >>= process2) <|> stream
+-- [@ident@]: The endpoint name. Used as the URL path segment
+--   (@\/ident@) and as the console prompt label.
+--
+-- [@msg@]: A JSON-encodable value sent to the caller as the response payload
+--   for this step. It is included in the field "msg" of the JSON response. The rest
+--   of the JSON response is the "req" field of the `HTTPReq` datatype.
+--
+--  = Example:
+--
+-- >  POSTData( i :: Int) <- minput "endp"  "enter a int" 
+--
+-- Send this message to the client:
+--
+-- > [{ "msg":"enter a int", "req":{"reqbody":0,"reqheaders":"","reqtype":"POST","requrl":"http://localhost:8080/endp"}}]
+--
+--  This:
+--
+--  (i :: Int) <- input "endp"  "enter a int"
+--
+-- Send this message to the client:
+--
+-- > [{ "msg":"enter a int", "req":{"reqbody":null,"reqheaders":"","reqtype":"GET","requrl":"http://localhost:8080/endp/$int"}}]
+--
+-- GET requests to be sent to the server include a variable in the requrl
+--
+-- reqbody, in  POST messages contains the default value for the type to be returned. 
+-- The "msg" and the "req" fields contains all the information necessary for the next iteration with the server.
+-- With this information, the client can compose a valid response following the HATEOAS model.
+-- Note that the response is enclosed in an array. The reason is because that an expression using minput
+-- can send a finite or infinite stream of JSON responses. Explanation below.
+--
+-- = Return value
+--
+-- The value submitted by the caller — parsed from the HTTP request body\/query
+-- string — deserialized into type @a@.
+--
+-- Example
+--
+-- > (minput "name"    "Enter your name"    >>= processName)    <|>
+-- > (minput "product" "Enter product code" >>= processProduct) <|>
+-- > stream
 -- > where
--- > stream = foldl (<|>) empty $ map moutput messagelist 
+-- >   stream = foldl (<|>) empty $ map moutput eventList
 --
--- All is streamed as chunked encoding so the receiver can process the streams of messages and endpoints
+-- All branches are sent as a single chunked HTTP response; the connection stays
+-- open until every @minput@ and 'moutput' in the composition has finished.
 --
--- It is the main way to interact with users and programs which do not share the same base code.
--- Otherwise, a transient program distributed among different nodes, including web nodes, would use `runAt` and other
--- distributed primitives..
---
--- The name minput pays tribute to the brilliant programmers of the 60s and 70s who built the languages and multitasking systems we rely on today. Without their work, we’d still be writing RPG programs on single-user machines that froze completely during any I/O operation.minput :: (Loggable a, ToHTTPReq a,ToJSON b,Typeable b) => String -> b -> Cloud a
-minput ident msg' = onAll $ sandboxData (ofType :: ClosToRespond) $ unCloud  response
+-- For programs distributed across nodes (including web nodes) that share the
+-- same code base, prefer 'runAt' and other distributed primitives over
+-- @minput@. @minput@ is the primary way to interact with external clients that
+-- do not share the application code.
+minput
+  :: (ToJSON p, Loggable a, ToHTTPReq a, Typeable p) =>
+     String -> p -> Cloud a
+
+minput (ident :: String) msg' = onAll $ sandboxData (ofType :: ClosToRespond) $ unCloud response
   where
     msg= encode msg'
     response = do
+      ttr "MINPUT"
       delState (ofType :: ClosToRespond)
       modify $ \s -> s {execMode = if execMode s == Remote then Remote else Parallel}
       local $ do
@@ -131,13 +181,13 @@ minput ident msg' = onAll $ sandboxData (ofType :: ClosToRespond) $ unCloud  res
         conn <- getState -- if connection not available, execute alternative computation
         let closLocal = hashClosure log
         mynode <- getMyNode
-        PrevClos dbprevclos mn _  _ <- getData `onNothing` noExState "minput"
-        ttr ("prevclos",dbprevclos,keyObjDBRef dbprevclos)
-        let SessionId idSession = if isJust mn then fromJust mn else fst $ getSessClosure dbprevclos
+        PrevClos dbprevclos mn _ _ _ :: PrevClos <- getData `onNothing` noExState "minput"
+        ttr ("prevclos",dbprevclos, keyObjDBRef dbprevclos)
+        let SessionId idSession = fromMaybe (fst $ getSessClosure dbprevclos) mn
         let urlbase =
               str "http://" <> str (nodeHost mynode) <> str ":" <> intt (nodePort mynode)
                 </> str ident
-                </> "S" <> BS.fromStrict idSession
+                -- </> "S" <> BS.fromStrict idSession
                 -- </> BL.fromStrict closRemote
                 -- </> intt sess
                 -- </> intt idcontext ::
@@ -146,153 +196,100 @@ minput ident msg' = onAll $ sandboxData (ofType :: ClosToRespond) $ unCloud  res
         params <- toHTTPReq $ type1 response
         ttr ("params",params)
         let httpreq = mempty {requrl = urlbase} <> params :: HTTPReq
+            httpreqsess= mempty {requrl = urlbase  </> "S" <> BS.fromStrict idSession} <> params :: HTTPReq
             msgdat
-              | typeOf msg' == typeRep (Proxy :: Proxy String) = BS.pack  $ unsafeCoerce  msg'
-              | typeOf msg' == typeRep (Proxy :: Proxy BS.ByteString) = unsafeCoerce msg'
+              | typeOf msg' == typeOf (ofType :: String) = BS.pack  $ unsafeCoerce  msg'
+              | typeOf msg' == typeOf (ofType :: BS.ByteString) = unsafeCoerce msg'
               | otherwise = msg
-        setState $ InputData ident msgdat httpreq
+        setState $ InputData ident msgdat httpreqsess
+        first <- liftIO $ atomicModifyIORef firstEndpointName $ \x -> if null x then (ident, True) else (x, False)
+        when first $ liftIO $ print urlbase
 
-        connected log  idSession conn closLocal  httpreq  <|> commandLine conn log httpreq
-
-    commandLine conn log httpreq = do
-      guard (not $ recover log)
-      cdata <- liftIO $ readIORef $ connData conn
-      mcommand <- getData :: TransIO (Maybe IsCommand)
-      -- do not continue if not is in command mode or there is no connection
-      guard (isJust mcommand || case cdata of Just Self -> True; _ -> False)
+        connected log  idSession conn closLocal  httpreq -- <|> commandLine conn log httpreq
 
 
-      if null ident
-        -- if no ident it is just a message with no further option
-        then do liftIO $ putStrLn $ BS.unpack msg; empty
-        else do
-          -- Context n st <-
-          --   getState <|> do
-          --     let ctx = Context 0 M.empty
-          --     setState ctx
-          --     return ctx
+    connected log  idSession conn closLocal  httpreq = do
 
-          -- let ref = getDBRef $ show n
-          -- liftIO $ atomically $ writeDBRef ref $ Context n st
-
-          execmode <- gets execMode
-          tr ("LOG",execmode)
-          option ident $ BS.unpack msg <> "\nEnter\t\x1b[1;31m" ++ "endpt "<> ident <> "\x1b[0m" <> "\tfor details about this endpoint"
-          setState IsCommand
-          PrevClos dbr _ _ _ <- getData `onNothing` noExState "commandLine minput"
-          let (idc,_) = getSessClosure dbr
-          -- ctx@(Context idc _) <- liftIO $ atomically $ readDBRef ref `onNothing` error "minput: no context"
-          -- setState ctx
-
-          r <-
-            if typeOf response /= typeOf (ofType :: Cloud ())
-              then do
-                inputParse deserialize $ BS.unpack msg
-
-              else return $ unsafeCoerce ()
-          (_,r') <- logged $ return (idc,r)
-          return r'
-
-    connected log {- ctx@(Context idcontext _)-} idSession conn closLocal  httpreq = do
       cdata <- liftIO $ readIORef $ connData conn
 
-      onException $ \( e :: SomeException) -> do -- 
-                  cdata <- liftIO $ readIORef $ connData conn
-                  case cdata of
-                   Just Self -> return ()
-                   Just _ -> do
-                        tr cdata
-                        let tosend = str "{\"error\"," <> str (show $ show e) <> str "}"
-                        sendFragment tosend
-                        -- msend conn $ str "1\r\n]\r\n0\r\n\r\n"
-                        --     l= fromIntegral $ BS.length tosend
-                        -- msend conn $ toHex l <> str "\r\n" <> tosend <> "\r\n0\r\n\r\n"
-                        empty
+      -- onException $ \( e :: SomeException) -> do -- 
+      --                   let tosend = {- header404Chunked <> -} str "{\"error\"," <> str (show $ show e) <> str "}"
+      --                   output tosend
+      --                   msend conn $ str "1\r\n]\r\n0\r\n\r\n"
+      --                   let l= fromIntegral $ BS.length tosend
+      --                   msend conn $ toHex l <> str "\r\n" <> tosend <> "\r\n0\r\n\r\n"
+      --                   empty
 
       -- onException $ \(e :: SomeException) -> do liftIO $ print "THROWT"; throwt e; empty
 
       -- liftIO $ atomically $ writeDBRef (getDBRef $ show idSession) ctx -- store the state, the id will be in the URL
       Endpoints endpts <- getEndpoints
+      ttr ("insert endpoint",ident)
       setRState $ Endpoints  $ M.insert (str ident) httpreq endpts
       ttr ("ADDED ENDPOINT",ident,httpreq, "previous endpoints:", M.keys endpts)
-      (idcontext' :: BC.ByteString, result) <- do
+      result <- do -- (idcontext' :: BC.ByteString, result) <- do
         pstring <- giveParseString
         if not (recover log) || BS.null pstring
           then do
             tr "EN NOTRECOVER"
 
-            -- ty <- liftIO $ readIORef $ connData conn
             case cdata of
               Just Self -> do
-                -- b <- getLog >>= return . recover
-                endpoint  (Just $ BC.pack ident)
-
-                delState IsCommand
+                endpointEtc
                 tr "SELF XXX"
-
-                -- ps <- giveParseString
-                -- log <- getLog
-
-
                 (string "e/" >> string "e/") <|> return "e/"
-                r <- logged $  liftIO $ do error "insuficient parameters 1"; empty -- read the response
-                -- genNewSession
-                return r
+                readResponse
               _ -> do
-
                 checkComposeJSON conn
 
-
-                -- insertar typeof response
                 let tosend = str "{ \"msg\":" <>  msg <> str ", \"req\":" <> encode httpreq <> str "}"
                 let l = fromIntegral $ BS.length tosend
-
                 -- for HTTP 1.0 no chunked encoding:
                 -- msend conn $ str "HTTP/1.0 200 OK\r\nContent-Length: " <> str(show l) <> str "\r\n\r\n" <> tosend
                 -- mclose conn
                 msend conn $ toHex l <> str "\r\n" <> tosend <> "\r\n" -- <>  "\r\n0\r\n\r\n"
                 tr "after msend"
-                -- store the msg and the url and the alias
-                -- se puede simular solo con los datos actuales
-                -- b <- getLog >>= return . recover
-                endpoint  (Just $ BC.pack ident)
-                tr "after receive"
-                delState IsCommand
-                delRState InitSendSequence
-                r <- logged $ error "not enough parameters 2" -- read the response, error if response not logged
-                -- genNewSession
-                return r
+                endpointEtc
+                readResponse
+
           else do
             -- the program has just restarted and recovered and this endpoint is active waiting for requests.
             -- Perhaps a request waked up that endpoint
-            -- b <- getLog >>= return . recover
 
-            endpoint  (Just $ BC.pack ident)
-            delState IsCommand
-            tr ("else",ident)
+            endpointEtc
             -- logged will deserialize the request parameters
-            r <- logged $ error "insuficient parameters 3" -- read the response
-            -- genNewSession
-            return r
-            -- maybe another user from other context continues the program
-      tr ("MINPUT RESULT",idcontext',result)
-      -- mncontext <- recoverContext idcontext'
-      -- when (isJust mncontext) $ setState (fromJust mncontext :: Context)
-      return result `asTypeOf` return (type1 response)
-      where
-        -- recoverContext idcontext' = liftIO $
-        --   atomically $ do
-        --     let con = getDBRef $ show idcontext' :: DBRef Context
-        --     mr <- readDBRef con
-        --     case mr of
-        --       Nothing -> return Nothing
-        --       Just c@(Context n _) ->
-        --         if n == -1
-        --           then return Nothing
-        --           else do
-        --             -- delDBRef con
-        --             return $ Just c
+            readResponse
 
+            
+      tr ("MINPUT RESULT",result)
+      delRState InitSendSequence
+      delState IsCommand
+      return result `asTypeOf` return (type1 response)
+
+      where
+
+      readResponse= logged $ error "minput: insuficient parameters" -- only read from the log. if the log is consumed before generating a valid response, raises the error
+    
+      endpointEtc= do
+        
+
+
+        endpoint (Just $ BC.pack ident)
+
+        mmfdata <- getSessionData
+      
+        when (isJust mmfdata) $ do
+          tr ("mmfdata",mmfdata)
+          let mfdata= fromJust mmfdata
+
+          -- merge the state of the computation that created the encpoint with the state of the coming computation
+          modify $ \s-> s{mfData= merge mfdata $ mfData s}
+            -- endpoint (Just $ BC.pack ident) <|> return()
+
+      merge = M.unionWithKey combine
+      combine t x y=  if t == typeOf (ofType :: Connection) 
+                           || t == typeOf(ofType :: PrevClos) 
+                           || t == typeOf(ofType :: Log) then y else x
 
     (</>) x y = x <> str "/" <> y
     str = BS.pack
@@ -303,36 +300,45 @@ minput ident msg' = onAll $ sandboxData (ofType :: ClosToRespond) $ unCloud  res
         r = error $ show $ typeOf r
 
 
-
 -- | in a sequence of minputs it may be mind bending to have inputs without outpts
 -- since each minput send the response of the previous minput.
 -- It is more natural to invert the minput arguments so that the second argument (the response) becomes the first
 -- and the endpoint string becomes the second so that:
 --
 -- >  name <- minput "name" "enter your name"
--- >  surname <- folloup ("ok " <> name <> " send your surname now")  2surname"
+-- >  surname <- folloup ("ok " <> name <> " send your surname now")  "surname"
 -- >  mooutput $ "great " <> name <> " " <> surname <> " thanks!"
 
-followup :: (Loggable a, ToHTTPReq a,ToJSON b,Typeable b) => b ->String  -> Cloud a
+followup :: (Loggable a, ToHTTPReq a,ToJSON b,Typeable b) => b -> String  -> Cloud a
 followup = flip minput
 
+{-# NOINLINE rpublished#-}
+rpublished= lazy $ newIORef (M.empty :: M.Map String [InputData])
 -- | makes a `minput`  to be discoverable by  `publish` so that the endpoint may be available for other users.
 -- The first parameter is the key where many endpoints may be published. The second parameter is the endpoint (`minput`) itself
 publish k i= publishn [k] i
-publishn :: Loggable a => [String] -> Cloud a -> Cloud a
-publishn keys inp= inp  <|> local (do
-      idata :: InputData  <-  getState <|> error "no inputdata"
-      tr idata
-      adds idata keys
-      empty)
+
+publishn ::  [String] -> Cloud a -> Cloud a
+publishn keys inp= inp  <|> onAllNodes (do
+  ttr ("PUBLISH",keys)
+  idata :: InputData  <-  getState  <|> error "publish: no inputdata"
+  mapM_ (add idata) keys
+  ttr ("publish",idata,keys)
+  empty)
   where
-  adds idata keys= mapM_ (add idata) keys
-  add idata k=  liftIO $ withResource (InputDatas (k :: String) undefined) $ \case
-                    Nothing                  -> InputDatas k [idata]
-                    Just(InputDatas k lcks) -> InputDatas k $ idata:lcks
+  add idata k= liftIO $ do
+    atomicModifyIORef rpublished $ \map -> 
+        ( let idatas= fromMaybe [idata] (M.lookup k map) in M.insert k idatas map,())
+    -- inputdatas <- ( liftIO (readIORef rpublished) >>= return . M.lookup k) `onNothing` return []
+    -- ttr ("PUBLISHED",inputdatas)
 
 
-        
+
+published ::  String -> TransIO ()
+published k=  do
+    inputdatas <- ( liftIO (readIORef rpublished) >>= return . M.lookup k) `onNothing` return []
+    ttr ("PUBLISHED", inputdatas)
+    foldr ((<>) . (\(InputData id msg url ) ->  sendOption msg url)) mempty inputdatas
 
 -- | set a pending endpoint for a key. if the endpoint is executed, it dissapears from the list for this key. 
 -- For example an userid or a wallet may be the key. 
@@ -352,57 +358,50 @@ publishn keys inp= inp  <|> local (do
 
 
 -- | send to the cllient all the endpoints published by `publish` with the given key
-published1 :: Loggable a => String -> TransIO a
-published1 k=  do
-    InputDatas _ inputdatas <-  liftIO $ getResource (InputDatas k undefined)  `onNothing` return (InputDatas k []) -- getRState
-    tr ("PUBLISHED", inputdatas)
+-- published1 :: Loggable a => String -> TransIO a
+-- published1 k=  do
+--     InputDatas _ inputdatas <- getIndexRData k `onNothing` return (InputDatas k [])--  liftIO $ getResource (InputDatas k undefined)  `onNothing` return (InputDatas k []) -- getRState
+--     tr ("PUBLISHED", inputdatas)
 
-    mcommand <- getData :: TransIO (Maybe IsCommand)
-    if isNothing mcommand
-      then do foldr ((<|>) . (\(InputData id msg url) ->  sendOption msg url)) empty inputdatas; empty
-      else do foldr ((<|>) . (\(InputData id msg url) ->  optionl id  (BS.unpack msg <> "\t\"endpt " <> id <> "\" for endpoint details")  url)) empty inputdatas
-    empty
-    where
-    -- for console interaction
-    optionl id msg url = do
-      Endpoints endpts <- getEndpoints
-      setRState $ Endpoints $ M.insert (str id) url endpts -- ((str id, url): endpts)
+--     mcommand <- getData :: TransIO (Maybe IsCommand)
+--     if isNothing mcommand
+--       then do foldr ((<|>) . (\(InputData id msg url) ->  sendOption msg url)) empty inputdatas; empty
+--       else do foldr ((<|>) . (\(InputData id msg url) ->  optionl id  (BS.unpack msg <> "\t\"endpt " <> id <> "\" for endpoint details")  url)) empty inputdatas
+--     empty
+--     where
+--     -- for console interaction
+--     optionl id msg url = do
+--       Endpoints endpts <- getEndpoints
+--       setRState $ Endpoints $ M.insert (str id) url endpts -- ((str id, url): endpts)
 
-      option id msg
-      pars' <- input (const True) "enter the parameters > "
-      tr ("PARS'",pars')
-      -- substitute spaces by '/'
-      pars <- withParseString (BS.pack pars') $ chainMany mappend (tTakeWhile' (/= ' ') <> ((tChar ' ' >>tTakeWhile' (==' ') >> "/") <|> mempty))
-      tr ("PARS",pars)
-      let p = requrl url
-      (cl,s,cl',s',ids) <- withParseString p $  do
-           string "http://" ; tTakeWhile' (/='/')
-          --  (,,,,) <$> deserialize <*> deserialize <*> deserialize <*> deserialize <*> deserialize 
-           (,,,,) <$> tTakeWhile' (/='/') <*> tTakeWhile' (/='/')  <*> tTakeWhile' (/='/') <*> tTakeWhile' (/='/') <*> tTakeWhile' (/='/')
-      tr ("CL S",cl,s,cl',s',ids)
-      Transient $ processMessage (SessionId $ BS.toStrict s) 
-                                 (ClosureId $ BS.toStrict cl)  
-                                 (SessionId $ BS.toStrict s') 
-                                 (ClosureId $ BS.toStrict cl') 
-                                 (Right $ [[lazyByteString $ ids <> "/" <> pars]]) False
-      return ()
+--       option id msg
+--       pars' <- input (const True) "enter the parameters > "
+--       tr ("PARS'",pars')
+--       -- substitute spaces by '/'
+--       pars <- withParseString (BS.pack pars') $ chainMany mappend (tTakeWhile' (/= ' ') <> ((tChar ' ' >>tTakeWhile' (==' ') >> "/") <|> mempty))
+--       tr ("PARS",pars)
+--       let p = requrl url
+--       (cl,s,cl',s',ids) <- withParseString p $  do
+--            string "http://" ; tTakeWhile' (/='/')
+--           --  (,,,,) <$> deserialize <*> deserialize <*> deserialize <*> deserialize <*> deserialize 
+--            (,,,,) <$> tTakeWhile' (/='/') <*> tTakeWhile' (/='/')  <*> tTakeWhile' (/='/') <*> tTakeWhile' (/='/') <*> tTakeWhile' (/='/')
+--       tr ("CL S",cl,s,cl',s',ids)
+--       Transient $ processMessage (SessionId $ BS.toStrict s) 
+--                                  (ClosureId $ BS.toStrict cl)  
+--                                  (SessionId $ BS.toStrict s') 
+--                                  (ClosureId $ BS.toStrict cl') 
+--                                  (Right $ [[lazyByteString $ ids <> "/" <> pars]]) False
+--       return ()
 
-published ::  String -> TransIO ()
-published k=  do
-  -- mcommand <- getData :: TransIO (Maybe IsCommand)
 
-  -- do -- when (isNothing mcommand) $ do
-    InputDatas _ inputdatas <-  liftIO $ getResource (InputDatas k undefined)  `onNothing` return (InputDatas k []) -- getRState
-    tr ("PUBLISHED", inputdatas)
-    foldr ((<>) . (\(InputData id msg url) ->  sendOption msg url)) mempty inputdatas
-    
-    
+
+
 getEndpoints= getRState <|> return (Endpoints M.empty) -- |error "NO ENDPOINT state: use optionEndpoints" -- return (Endpoints M.empty)
 
 -- | show the URL that may be called to access that functionality within a program 
 showURL= getURL >>= liftIO . print
 
--- | Get the URL string for the current computation location
+-- | Get the URL string for the current point in the computation
 getURL :: TransIO String
 getURL = do
   mprev <- getState
@@ -413,7 +412,7 @@ getURL = do
       case mprevClos of
         Just prevClos -> return (localSession prevClos, localClos prevClos)
         Nothing -> return (sessionId0,closureId0)
-  
+
   log <- getLog  -- get path
   n <- getMyNode
   let logBytes = toLazyByteString (partLog log)
@@ -429,7 +428,7 @@ getURL = do
     , "/"
     , BC.unpack (BL.toStrict logBytes)
     ]
- 
+
  -- | extract the URL of a data object within the computation.
  -- if the log has been saved and the computation completed, the computation will be restored to give his value
 -- cloudRef x= do
@@ -439,21 +438,19 @@ getURL = do
 --   session <- local getSession
 --   guard $ session== prevsession
 --   return r
-  
-  
 
 
 
 
-{-
-give URL for a new session or the current session?
-  new ever? current session are not given by the console
--}
+
+
+
 -- | menu to show info about the endpoints available
 optionEndpoints :: Loggable a => Cloud a
 optionEndpoints = do
   -- Endpoints endpts <- getEndpoints
   -- guard(not $ null endpts)
+    ttr ("optionEndpoints")
     onAllNodes $ newRState $ Endpoints M.empty
     local $ do
       option ("endpt" :: String) "info about a endpoint"
@@ -461,7 +458,7 @@ optionEndpoints = do
 
       liftIO $ do putStr "endpoints available: "; print $ M.keys endpts
       ident:: BS.ByteString <- input' "" (const True) "enter the endpoint for which you want to know the interface"
-
+      ttr ("endpt ident",ident)
       let murl = M.lookup ident  endpts
       case murl of
         Nothing ->  liftIO $ do putStr  "No such endpoint: " ; print ident
@@ -470,7 +467,7 @@ optionEndpoints = do
     where
     printURL req= liftIO $ putStrLn $ "\n" <> BS.unpack (("curl " <>
                       (if reqtype req== GET then mempty else ("-H 'content-type: application/json' -XPOST -d " <>
-                        "\"" <> encode(reqbody req)) <> "\" ")) <> requrl req)
+                        "\"" <> encode (reqbody req)) <> "\" ")) <> requrl req)
 
 -- | add the chunked fragments of the beguinning '[', the comma separator and the end ']' of the JSON packet for a set of `minput` statements
 -- that are sent in parallel (for example, with the alterenative operator)
@@ -483,78 +480,156 @@ checkComposeJSON conn = do
       onWaitThreads $ const $ msend conn $ str "1\r\n]\r\n0\r\n\r\n"
       setRState InitSendSequence
 
-      -- onException $ \(e :: SomeException) -> do liftIO $ print "THROWT"; throwt e
-
       sendCookies conn
-      msend conn "\r\n1\r\n[\r\n"
+      msend conn  {- header200Chunked <> -} "\r\n1\r\n[\r\n"
       delState $ Cookies []
 
     Just InitSendSequence -> msend conn $ str "2\r\n\n,\r\n"
   -- to protect the state  upto now  if an exception arrives in order to incorporate exception data to the JSON message sent
-
-str = BS.pack
-
-----
-
-newtype Cookies= Cookies  [(BS.ByteString,BS.ByteString)]
-
-getCookies :: TransIO Cookies
-getCookies= getState <|> return (Cookies [])
-
-sendCookies :: Connection -> TransIO ()
-sendCookies conn= do
+  where
+  sendCookies :: Connection -> TransIO ()
+  sendCookies conn= do
       cookies <- getCookiesStr
+      ttr ("COOKIES",cookies)
       when (not $ BS.null cookies) $ msend conn cookies
 
-  where
+  getCookies= getState <|> return (Cookies [])
+
+
   getCookiesStr= do
     Cookies cs <- getCookies
     setState $ Cookies []
     return $  BS.concat (map (\(n,v)->  "Set-Cookie: " <> n <>"="<> v <> "\r\n" ) cs)
 
--- | set a cookie in the browser.
--- Example
+str = BS.pack
 
--- > setCookie "<cookie-name>" "<cookie-value>; Domain=<domain-value>; Secure; HttpOnly"
--- 
--- See https://developer.mozilla.org/es/docs/Web/HTTP/Headers/Set-Cookie for cookie options
-setCookie :: BS.ByteString -> BS.ByteString -> TransIO ()
-setCookie name valueandparams= do
-  Cookies cs <- getCookies
-  setState $ Cookies $ (name,valueandparams):cs
+----
 
-getCookie :: BS.ByteString -> TransIO (Maybe BS.ByteString)
-getCookie name= do
-  HTTPHeaders _ headers :: HTTPHeaders <- getState <|>  return (HTTPHeaders undefined [])
-  liftIO $ print headers
-  let receivedCookie= lookup "Cookie" headers
 
-  liftIO $ print ("cookie", receivedCookie)
-  case receivedCookie of
-    Just str->  (withParseString (BS.fromStrict str) search) <|> return Nothing
-    Nothing -> return Nothing
-    where
-    search= do
-       tr "search cookie"
-       d <- isDone
-       if d then return Nothing else do
-                dropSpaces
-                name' <- tTakeWhile' (/='=')
-                val <- tTakeWhile' (/=';')
-                liftIO $ print (name',val)
-                if name'== name then return $ Just val else search
+
+
+-- -- | set a cookie in the browser.
+-- -- Example
+
+-- -- > setCookie "<cookie-name>" "<cookie-value>; Domain=<domain-value>; Secure; HttpOnly"
+-- -- 
+-- -- See https://developer.mozilla.org/es/docs/Web/HTTP/Headers/Set-Cookie for cookie options
+-- setCookie :: BS.ByteString -> BS.ByteString -> TransIO ()
+-- setCookie name valueandparams= do
+--   Cookies cs <- getCookies
+--   setState $ Cookies $ (name,valueandparams):cs
+--   where
+--   getCookies :: TransIO Cookies
+--   getCookies= getState <|> return (Cookies [])
+
+
+-- getCookie :: BS.ByteString -> TransIO (Maybe BC.ByteString)
+-- getCookie name= do
+--   HTTPHeaders _ headers :: HTTPHeaders <- getState <|>  return (HTTPHeaders undefined [])
+--   ttr ("getCookie HTTP HEADERS",headers)
+--   let receivedCookie= lookup "Cookie" headers
+
+--   liftIO $ print ("cookie", receivedCookie)
+--   case receivedCookie of
+--     Just str->  (withParseString (BS.fromStrict str) search) <|> return Nothing
+--     Nothing -> return Nothing
+--     where
+--     search= do
+--        tr "search cookie"
+--        d <- isDone
+--        if d then return Nothing else do
+--                 dropSpaces
+--                 name' <- tTakeWhile' (/='=')
+--                 val <- tTakeWhile' (/=';')
+--                 liftIO $ print (name',val)
+--                 if name'== name then return $ Just $ BS.toStrict val else search
+
+--  cookies for pointers to state data with timeouts. Used to persist the state of the current computation
+-- when jump to  publish/published endpoints using HTTP(s). Mainly the state variables
+
 {-
-cookies  sesion de programaa - sesion remota
+sessionid  stableptr  
+  
 -}
+data SessionEntry = Entry { entryData :: StablePtr PolyMap, created :: UTCTime } deriving Show
+
+instance Show (StablePtr a) where
+  show x= show $ ptrToInt x
+
+--
+
+{-# NOINLINE storeSessionData#-}
+storeSessionData = unsafePerformIO  $ newMVar (M.empty :: M.Map BC.ByteString SessionEntry)
+
+ptrToInt :: StablePtr a -> Int
+ptrToInt sp = fromIntegral (ptrToIntPtr (castStablePtrToPtr sp))
+
+intToPtr :: Int -> StablePtr a
+intToPtr i = castPtrToStablePtr (intPtrToPtr (fromIntegral i))
+
+timeoutOk :: UTCTime -> UTCTime -> Bool
+timeoutOk now created = diffUTCTime now created < 3600  -- 1h timeout
+
+setSessionData ::  PolyMap -> TransIO ()
+setSessionData val = do
+  SessionId sessionId <- (getState >>= return . fst . getSessClosure . prevDBRef) <|> return  sessionId0
+  ttr ("setSessionData",sessionId)
+  liftIO $ do
+    now <- getCurrentTime
+    sp <- newStablePtr $ M.delete (typeOf (ofType :: HTTPHeaders)) val
+    liftIO $ modifyMVar_ storeSessionData $ \v -> do
+      let mreg= M.lookup sessionId v
+      v' <- case mreg of
+             Just (Entry sp' _)  -> do
+              freeStablePtr sp'
+              return $ M.delete sessionId v
+             Nothing -> return v
+      ttr ("sessionId",sessionId)
+      return $ M.insert sessionId (Entry sp now)  v'
+
+
+getSessionData ::  TransIO (Maybe PolyMap)
+getSessionData = do
+  now <- liftIO $ getCurrentTime
+  cleanup  now  -- erase olds
+  midxStr <- getCookie "state"
+  tr ("midxStr",midxStr)
+  case midxStr of
+    Nothing -> return Nothing
+    Just key -> liftIO $  modifyMVar storeSessionData $ \v -> do
+        ttr ("LENGHT V",M.size v,"KEY",key,M.keys v)
+        case M.lookup key v of
+          Just (Entry sp _) -> do
+            ttr ("sp for",key)
+            val <- deRefStablePtr sp
+            freeStablePtr sp
+            return (M.delete key  v, Just val)
+          Nothing ->  return (v, Nothing)
+  where
+  cleanup :: MonadIO m =>  UTCTime -> m ()
+  cleanup  now = liftIO $ modifyMVar_ storeSessionData $ return . (M.filter (timeoutOk now . created))
+
+--------------------------------------------------------
+
+
 sendOption :: BS.ByteString -> HTTPReq -> TransIO ()
 sendOption msg req = do
-  PrevClos dbr _ _ _ <- getData `onNothing` noExState "sendOption"
+  -- to make computation state to pass across jumps after the option is clicked
+  mfdata <- gets mfData
+  setSessionData mfdata
+
+  SessionId key <- (getState >>= return . fst . getSessClosure . prevDBRef) <|> return  sessionId0
+
+  mfdatakey <- gets mfData
+
+  PrevClos dbr _ _ _ _ :: PrevClos <- getData `onNothing` noExState "sendOption"
   let (SessionId id',_) = getSessClosure dbr
       id= BS.fromStrict id'
-  url' <- withParseString (requrl req) $ short id <|> long id
+  let url'= requrl req 
   sendFragment $ "{ \"msg\":\"" <>  msg <> "\", \"req\":" <> encode (req {requrl = url'}) <> "}"
 
   where
+
   long id= do
     s <- tTakeUntilToken "/T"
     ses <-tTakeUntilToken "/"
@@ -572,7 +647,7 @@ sendOption msg req = do
 
 -- | append JSON data to the response.
 output :: ToJSON a => a -> TransIO ()
-output= sendFragment . encode
+output = sendFragment . encode
 
 -- | It is  used as the last response in a flow.
 -- it is used to stream to the client since the response is sent using chunked encoding and
@@ -599,12 +674,13 @@ sendFragment tosend = do
   conn <- getState
   -- let tosend = tostr "{ \"msg\":" <>  toSend <> str "}"
   let l = fromIntegral $ BS.length tosend
+  ttr ("TOSEND",tosend,l)
 
                 -- for HTTP 1.0 no chunked encoding:
                 -- msend conn $ str "HTTP/1.0 200 OK\r\nContent-Length: " <> str(show l) <> str "\r\n\r\n" <> tosend
                 -- mclose conn
 
-                
+
   checkComposeJSON conn
   msend conn $ toHex l <> "\r\n" <> tosend <> "\r\n"
 
@@ -616,9 +692,9 @@ class  Typeable a => ToHTTPReq a where
       v <- varunique $ lowertype x
       ttr ("varunique",v)
       return $ mempty{requrl= "/" <> v}
-    where
-    lowertype x = "$" <> BS.pack (map toLower (typeOfR x))
-    typeOfR x = show $ typeOf x
+
+lowertype x = "$" <> BS.pack (map toLower (typeOfR x))
+  where typeOfR x = show $ typeOf x
 
 
 
@@ -627,11 +703,16 @@ class  Typeable a => ToHTTPReq a where
 instance ToHTTPReq () where
   toHTTPReq _ = return $ mempty {requrl = "/u"}
 
-instance ToHTTPReq String where
-  toHTTPReq _ = return $ mempty {requrl = "/$string"}
+instance {-# OVERLAPPING #-}ToHTTPReq String  where
+  toHTTPReq _ = do
+    v <- varunique  "$string"
+    return $ mempty{requrl= "/" <> v}
 
-instance ToHTTPReq BS.ByteString where
-  toHTTPReq _ = return $ mempty {requrl = "/$string"}
+instance ToHTTPReq BS.ByteString  where
+  toHTTPReq x = do
+    v <- varunique  "$string"
+    return $ mempty{requrl= "/" <> v}
+
 
 instance ToHTTPReq Int
 
@@ -645,42 +726,43 @@ instance ToHTTPReq a => ToHTTPReq [a] where
     f= undefined
 
 
-instance  (Default a, ToJSON a, Typeable a
-          ,Default b, ToJSON b, Typeable b) => ToHTTPReq (POSTData(a,b)) where
-    toHTTPReq (POSTData x)=  addbody "["   <> toHTTPReq (POSTData (fst x)) <>
-                              addbody ", " <> toHTTPReq (POSTData (snd x)) <>
-                              addbody "]"
-      where
-      addbody s= return mempty{reqbody=s}
+-- instance  {-# OVERLAPPING #-} 
+--           (Default a, ToJSON a, Typeable a
+--           ,Default b, ToJSON b, Typeable b) => ToHTTPReq (POSTData(a,b)) where
+--     toHTTPReq (POSTData x)=  addbody "["   <> toHTTPReq (POSTData (fst x)) <>
+--                               addbody ", " <> toHTTPReq (POSTData (snd x)) <>
+--                               addbody "]"
+--       where
+--       addbody s= return mempty{reqbody=s}
 
-instance  (Default a, ToJSON a, Typeable a
-          ,Default b, ToJSON b, Typeable b
-          ,Default c, ToJSON c, Typeable c) => ToHTTPReq (POSTData(a,b,c)) where
-    toHTTPReq (POSTData x)=  addbody "["   <> toHTTPReq (POSTData (fst x)) <>
-                              addbody ", " <> toHTTPReq (POSTData (snd x)) <>
-                              addbody ", " <> toHTTPReq (POSTData (trd x)) <>
-                              addbody "]"
-      where
-      fst (x,_,_)= x
-      snd (_,x,_)= x
-      trd (_,_,x)= x
-      addbody s= return mempty{reqbody=s}
+-- instance  (Default a, ToJSON a, Typeable a
+--           ,Default b, ToJSON b, Typeable b
+--           ,Default c, ToJSON c, Typeable c) => ToHTTPReq (POSTData(a,b,c)) where
+--     toHTTPReq (POSTData x)=  addbody "["   <> toHTTPReq (POSTData (fst x)) <>
+--                               addbody ", " <> toHTTPReq (POSTData (snd x)) <>
+--                               addbody ", " <> toHTTPReq (POSTData (trd x)) <>
+--                               addbody "]"
+--       where
+--       fst (x,_,_)= x
+--       snd (_,x,_)= x
+--       trd (_,_,x)= x
+--       addbody s= return mempty{reqbody=s}
 
-instance  (Default a, ToJSON a, Typeable a
-          ,Default b, ToJSON b, Typeable b
-          ,Default c, ToJSON c, Typeable c
-          ,Default d, ToJSON d, Typeable d) => ToHTTPReq (POSTData(a,b,c,d)) where
-    toHTTPReq (POSTData x)=  addbody "["   <> toHTTPReq (POSTData (fst x)) <>
-                              addbody ", " <> toHTTPReq (POSTData (snd x)) <>
-                              addbody ", " <> toHTTPReq (POSTData (trd x)) <>
-                              addbody ", " <> toHTTPReq (POSTData (frt x)) <>
-                              addbody "]"
-      where
-      fst (x,_,_,_)= x
-      snd (_,x,_,_)= x
-      trd (_,_,x,_)= x
-      frt (_,_,_,x)= x
-      addbody s= return mempty{reqbody=s}
+-- instance  (Default a, ToJSON a, Typeable a
+--           ,Default b, ToJSON b, Typeable b
+--           ,Default c, ToJSON c, Typeable c
+--           ,Default d, ToJSON d, Typeable d) => ToHTTPReq (POSTData(a,b,c,d)) where
+--     toHTTPReq (POSTData x)=  addbody "["   <> toHTTPReq (POSTData (fst x)) <>
+--                               addbody ", " <> toHTTPReq (POSTData (snd x)) <>
+--                               addbody ", " <> toHTTPReq (POSTData (trd x)) <>
+--                               addbody ", " <> toHTTPReq (POSTData (frt x)) <>
+--                               addbody "]"
+--       where
+--       fst (x,_,_,_)= x
+--       snd (_,x,_,_)= x
+--       trd (_,_,x,_)= x
+--       frt (_,_,_,x)= x
+--       addbody s= return mempty{reqbody=s}
 
 instance (ToHTTPReq a, ToHTTPReq b) => ToHTTPReq (a, b) where
    toHTTPReq x = toHTTPReq (fst x) <> toHTTPReq (snd x)
@@ -701,7 +783,7 @@ instance (ToHTTPReq a, ToHTTPReq b,ToHTTPReq c,ToHTTPReq d) => ToHTTPReq(a,b,c,d
       trd (_,_,x,_)= x
       fr  (_,_,_,x)= x
 
-newtype POSTData a = POSTData a deriving (ToJSON, FromJSON, Typeable)  -- POSTData is recovered from POST HTTP data
+newtype POSTData a = POSTData a deriving (ToJSON, FromJSON, Typeable, Show, Read)  -- POSTData is recovered from POST HTTP data
 
 instance (Loggable a, ToJSON a, FromJSON a) => Loggable (POSTData a)  where
   serialize (POSTData x)=  serializeToJSON x
@@ -904,7 +986,7 @@ rawHTTP node restmsg =res
     -- ("PUTMVAR",nodeHost node)
     liftIO $ putMVar blocked $ Just t
 
-    if (isJust mcon) then setData (fromJust mcon) else delData c
+    if isJust mcon then setData (fromJust mcon) else delData c
 
   isTLS c = liftIO $ do
       cdata <- readIORef $ connData c
