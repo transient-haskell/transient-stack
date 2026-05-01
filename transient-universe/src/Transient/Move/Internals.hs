@@ -64,7 +64,6 @@ import Data.Hashable
 import Network.URI
 --import qualified Data.IP                              as IP
 import qualified Network.Socket                         as NS
--- import qualified Network.BSD                            as BSD
 import qualified Network.WebSockets                     as NWS -- S(RequestHead(..))
 
 import qualified Network.WebSockets.Connection          as WS
@@ -443,6 +442,7 @@ wormholeRelay node comp = do
 -- | wormhole without searching for relay nodes.
 wormhole :: Loggable a => Node -> Cloud a -> Cloud a
 wormhole node (Cloud comp) =  local $  do
+    ttr ("WORMHOLE",node)
     moldconn <- getData :: TransIO (Maybe Connection)
     -- TODO evitar que se generen varios wormholes
     -- if this wormhole exist, usarlo
@@ -483,7 +483,7 @@ wormhole node (Cloud comp) =  local $  do
                   return (prevprevclos :: PrevClos,idConn conn,r)
             -- 
             -- let PrevClos rprev _ hasTeleport = prevprevclos
-            when (preservePath prevprevclos) $ do setState prevprevclos; void $ setLastClosureForConnection idconn $ dbref prevprevclos
+            when (preservePath prevprevclos) $ do setState prevprevclos; void $ setLastClosureForConnection idconn $ prevDBRef prevprevclos
             -- if preservePath prevprevclos
             --   then do setState prevprevclos; void $ setLastClosureForConnection idconn $ dbref prevprevclos
             --   else setLastClosureForConnection idconn dbClos0
@@ -535,9 +535,30 @@ syncStream proc = do
     err = error "syncStream: no connection data"
 
 
+-- | generates a new session id.
+newSession :: TransIO BC.ByteString
+newSession =  do
+    newSession <- genSessionId
+    setSession newSession
+    return newSession
+   
+genSessionId =  BC.pack <$> replicateM 5 (randomRIO ('a', 'z'))
 
+setSession :: BC.ByteString -> TransIO ()
+setSession s= do
+    ttr ("NEW SESSION", s)
+    -- s <- logged $ return s'
+    modifyData' (\prev@(PrevClos p mf l i c  :: PrevClos) -> 
+                  case mf of
+                    Just _  -> prev
+                    Nothing -> PrevClos p  (Just $ SessionId s) l i c :: PrevClos)
+                (error "genNewSession: no Previous closure")
+    return()
 
-
+getSession :: TransIO SessionId
+getSession= do
+ PrevClos dbprevclos mn _ isapp iscollect  :: PrevClos <- getData `onNothing` error "teleport: please use `initNode to perform distrubuted computing"
+ return $ if isJust mn then fromJust mn else fst $ getSessClosure dbprevclos
 
 {-|
   The 'teleport' function is an action in the 'Cloud' monad that
@@ -568,19 +589,18 @@ teleport =  do
   tr ("connection",idConn,"teleport REMOTE NODE", calling conn, fmap  nodePort $ unsafePerformIO $ readIORef $ remoteNode conn, idConn  )
   case lazy $ readIORef contype of
      Just Self -> return ()
-     _ -> onAll $ endpoint Nothing
+     _ -> onAll $ endpoint Nothing  <|> return()
   tr ("after endpoint")
 
-
   local $ do
+    log <- getLog
 
     -- executed in run mode and in recover mode when "e" is in the log
 
-    log <- getLog
     -- notify to the calling teleport when no remaining threads are running in the remote node
-    when (recover log && not (calling conn)) $ setNotifyFinishToCallingNode conn
-
-    when (not $ recover log) $ do
+    -- when (recover log && not (calling conn)) $ setNotifyFinishToCallingNode conn
+    ttr ("teleport flags",case partLog log of mempty ->False; _ -> True , not $ recover log)
+    when ( (not $ recover log)) $ do
 
         -- executed in run mode only
         ty <- liftIO $ readIORef contype
@@ -608,20 +628,22 @@ teleport =  do
                 <|> do
                   tr ("getting closure for idConn",idConn)
                   ref <- getLastClosureForConnection idConn
-                  tr ("after getClosureForConnection",ref)   --new request to a node already called before
+                  tr ("after getClosureForConnection",ref)   --new request to a node already called beforeSMore
                   return ref
                 <|> do
                   tr "return 0 0"
                   return dbClos0
 
-            PrevClos prevClosDBRef _ _ _<- getData `onNothing` noExState "teleport" -- return (PrevClos  0 "0" False)
+            PrevClos prevClosDBRef _ _ _ _ :: PrevClos<- getData `onNothing` noExState "teleport" 
             -- updateLastClosureForConnection idConn prevClosDBRef
             tr ("PREVCLOS",prevClosDBRef)
             -- calcula el log entre la ultima closure almacenada localmente (prevclos) y el punto que el nodo ya ha recibido (closremote) 
             prevlog <- noTrans $ getClosureLogFrom prevClosDBRef remoteClosDBRef
             tr ("PARTLOG", partLog log)
-            let tosend =  prevlog <> [[partLog log]]
-
+            -- -- fix for when threre are many segments, not a single one
+            -- let tosend = let s=  head $ head $ prevlog  --  <> [[partLog log]]  -- <- el segundo terminino es siempre "e/" que no aporta nada y da problemas
+            --              in [[s <>"e/"]]
+            let tosend= prevlog         
             -- let closLocal = BC.pack $ show $ hashClosure log
 
 
@@ -633,8 +655,9 @@ teleport =  do
             let (idSession,clos) = getSessClosure prevClosDBRef
 
             -- onFinish $ const $ tr "TELEPORT ONFINISH"
-
-            msend conn $ toLazyByteString $ serialize $ SMore $ ClosureData closRemote sessRemote clos idSession tosend
+            let msg=  SMore $ ClosureData closRemote sessRemote clos idSession tosend
+            ttr ("msg to send",msg)
+            msend conn $ toLazyByteString $ serialize msg
 
             -- subsequent paquets sent to this remote closure will address this closure directly since it has been created
             -- updateLastClosureForConnection idConn prevClosDBRef
@@ -648,7 +671,7 @@ setNotifyFinishToCallingNode :: Connection -> TransIO ()
 setNotifyFinishToCallingNode conn = do
     -- check if it is my node TODO
     mctr <- getData
-    PrevClos prevClosDBRef _ _ _<- getData `onNothing` noExState "teleport" -- return (PrevClos  0 "0" False)
+    PrevClos prevClosDBRef _ _ _ _ :: PrevClos <- getData `onNothing` noExState "teleport" -- return (PrevClos  0 "0" False)
 
     case mctr of
       Nothing -> tr "NO CLOS TO RESPOND"
@@ -787,11 +810,15 @@ sendRawRecover con r =
             r <- mconnect' node
             return r
       Just _ -> return con
-    sendRaw con' r
-    `whileException` \(SomeException e) ->do
-      liftIO $ print e; empty -- liftIO $ writeIORef (connData con) Nothing
+    sendRaw con' r  
+   `whileException` \(SomeException e) -> do
+              liftIO $ writeIORef (connData con) Nothing
+              sendRawRecover con r
+
 
 sendRaw con r = do
+  ttr ("SENDRAW---------->", fmap nodePort $ unsafePerformIO $ readIORef $ remoteNode con, idConn con,  r)
+
   let blocked = isBlocked con
   c <- liftIO $ readIORef $ connData con
   liftIO $
@@ -803,9 +830,13 @@ sendRaw con r = do
           Just (Node2Node _ sock _) ->do
             -- tr "NODE2NODE"
             SBS.sendMany sock (BL.toChunks r)
+          Just (HTTP2Node _ sock _ _) ->
+            SBS.sendMany sock (BL.toChunks r)
           Just (TLSNode2Node ctx) ->
             sendTLSData ctx r
-          _ -> do
+          Just (HTTPS2Node ctx) ->
+            sendTLSData ctx r
+          _ ->  do
               n <-readIORef $ remoteNode con
               error $ "No connection stablished with " ++ show n
         TOD time _ <- getClockTime
@@ -884,7 +915,9 @@ msend con bs = do
             tr "HTTP2NODE SEND"
             SBSL.sendAll sock $ bs -- <> "\r\n"
             TOD time _ <- getClockTime
-            return $ Just time) `catch` \(e ::SomeException) -> return ()
+            return $ Just time) `catch` \(e ::SomeException) -> do
+              tr ("HTTP2NODE SEND FAILED", show e, bs)
+              return ()
 
       Just (HTTPS2Node ctx) -> liftIO $ modifyMVar_ blocked (const $ do
             tr "HTTPS2NODE SEND"
@@ -1168,7 +1201,7 @@ parallelReadHandler conn = do
 
       abduce
       setParseString str
-      deserialize
+      deserialize <|> (error $ show ("mread: BAD MESSAGE: error deserializing",  str))
 
     nomore = do
       s <- getParseBuffer
@@ -1906,7 +1939,7 @@ listenNew port conn' = do
   -- onException $ \(e :: SomeException) -> empty -- do get >>= liftIO . killBranch; empty
 
   (sock, addr) <- waitEvents $ NS.accept sock
-
+  ttr ("NEW EVENT",addr)
   onException $ \e ->
     if  isResourceVanishedError e
        then do liftIO $ NS.close sock; empty
@@ -1981,9 +2014,10 @@ listenNew port conn' = do
 
       -- all requests are parsed here
       
-      httpHeaders@(HTTPHeaders (first@(method,uri, vers)) headers) <- cutBody firstLine headers  <|>  
-                        (parMany  cutHTTPRequest)
-      tr ("NEW REQUEST",httpHeaders)
+      httpHeaders@(HTTPHeaders (first@(method,uri, vers)) headers) <- cutBody firstLine headers  <|>   (parMany  cutHTTPRequest)
+      ttr ("NEW REQUEST",httpHeaders)
+      setState httpHeaders
+      
 
       let uri' = BC.tail $ uriPath uri -- !> uriPath uri
       -- tr ("uri'", uri')
@@ -2001,7 +2035,7 @@ listenNew port conn' = do
             else do
               len <-
                 ( read <$> BC.unpack
-                    <$> (Transient $ return (lookup "Content-Length" headers))
+                    <$> (transient $ return (lookup "Content-Length" headers))
                   )
                   <|> return 0
               log' <- case lookup "Content-Type" headers of
@@ -2024,12 +2058,23 @@ listenNew port conn' = do
               --  let build= toPath log'
               setParseString $ toLazyByteString log'
               ttr "CLOSUREDATA"
-              return $ SMore $ ClosureData closureId0 sessionId0 closureId0 sessionId0 [[log']] 
+              return $ SMore $ ClosureData closureId0 sessionId0 closureId0 sessionId0 $ [Fragment log'] -- [[log']] 
 
         ("relay", _) -> proxy sock method vers uri'
 
         (h, rest) -> do
-          if BC.null rest || h == "file"
+          if h == "start"
+          then do
+              name <- liftIO $ readIORef firstEndpointName
+              let nameBS = BS.pack name
+                  body   = "[{\"msg\":\"" <> nameBS <> "\",\"req\":{\"reqtype\":\"GET\",\"requrl\":\"/"
+                           <> nameBS <> "/u\",\"reqheaders\":\"\",\"reqbody\":null}}]"
+              conn <- getSData <|> error "start: no connection"
+              sendRawRecover conn $
+                "HTTP/1.0 200 OK\r\nContent-Type: application/json\r\nContent-Length: "
+                <> BS.pack (show (BS.length body)) <> "\r\n\r\n" <> body
+              empty
+          else if BC.null h || h == "file" || h =="index.html"
             then do
               --headers <- getHeaders
               maybeSetHost headers
@@ -2096,7 +2141,7 @@ listenNew port conn' = do
                   -- integer
                   deserialize
                     -- a void message is sent to the application signaling the beginning of a connection
-                    <|> (return $ SMore (ClosureData closureId0 sessionId0 closureId0 sessionId0 [[exec <> lazyByteString s]]))
+                    <|> (return $ SMore (ClosureData closureId0 sessionId0 closureId0 sessionId0 [Fragment $ exec <> lazyByteString s]))
             else do
               -- let uri'' = if not $ isNumber $ BS.head uri'
               --               then
@@ -2109,11 +2154,13 @@ listenNew port conn' = do
               setParseString $ uriparsed  <> body
 
               -- we are receiving, not sending. In this case remoteClosure is my closure addressed by the request
-              remoteClosure <- BL.toStrict <$> tTakeWhile' (/= '/')
+              tr ("URI PARSED", uriparsed)
+              remoteClosure <- BL.toStrict <$> tTakeWhile' (\c -> c /= '/' && c /= '\n') 
+              ttr ("REMOTECLOSURE",remoteClosure)
 
               -- for different formats of URLs
               (s1 :: BC.ByteString,thisClosure :: BC.ByteString, s2 :: BC.ByteString ) 
-                   <- try allParClosParams <|> shortWithIdParam <|> shortClosParams body
+                   <- try allParClosParams <|> shortWithIdParam <|> shortClosParams body <|> noparams remoteClosure <|> return("0","0","0")
 
 
 
@@ -2123,8 +2170,8 @@ listenNew port conn' = do
               conn <- getSData
               liftIO $
                 atomicModifyIORef' (connData conn) $ \cdata -> case cdata of
-                  Just (Node2Node port sock addr) -> (Just $ HTTP2Node port sock addr httpHeaders, ())
-                  Just (HTTP2Node port sock addr _) -> (Just $ HTTP2Node port sock addr httpHeaders, ())
+                  Just (Node2Node port _ addr) -> (Just $ HTTP2Node port sock addr httpHeaders, ())
+                  Just (HTTP2Node port _ addr _) -> (Just $ HTTP2Node port sock addr httpHeaders, ())
                   Just (TLSNode2Node ctx) -> (Just $ HTTPS2Node ctx, ())
                   Just (HTTPS2Node ctx) -> (Just $ HTTPS2Node ctx, ())
                   _ -> error $ "line 2258: " <> show cdata
@@ -2132,32 +2179,52 @@ listenNew port conn' = do
               tr "WEBNODE"
               let node = Node "httpnode" 0 (Just pool) [Service $ M.fromList [("httpnode", "")]]
               addNodes [node]
-              liftIO $ writeIORef (remoteNode conn) $ Just node
-              --setState conn{connData=cdata}
-              s <- giveParseString
-              tr ("WEBNODE Received",s)
+              
+              liftIO $ writeIORef (remoteNode conn) $ Just node;
 
+              requestString <- giveParseString
+
+              
+
+
+              ttr ("SENDING HTTP HEADERS to sock", sock, "idConn", idConn conn)
               liftIO $ SBSL.sendAll sock $ "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nTransfer-Encoding: chunked\r\n"
-              -- httpreq :: HTTPHeaders <- getState <|> error "no state"
-              -- tr ("HEADERS",headers)
-              tr ("string to parse", s)
-              return $ SMore $ ClosureData (ClosureId remoteClosure)  (SessionId s1)  (ClosureId thisClosure)  (SessionId s2)  [[lazyByteString s]]
+              ttr ("string to parse", requestString)
+              return $ SMore $ ClosureData (ClosureId remoteClosure)  (SessionId s1)  (ClosureId thisClosure)  (SessionId s2)  [Fragment $ lazyByteString requestString]
   where
-    -- return a sucessfully parsed request and process the next
+
+    noparams clos= do  -- example"http://localhost:8080/init"
+      ttr "NOPARAMS"
+      -- restline <- giveParseString
+      ms1 <-getCookie "state"
+      guard (isJust ms1)
+      let s1 = fromJust ms1
+          key= kLocalClos (SessionId s1)   $ ClosureId clos
+      existSession <- liftIO $ existDataForKey (ofType :: LocalClosure) key
+      ttr("dbrefsession",existSession)
+      guard existSession
+      -- setParseString $ BS.pack (show s1) <> restline
+      ttr("NOPARAMS",(s1,"0","0"))
+      return (s1,"0","0")
+   
 
     -- shortClosParams :: TransIO (BC.ByteString,BC.ByteString,BC.ByteString)
-    shortClosParams body= do
+    shortClosParams body= do  -- example -- example"http://localhost:8080/init/Sdfdef"
+        ttr "SHORTCLOSPARAMS"
         tChar 'S'
-        s1 <-   deserialize   -- :: TransIO BC.ByteString
-        restline <- giveParseString
-        setParseString $ BS.pack (show s1) <> restline  -- add a extra parameter sessionid for minput
+        s1' <-   deserialize 
+        tChar '/'  -- :: TransIO BC.ByteString
+        
+        ms1 <-getCookie "state"
+        let s1 = BC.cons '#' s1' <> BC.cons '-' (fromMaybe "0" ms1)
+
         return (s1,"0","0")
 
     shortWithIdParam = do
         tChar 'T'
         s1 <-  deserialize   -- :: TransIO SessionId
-        s <- giveParseString
-        setParseString $ BS.tail s -- add a extra parameter sessionid for minput
+        -- s <- giveParseString
+        -- setParseString $ BS.tail s -- add a extra parameter sessionid for minput
         tr "SHORTWITH PARAM"
         return (s1,"0","0")
 
@@ -2275,6 +2342,10 @@ listenNew port conn' = do
         liftIO $ writeIORef rsetHost False -- !> "HOSt SET"
 
 rcookies= unsafePerformIO $ newIORef []  -- HTTP cookies
+
+header200Chunked= BS.pack "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nTransfer-Encoding: chunked\r\n"
+
+header404Chunked= BS.pack "HTTP/1.1 404 Not Found\r\nContent-Type: application/json\r\nTransfer-Encoding: chunked\r\n"
 
 {-# NOINLINE rsetHost #-}
 rsetHost = unsafePerformIO $ newIORef True
@@ -2412,7 +2483,7 @@ resetRemote ident = do
     --do   -- when (closr /= 0) $ do
     runAt remote $
       local $ do
-        PrevClos {dbref= ref} <- getState <|> error "resetRemote: no state"
+        PrevClos {prevDBRef= ref} <- getState <|> error "resetRemote: no state"
         -- mcont <- liftIO $ modifyMVar localClosures $ \map -> return ( M.delete closr map,  M.lookup closr map)
         mlc <- liftIO $ atomically $ readDBRef ref
         let mcont = fmap localCont mlc
@@ -2425,7 +2496,7 @@ resetRemote ident = do
             return ()
 
 execLog :: StreamData NodeMSG -> TransIO ()
-execLog mlog = Transient $ do
+execLog mlog = transient $ do
   tr "EXECLOG"
   -- tr("execLog",mlog)
   st <- get
@@ -2452,84 +2523,74 @@ execLog mlog = Transient $ do
 -- - 'Bool' - A flag indicating whether the target closure should be deleted.
 --
 -- The function performs various actions based on the input parameters, such as restoring a closure, executing a closure, and handling errors.
-processMessage :: SessionId -> ClosureId -> SessionId -> ClosureId -> Either CloudException [[Builder]] -> Bool -> StateIO (Maybe ())
-processMessage s1 closl s2 closr mlog deleteClosure = do
-      tr ("processMessage", mlog)
-      conn <- getData `onNothing` error "Listen: myNode not set, use initNode"
-      tr ("processMessage REMOTE NODE", unsafePerformIO $ readIORef $ remoteNode conn, idConn conn )
+-- moved to Transient.Move.Logged
+-- processMessage :: SessionId -> ClosureId -> SessionId -> ClosureId -> Either CloudException [Fragment] -> Bool -> StateIO (Maybe ())
+-- processMessage s1 closl s2 closr mlog deleteClosure = do
+--       tr ("processMessage", mlog)
+--       conn <- getData `onNothing` error "Listen: myNode not set, use initNode"
+--       tr ("processMessage REMOTE NODE", unsafePerformIO $ readIORef $ remoteNode conn, idConn conn )
+--
+--       -- let rehash (ClosureId s)= ClosureId $ BC.map (\b -> if b == '&' then '/' else b) s
+--       -- let  dbref = getDBRef $ kLocalClos s1  closl
+--       -- tr ("lookup", dbref)
+--       mcont <- liftIO $ atomically $
+--           readDBRef (getDBRef (kLocalClos s1 closl) :: DBRef LocalClosure)
+--
+--       tr  ("mcont", isJust mcont)
+--       -- when deleteClosure $ liftIO $ atomically $ flushDBRef dbref
+--       case mcont of
+--         Nothing -> do
+--           cdata <- liftIO $ readIORef $ connData conn
+--           case cdata of
+--             Just(HTTP2Node {})   -> runTrans $ msend conn $ "\r\n" <> chunked   ("404:  not found: " <> (BS.pack $ show(s1, closl, s2, closr)))  <> endChunk
+--             Just (HTTPS2Node _)  -> runTrans $ msend conn $ "\r\n" <> chunked   ("404:  not found: " <> (BS.pack $ show(s1, closl, s2, closr))) <> endChunk
+--             _ -> do
+--               node <- liftIO $ readIORef (remoteNode conn) `onNothing` error "mconnect: no remote node?"
+--               -- tr ("DBREF=====",dbref)
+--               let e = "request received for non existent closure: "
+--               let err = CloudException node s1 closl $ show e
+--               tr err
+--               throw err
+--           return Nothing
+--         Just LocalClosure {localCont = Nothing} -> do
+--           tr "RESTORECLOSuRE"
+--           -- restoreClosure s1 $ BC.unpack closl
+--           (log', closreg) <- getClosureLog s1  closl
+--           tr "AFTER RESTORECLOS"
+--           -- when (synchronous conn) $ liftIO $ void (tryPutMVar mv ()) -- for syncronous streaming
+--           case mlog of
+--             Right log ->do
+--                mfdata <-gets mfData
+--                sendToClosure ((log' ::[Fragment]) <> log) s2 closr mfdata deleteClosure closreg
+--             Left except -> do
+--               tr  ("receive:",except)
+--               runTrans $ writeEVar (fromJust $ localEvar closreg) $ Left except
+--               -- empty
+--           return Nothing
+--           -- processMessage s1 closl s2 closr mlog deleteClosure
+--         -- execute the closure
+--         Just closreg@LocalClosure {localClos = closLocal, localMvar = mv, localEvar = Just ev, localCont = Just cont} -> do
+--           tr "localcont found"
+--           when (synchronous conn) $ liftIO $ void (tryPutMVar mv ()) -- for syncronous streaming
+--           case mlog of
+--             Right log -> do
+--               mfdata <- gets mfData
+--               sendToClosure log s2 closr mfdata deleteClosure closreg
+--             Left except -> do
+--               tr  ("receive:",except)
+--               runTrans $ writeEVar (fromJust $ localEvar closreg) $ Left except
+--           return Nothing
 
-      -- let rehash (ClosureId s)= ClosureId $ BC.map (\b -> if b == '&' then '/' else b) s
-      let  dbref = getDBRef $ kLocalClos s1  closl
-      tr ("lookup", dbref)
-      mcont <- liftIO $ atomically $ readDBRef dbref
-      tr  ("mcont", isJust mcont)
-      -- when deleteClosure $ liftIO $ atomically $ flushDBRef dbref
-      case mcont of
-        Nothing -> do
-          cdata <- liftIO $ readIORef $ connData conn
-          case cdata of
-            Just(HTTP2Node {}) -> runTrans $ msend conn $ "\r\n" <> chunked   "404: not found"  <> endChunk
-            Just (HTTPS2Node _)     -> runTrans $ msend conn $ "\r\n" <> chunked   "404: not found"  <> endChunk
-            _ -> do
-              node <- liftIO $ readIORef (remoteNode conn) `onNothing` error "mconnect: no remote node?"
-              -- tr ("DBREF=====",dbref)
-              let e = "request received for non existent closure: " ++ show dbref
-              let err = CloudException node s1 closl $ show e
-              tr err
-              throw err
-          return Nothing
-        Just LocalClosure {localCont = Nothing} -> do
-          tr "RESTORECLOSuRE"
-          -- restoreClosure s1 $ BC.unpack closl 
-          (log', closreg) <- getClosureLog s1  closl
-          tr "AFTER RESTORECLOS"
-          -- when (synchronous conn) $ liftIO $ void (tryPutMVar mv ()) -- for syncronous streaming
-          case mlog of
-            Right log -> sendToClosure ((log' ::[[Builder]]) <> log) s2 closr conn deleteClosure closreg
-            Left except -> do
-              tr  ("receive:",except)
-              runTrans $ writeEVar (fromJust $ localEvar closreg) $ Left except
-              -- empty
-
-
-
-          return Nothing
-          -- processMessage s1 closl s2 closr mlog deleteClosure
-
-        -- execute the closure
-
-        Just closreg@LocalClosure {localClos = closLocal, localMvar = mv, localEvar = Just ev, localCont = Just cont} -> do
-          tr "localcont found"
-          when (synchronous conn) $ liftIO $ void (tryPutMVar mv ()) -- for syncronous streaming
-          case mlog of
-            Right log -> sendToClosure log s2 closr conn deleteClosure closreg
-              -- tr "before writeevar"
-              -- runTrans $
-              --   if deleteClosure
-              --     then writeEVar ev $ Right (SLast log, s2, closr, conn)
-              --     else writeEVar ev $ Right (SMore log, s2, closr, conn)
-            Left except -> do
-              tr  ("receive:",except)
-              runTrans $ writeEVar (fromJust $ localEvar closreg) $ Left except
-              -- empty
-
-
-
-          return Nothing
-
-
-
--- sendToClosure a b c d e f = do
---     ttr(a,b,c,d,e, isJust $ localEvar f,isJust $ localCont f)
---     sendToClosure'  a b c d e f
-
-
-sendToClosure logs s2 closr conn deleteClosure LocalClosure {localClos = closLocal, localMvar = mv, localEvar = Just ev, localCont = Just cont} = do  
-  tr "before writeevar"
-  runTrans $ do 
-    if deleteClosure
-        then writeEVar ev $ Right (SLast logs, s2, closr, conn)
-        else writeEVar ev $ Right (SMore logs, s2, closr, conn)
+-- moved to Transient.Move.Logged
+-- sendToClosure logs s2 closr map deleteClosure LocalClosure{localEvar = mev}= do
+--   tr "before writeevar"
+--   case mev of
+--     Nothing -> error "NO EVAR IN CLOSURE"
+--     Just ev -> do
+--       runTrans $ do
+--         if deleteClosure
+--             then writeEVar ev $ Right (SLast logs, s2, closr, map)
+--             else writeEVar ev $ Right (SMore logs, s2, closr, map)
 
 
 
@@ -3189,57 +3250,55 @@ loopClosures= do
 -}
 
 
--- | Restore the continuation recursively from the most recent alive closure.
+-- | return the most recent alive closure from which the desired closure, identified by the session/closureid can be restored.
+-- The log returned is the one to apply to the ancestor closure to recreate the desired one.
 --  Retrieves the log and continuation from a closure identified by the Session ID (`idSession`) and the closure ID (`clos`).
 -- If the closure with the given ID is not found in the database, an error is raised.
--- getClosureLog :: Int -> ClosureId -> StateT TranShip IO ([[Builder]], LocalClosure)
-getClosureLog idSession closureId0 = do
-  tr ("getClosureLog", idSession, 0)
-
-  clos <- liftIO $ atomically $ readDBRef (getDBRef $ kLocalClos sessionId0 closureId0) `onNothing` error "closure 0 not found in DB"
-  return (mempty,clos)
-  -- let cont = fromMaybe (error "please run firstCont before") $ localCont clos
-  -- return ( mempty, cont)
-
-getClosureLog idSession clos = do
-  tr ("getClosureLog", idSession, clos)
-  closReg <- liftIO $ atomically $ readDBRef (getDBRef $ kLocalClos idSession  clos) `onNothing` error ("closure not found in DB:" <> show (idSession,clos))
-  liftIO $ takeMVar (localMvar closReg) -- can only be recovered by a single process to avoid duplications
-  closReg <- liftIO $ atomically $ readDBRef (getDBRef $ kLocalClos idSession  clos) `onNothing` error ("closure not found in DB:" <> show (idSession,clos))
-
-  prev    <- liftIO $ atomically $ readDBRef (prevClos closReg) `onNothing` error "prevClos not found"
-  case localCont closReg of
-    Nothing -> do
-      (prevLog, clos) <- getClosureLog (localSession prev) ( localClos prev)
-      let locallogclos = localLog closReg
-      tr ("PREVLOG",  prevLog)
-      tr ("LOCALLOG",  locallogclos)
-      tr ("SUM",  prevLog <> [locallogclos])
-      return (prevLog <> [locallogclos], clos)
-    Just cont -> do
-      tr ("JUST",idSession,clos)
-      return (mempty, closReg)
-
+-- moved to Transient.Move.Logged
+-- getClosureLog :: MonadIO m => SessionId -> ClosureId -> m ([Fragment], LocalClosure)
+-- getClosureLog (SessionId "0") (ClosureId "0") = do
+--   ttr ("getClosureLog", sessionId0, closureId0)
+--   clos <- liftIO $ atomically $ readDBRef (getDBRef $ kLocalClos sessionId0 closureId0) `onNothing` error "closure 0 not found in DB"
+--   return (mempty,clos)
+--
+-- getClosureLog idSession clos = do
+--   ttr ("getClosureLog", idSession, clos)
+--   closReg <- liftIO $ atomically $ readDBRef (getDBRef $ kLocalClos idSession  clos) `onNothing` error ("closure not found in DB:" <> show (idSession,clos))
+--   liftIO $ takeMVar (localMvar closReg) -- can only be recovered by a single process to avoid duplications
+--   -- it may have been activated in the meantime
+--   closReg <- liftIO $ atomically $ readDBRef (getDBRef $ kLocalClos idSession  clos) `onNothing` error ("closure not found in DB:" <> show (idSession,clos))
+--   case localCont closReg of
+--     Nothing -> do
+--       prev    <- liftIO $ atomically $ readDBRef (prevClos closReg) `onNothing` error "prevClos not found"
+--       (prevLog, clos) <- getClosureLog (localSession prev) ( localClos prev)
+--       let locallogclos = localLog closReg
+--       tr ("PREVLOG",  prevLog)
+--       tr ("LOCALLOG",  locallogclos)
+--       tr ("SUM",  prevLog <> [locallogclos])
+--       return (prevLog <> [locallogclos], clos)
+--     Just cont -> do
+--       tr ("JUST",idSession,clos)
+--       return (mempty, closReg)
 
 -- | to send to the closure of a remote node (identified by remclos), retrieves the log from a closure (identified by prevclos) the prevclos is the segment already saved in the LocalClousure registers. This is in order to reconstruct the stack in the remote node necessary for continuing the execution. To this sequence is necessary to sum the current fragment that has not yet already saved
 -- If the closure with the given ID is not found, an error is raised.
-getClosureLogFrom :: DBRef LocalClosure -> DBRef LocalClosure -> StateIO [[Builder]]
-getClosureLogFrom prevclos remclos
-  | prevclos==dbClos0 = return mempty
-  | otherwise = do
-  prevReg <- liftIO $ atomically $ readDBRef prevclos `onNothing` error ("closure not found in DB:" <> keyObjDBRef prevclos)
-  tr ("getClosureLogFrom", prevclos, remclos)
-
-  case prevclos == remclos of
-    False -> do
-      prevLog <- getClosureLogFrom (prevClos prevReg) remclos
-      let locallogclos = localLog prevReg
-      tr ("PREVLOG",  prevLog)
-      tr ("LOCALLOG",prevclos,  locallogclos)
-      tr ("SUM",  prevLog <> [locallogclos])
-      return (prevLog <> [locallogclos])
-    True -> do
-      return mempty
+-- moved to Transient.Move.Logged
+-- getClosureLogFrom :: DBRef LocalClosure -> DBRef LocalClosure -> StateIO [Fragment]
+-- getClosureLogFrom prevclos remclos
+--   | prevclos==dbClos0 = return mempty
+--   | otherwise = do
+--   prevReg <- liftIO $ atomically $ readDBRef prevclos `onNothing` error ("closure not found in DB:" <> keyObjDBRef prevclos)
+--   tr ("getClosureLogFrom", prevclos, remclos)
+--   case prevclos == remclos of
+--     False -> do
+--       prevLog <- getClosureLogFrom (prevClos prevReg) remclos
+--       let locallogclos = localLog prevReg
+--       tr ("PREVLOG",  prevLog)
+--       tr ("LOCALLOG",prevclos,  locallogclos)
+--       tr ("SUM",  prevLog <> [locallogclos])
+--       return (prevLog <> [locallogclos])
+--     True -> do
+--       return mempty
 
 
 -- | cold restore  of the closure from the log from data stored in permanent storage, and run from that point on

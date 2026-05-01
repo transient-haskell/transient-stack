@@ -66,7 +66,7 @@ getMyNode, getWebServerNode, getNodes, getEqualNodes, nodeList, isBrowserInstanc
 
 
 -- * Running Local Computations
-local, localIO,Loggable(..),onAll, onAllNodes, logged,loggedc, localIO, 
+local, localIO,Loggable(..),onAll, onAllNodes, logged,loggedc, liftCloud,
 
 -- * Moving Computations
 wormhole, teleport,
@@ -87,6 +87,9 @@ single, unique,
 -- * Buffering Control
 setBuffSize, getBuffSize,
 #endif
+
+-- * Session management
+newSession, setSession, getSession,genSessionId,
 
 #ifndef ghcjs_HOST_OS
 -- * REST API

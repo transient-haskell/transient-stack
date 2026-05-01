@@ -1,6 +1,6 @@
 {-#Language RecordWildCards,DeriveGeneric,CPP, UndecidableInstances
 , OverlappingInstances,FlexibleInstances,GeneralizedNewtypeDeriving, OverloadedStrings #-}
-{-# LANGUAGE InstanceSigs #-}
+{-# LANGUAGE InstanceSigs,ScopedTypeVariables #-}
 
 -- Dedicado a Jesucristo, mi salvador
 
@@ -16,6 +16,7 @@ import qualified Data.TCache.DefaultPersistence as TC
 import Data.TCache  hiding (onNothing)
 
 import GHC.Generics
+import Data.Coerce
 
 import qualified Network.Socket                         as NS
 import qualified Network.WebSockets.Connection          as WS
@@ -31,8 +32,10 @@ import System.IO.Unsafe
 import qualified Data.ByteString.Char8                  as BC
 import qualified Data.ByteString.Lazy.Char8             as BL
 import qualified Data.ByteString                        as B(ByteString)
+import qualified Data.ByteString.Char8                  as BS
 import qualified Data.Text                              as TE
 import qualified Data.Text.Encoding                     as TE
+
 import Control.Concurrent.MVar
 import Data.IORef
 import Data.Aeson
@@ -68,8 +71,8 @@ newtype Cloud a = Cloud {unCloud :: TransIO a}
 --   a <> b= (<>) <$> a <*> b
   
 -- instance Applicative Cloud where
---   pure :: a -> Cloud a
---   pure x = Cloud $ return x
+--   return :: a -> Cloud a
+--   return x = Cloud $ return x
   
 --   (<*>) :: Cloud (a -> b) -> Cloud a -> Cloud b
 --   Cloud f <*> Cloud g = Cloud $ sandboxData (ofType :: PrevClos) 
@@ -84,7 +87,13 @@ instance ToJSON B.ByteString where
 
 instance FromJSON B.ByteString where
   parseJSON = Data.Aeson.withText "ByteString" $ \t ->
-    pure (TE.encodeUtf8 t)
+    return (TE.encodeUtf8 t)
+
+instance ToJSON BL.ByteString where
+  toJSON = toJSON . BL.toStrict
+
+instance FromJSON BL.ByteString where
+  parseJSON v = BL.fromStrict <$> parseJSON v
 
 newtype ClosureId = ClosureId BC.ByteString deriving (Typeable,Read,Show,Eq,Ord,Generic,FromJSON,ToJSON)
 newtype SessionId = SessionId BC.ByteString deriving (Typeable,Read,Show,Eq,Ord,Generic,FromJSON,ToJSON)
@@ -100,10 +109,12 @@ instance Loggable SessionId where
 
 
 -- | previous local checkpointed closure in the execution flow
-data PrevClos = PrevClos{dbref          :: DBRef LocalClosure
+data PrevClos = PrevClos{ prevDBRef     :: DBRef LocalClosure
                         , pnewSession   :: Maybe SessionId
                         , preservePath  :: Bool
-                        , isApplicative :: Bool} deriving Show
+                        , isApplicative :: Bool
+                        , isCollect     :: Bool
+                        } deriving Show
 
 -- | last remote closure in a teleport waiting for responses in the execution flow
 newtype ClosToRespond= ClosToRespond (DBRef LocalClosure) -- {remSession :: SessionId, remClosure :: ClosureId}
@@ -140,6 +151,8 @@ instance ToJSON (MVar a) where
 
 instance FromJSON (MVar a) where
   parseJSON _= return (unsafePerformIO  newEmptyMVar)
+
+
 
 
 
@@ -188,7 +201,7 @@ type BuffSize = Int
 -- type PortID = Int
 
 data HTTPHeaders = HTTPHeaders (BL.ByteString, B.ByteString, BL.ByteString) NWS.Headers deriving (Show)
-
+emptyHeaders= HTTPHeaders (mempty,mempty,mempty)[]
 
 instance Show WS.Connection where
   show _ = "WS"
@@ -221,12 +234,41 @@ data LocalClosure = LocalClosure
   { localClos     :: ClosureId,
     localSession  :: SessionId,
     prevClos      :: DBRef LocalClosure,
-    localLog      :: [Builder],
+    localLog      :: FragmentType,
     localMvar     :: MVar (),
-    localEvar     :: Maybe (EVar (Either CloudException (StreamData [[Builder]], SessionId, ClosureId, Connection))),
+    localEvar     :: Maybe (EVar (Either CloudException (StreamData [FragmentType], SessionId, ClosureId, PolyMap))),
     localCont     :: Maybe TranShip
-  }
-  -- | ListPrecessors [DBRef LocalClosure]
+  } 
+
+instance Show LocalClosure where show lc= keyResource lc
+
+-- instance Read LocalClosure where 
+--   readsPrec _ s= 
+--     let (key,rest): _ = readsPrec 0 s
+--     in [(lazy $ getResource key `onNothing` error ("Read LocalClosure error in "<> s),rest)]
+
+
+-- | The 'Log' data type represents the current log data, which includes information about whether recovery is enabled, the partial log builder, and the hash closure.
+data Log  = Log{ recover :: Bool , partLog :: Builder, restLog :: [FragmentType],  hashClosure :: Int} deriving (Show)
+
+-- [[Builder]] example:  [["e/f/x/w/u","b/l/ah/"],["single/branch"]... : 
+-- The first group correspond with a collectc of two branches.
+-- Normally thereis one branch 
+
+-- Each restlog is a transition from a closure to another. closures are in sequence, except in the case of a jump
+
+type ClosureKey = String
+
+data FragmentType= Fragment{unFragment :: Builder} | Collect [Builder] | Jump ClosureKey deriving (Read,Show)
+
+instance Loggable FragmentType
+
+-- | Get the current log data.
+getLog :: TransMonad m => m Log
+getLog= getData `onNothing` return emptyLog
+
+emptyLog= Log False  mempty []  0
+
 
 kLocalClos (SessionId idSess) (ClosureId clos) = BC.unpack clos <> "-" <> BC.unpack idSess
 
@@ -237,16 +279,16 @@ getSessClosure dbref= let (c,s)= span (/= '-') $ keyObjDBRef dbref
 instance TC.Indexable LocalClosure where
   key LocalClosure {..} = kLocalClos localSession localClos
 
-instance (Show a, Read a) => TC.Serializable a where
+instance {-# OVERLAPPABLE #-}  (Show a, Read a) => TC.Serializable a where
   serialize = BL.pack . show
   deserialize = read . BL.unpack
 
 instance TC.Serializable LocalClosure where
   serialize LocalClosure {localClos=ClosureId c,localSession=SessionId s,..} = TC.serialize (c,s, prevClos, localLog)
   deserialize str =
-    let (localSession, prevClos, localLog,  localClos) = TC.deserialize str
+    let (localClos,localSession, prevClos, localLog) = TC.deserialize str
         block = unsafePerformIO $ newMVar ()
-     in LocalClosure (ClosureId prevClos) (SessionId localSession)  localLog  localClos block Nothing Nothing
+     in LocalClosure (ClosureId localClos) (SessionId localSession)   prevClos  localLog  block Nothing Nothing
 
 dbClos0= getDBRef $ kLocalClos sessionId0 closureId0 :: DBRef LocalClosure
 
@@ -273,7 +315,7 @@ instance Default [Service] where
 instance Default TE.Text where
   def=mempty
 
-data NodeMSG = ClosureData ClosureId SessionId ClosureId SessionId [[Builder]] deriving (Read, Show)
+data NodeMSG = ClosureData ClosureId SessionId ClosureId SessionId [FragmentType] deriving (Read, Show)
 
 instance Loggable NodeMSG where
   serialize :: NodeMSG -> Builder
@@ -281,12 +323,15 @@ instance Loggable NodeMSG where
                          (SessionId s1) 
                          (ClosureId clos') 
                          (SessionId s2) build) =
-    byteString clos <> "/" <> byteString s1 <> "/"
+    byteString clos 
+      <> "/" 
+      <> byteString s1 
+      <> "/"
       <> byteString clos'
       <> "/"
       <> byteString s2
       <> "/"
-      <> serialize build
+      <> serialize  (coerce build ::[FragmentType])
 
   deserialize :: TransIO NodeMSG
   deserialize =
@@ -295,7 +340,8 @@ instance Loggable NodeMSG where
       <*> (SessionId <$> readit)
       <*> (ClosureId <$> readit)
       <*> (SessionId <$> readit)
-      <*> deserialize
+      <*>  coerce (deserialize :: TransIO [FragmentType])
+
     where
       readit= BL.toStrict <$> tTakeWhile (/= '/') <* tChar '/'
       restOfIt = lazyByteString <$> giveParseString
@@ -342,3 +388,54 @@ instance Monoid Value where
 type RemoteClosure = (Node, ClosureId)
 
 newtype JobGroup = JobGroup (M.Map BC.ByteString RemoteClosure) deriving (Typeable)
+
+
+data InputData = InputData {idInput :: String, message :: BL.ByteString, hTTPReq :: HTTPReq} deriving (Show, Read, Typeable)
+-- instance Loggable InputData
+
+{-# NOINLINE firstEndpointName #-}
+firstEndpointName :: IORef String
+firstEndpointName = unsafePerformIO $ newIORef ""
+
+
+newtype Cookies= Cookies  [(BL.ByteString,BL.ByteString)]
+
+
+
+-- | set a cookie in the browser.
+-- Example
+
+-- > setCookie "<cookie-name>" "<cookie-value>; Domain=<domain-value>; Secure; HttpOnly"
+-- 
+-- See https://developer.mozilla.org/es/docs/Web/HTTP/Headers/Set-Cookie for cookie options
+setCookie :: BL.ByteString -> BL.ByteString -> TransIO ()
+setCookie name valueandparams= do
+  ttr "setCookie"
+  Cookies cs <- getCookies
+  setState $ Cookies $ (name,valueandparams):cs
+  where
+  getCookies :: TransIO Cookies
+  getCookies= getState <|> return (Cookies [])
+
+
+getCookie :: BL.ByteString -> TransIO (Maybe BS.ByteString)
+getCookie name= do
+  HTTPHeaders _ headers :: HTTPHeaders <- getState <|>  return (HTTPHeaders undefined [])
+  ttr ("getCookie HTTP HEADERS",headers)
+  let receivedCookie= lookup "Cookie" headers
+
+  liftIO $ print ("cookie", receivedCookie)
+  case receivedCookie of
+    Just str->  (withParseString (BS.fromStrict str) search) <|> return Nothing
+    Nothing -> return Nothing
+    where
+    search= do
+       tr "search cookie"
+       d <- isDone
+       if d then return Nothing else do
+                dropSpaces
+                name' <- tTakeWhile' (/='=')
+                val <- tTakeWhile' (/=';')
+                liftIO $ print (name',val)
+                if name'== name then return $ Just $ BS.toStrict val else search
+
