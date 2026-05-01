@@ -27,6 +27,7 @@ import Control.Applicative
 import Control.Monad
 import Control.Monad.State
 import Data.IORef
+import qualified Data.Map as M
 import System.Environment
 import System.IO.Error
 import Data.Typeable
@@ -251,12 +252,13 @@ initWebApp node app=  do
 
         unCloud $ wormhole serverNode $ do 
 #ifndef ghcjs_HOST_OS
-            optionEndpoints <|> 
+            (initPublishMinput >> optionEndpoints) <|> 
 #else
               local empty  <|>
 #endif
               app
 
+initPublishMinput =  onAll $ newRState (M.empty :: M.Map String [InputData])
 
 {-
 -- | run N nodes (N ports to listen) in the same program. For testing purposes.

@@ -22,6 +22,7 @@ import qualified Data.ByteString.Lazy.Char8 as BS
 import Data.Default
 import Control.Monad.State
 import Control.Applicative
+import Data.Typeable
 
 import Data.Typeable
 
@@ -74,18 +75,25 @@ instance {-# OVERLAPPING #-} Loggable Value where
 instance {-# OVERLAPPABLE #-} ToJSON a => Show a where
   show = BS.unpack . toLazyByteString . serializeToJSON . toJSON
 
-instance FromJSON a => Read a where
-  readsPrec _ ss = error "Read FromJSON: not implemented"
-    --  let (s,rest)= fragment $ BS.pack ss
-    --      mr = decode s
-    --  in if isJust mr then [(fromJust mr, BS.unpack rest)] else []
+instance (Typeable a,FromJSON a) => Read a where
+  readsPrec _ ss =  error $ "Read FromJSON: not implemented:' " <> show (typeOf (undefined :: a)) <>"'"
 
-instance {-# OVERLAPPABLE #-} (Typeable a, ToJSON a, FromJSON a) => Loggable (AsJSON a) where
+
+--     --  let (s,rest)= fragment $ BS.pack ss
+--     --      mr = decode s
+--     --  in if isJust mr then [(fromJust mr, BS.unpack rest)] else []
+
+instance {-# OVERLAPPABLE #-} (Show a, Read a,Typeable a, ToJSON a, FromJSON a) => Loggable (AsJSON a) where
   serialize (AsJSON a)= serializeToJSON a
   deserialize = AsJSON <$> deserializeJSON
 
 newtype AsJSON a= AsJSON a 
 
+instance ToJSON a => Show (AsJSON a) where 
+   show (AsJSON x)= BS.unpack . toLazyByteString . serializeToJSON . toJSON $ x
+
+instance Read (AsJSON a) where
+   readsPrec _ ss = error "Read FromJSON: not implemented"
 
 -- | to force JSON deserialization
 instance FromJSON a => FromJSON  (AsJSON a) where

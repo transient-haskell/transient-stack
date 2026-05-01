@@ -23,74 +23,51 @@ source-repository head
     location: https://github.com/transient-haskell/transient-universe
 
 library
-    
-    -- if !impl(ghcjs >=0.1)
-    --     exposed-modules:
-            -- Transient.Move.Services.Executor
-
-    -- if impl(ghcjs >=0.1)
-    --     build-depends:
-    --         -- ghcjs-base should be installed with
-    --         -- > git clone https://github.com/ghcjs/ghcjs-base
-    --         -- > cd ghcjs-base
-    --         -- > cabal install --ghcjs --constraint 'primitive < 0.6.4'
-    --         ghcjs-base -any,
-    --         ghcjs-prim -any,
-    --         random -any
-    -- else
-        exposed-modules:
-            Transient.Move
-            Transient.MapReduce
-            Transient.Move.Defs
-            Transient.Move.Internals
-            Transient.Move.Logged
-            Transient.Move.Utils
-            Transient.Move.JSON
-            Transient.Move.Web
-            Transient.Move.Services
-            Transient.Move.IPFS
-            Transient.Move.Job
-        build-depends:
-            base > 4,
-            mtl -any,
-            base64-bytestring,
-            bytestring,
-            containers,
-            stm,
-            HTTP -any,
-            mime-types,
-            TCache >= 0.12,
-            case-insensitive -any,
-            directory -any,
-            filepath -any,
-            hashable -any,
-            hashtables,
-            iproute -any,
-            network >= 3.0,
-            network-info -any,
-            network-uri -any,
-            vector -any,
-            websockets >=  0.12.7.1 ,
-            process -any,
-            random -any,
-            text -any,
-            aeson -any,
-            data-default,
-            syb,
-            --primitive < 0.6.4.0
-            -- entropy <= 0.3.6, 
-    -- build-depends:
-            transient,
-
-            old-time            
-
-
-
-        -- Transient.Move.PubSub
-
+    exposed-modules:
+        Transient.Move
+        Transient.MapReduce
+        Transient.Move.Defs
+        Transient.Move.Internals
+        Transient.Move.Logged
+        Transient.Move.Utils
+        Transient.Move.JSON
+        Transient.Move.Web
+        Transient.Move.Services
+        Transient.Move.IPFS
+        Transient.Move.Job
+    build-depends:
+        base > 4,
+        mtl -any,
+        base64-bytestring,
+        bytestring,
+        containers,
+        stm,
+        HTTP -any,
+        mime-types,
+        TCache >= 0.12,
+        case-insensitive -any,
+        directory -any,
+        filepath -any,
+        hashable -any,
+        hashtables,
+        iproute -any,
+        network >= 3.0,
+        network-info -any,
+        network-uri -any,
+        vector -any,
+        websockets >= 0.12.7.1,
+        process -any,
+        random -any,
+        text -any,
+        aeson -any,
+        data-default,
+        syb,
+        transient,
+        old-time,
+        time
     default-language: Haskell2010
     hs-source-dirs: src .
-    ghc-options:  -w -O0 
+    ghc-options: -w -O0
 
 executable monitorService
 

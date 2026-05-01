@@ -406,7 +406,7 @@ mparallelize f xs =  loggedc $ foldr (<>) mempty $ map f xs
 
 
 getPartitionData :: (Typeable a, Loggable a) => PartRef a   -> TransIO  a
-getPartitionData (Ref node path save)  = Transient $ do
+getPartitionData (Ref node path save)  = transient $ do
     mp <- liftIO (atomically
                        $ readDBRef
                        $ getDBRef
@@ -416,7 +416,7 @@ getPartitionData (Ref node path save)  = Transient $ do
        (Part _ _ _ xs) -> return $ Just xs
 
 getPartitionData1 :: (Typeable a, Loggable a) => PartRef a   -> TransIO  a
-getPartitionData1 (Ref node path save)  = Transient $ do
+getPartitionData1 (Ref node path save)  = transient $ do
     mp <- liftIO $ atomically
                   $ readDBRef
                   $ getDBRef
