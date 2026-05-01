@@ -77,11 +77,11 @@ maybeTLSServerHandshake certpath keypath sock input= do
  when (not c || not k) $ error "cert.pem and key.pem must exist withing the current directory"
  if ((not $ BL.null input) && BL.head input  == 0x16)
    then  do
-        mctx <- liftIO $( do
+        mctx <- liftIO $ ( do
 
               ctx <- makeServerContext (ssettings certpath keypath) sock  input
               TLS.handshake ctx
-              return $Just ctx )
+              return  $ Just ctx )
                `catch` \(e:: SomeException) -> do
                      putStr "maybeTLSServerHandshake: "
                      print e

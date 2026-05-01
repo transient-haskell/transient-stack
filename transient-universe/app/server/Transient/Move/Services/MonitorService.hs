@@ -111,14 +111,14 @@ withBlockingService serv proc= do
 --       returnInstances (ident, head $ nodeServices node, num)
 
 
-instance Default (String,Service,Int) where
+instance {-# overlapping #-} Default (String,Service,Int) where
   def= ("$identifier",def,1)
 
 -- | install and return n instances of a service, distributed
 -- among all the nodes which have monitoService executables running and connected 
 returnInstances ::  Cloud ()
 returnInstances = do
-    POSTData(ident :: String,service :: Service, num :: Int) <-  minput "returnInstances" "enter user ident, service and number of instances:"
+    POSTData(ident :: String,service :: Service, num :: Int) <-  minput "returnInstances" "enter user ident, service and number of instances:" 
     r <-  withBlockingService service $  do
                 nodes :: [Node] <- local $ findInNodes service >>= return . take num
 
