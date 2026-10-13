@@ -1281,10 +1281,17 @@ rcookie= unsafePerformIO $ newIORef $ BS.pack "cookie1"
 {-# NOINLINE conSection #-}
 conSection = unsafePerformIO $ newMVar ()
 
+-- | Serialize the connections. The section is released whatever happens in @mx@: when it returns, when it stops
+-- with @empty@ and when it fails with an exception (e.g. the connection is refused because the other node is down).
+-- If it were not released, every later connection of the node would wait for ever.
+exclusiveCon :: TransIO a -> TransIO a
 exclusiveCon mx = do
   liftIO $ takeMVar conSection
-  r <- mx
-  liftIO $ putMVar conSection ()
+  held <- liftIO $ newIORef True
+  let release = liftIO $ do h <- atomicModifyIORef held (\h -> (False, h))
+                            when h $ putMVar conSection ()
+  r <- (onException (\(_ :: SomeException) -> release) >> mx) <|> (release >> empty)
+  release
   return r
 
 -- | Find the node (with its connection pool) in the global node list.

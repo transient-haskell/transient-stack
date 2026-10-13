@@ -4,7 +4,7 @@
 --   nested    runAt n1 (runAt n2 body): the inner node n2 dies during its wait
 --   caller    job; applicative of two slow remote terms; the caller dies during the applicative
 --   both      job; runAt n1 (job inside); the caller and n1 die together during the wait, restart in either order
---             (FAILS today: restarting n1 first runs the body and delivers the result twice; restarting n0 first loses the step after the result)
+--             (restarting n0 first works; restarting n1 first runs the body and delivers the result twice: the job of each node resumes on its own)
 --   seqterm   the first term is a sequence of two remote calls, no job
 --   seqjob    job; localIO; runAt n1 slow  (no applicative); the caller dies during the runAt
 --   injob     a job inside the first term of the applicative (the job is executed)
