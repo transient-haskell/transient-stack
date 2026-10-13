@@ -82,82 +82,12 @@ import Data.Time.Clock
 import System.Directory.Internal.Prelude (exitFailure,stdout)
 
 import GHC.IO.Handle (hIsTerminalDevice)
--- #ifdef DEBUG
--- trace= Debug.trace
--- trace1= Debug.trace
--- #else
-
--- trace _= id
--- trace1= Debug.trace
--- #endif
-
--- tshow ::  a -> x -> x
--- tshow _ y= y
 
 {-# INLINE (!>) #-}
 (!>) :: a -> b -> a
 (!>) = const
--- indent, outdent :: MonadIO m => m ()
-
--- indent =  liftIO $ modifyIORef rindent $ \n -> n+2
--- outdent=  liftIO $ modifyIORef rindent $ \n -> n-2
-
-
--- {-# NOINLINE rindent #-}
--- rindent= unsafePerformIO $ newIORef 0
-
-
--- {-# NOINLINE tr #-}
--- tr :: (Show a, Monad m) => a -> m ()
--- tr x=  trace (show x) $ return ()
-
--- {-# NOINLINE color #-}
--- color :: Show a => a -> String
--- color x= unsafePerformIO $ do
---     t <- getCurrentTime
---     th <- myThreadId
---     sps <- readIORef rindent >>= \n -> return $ replicate n ' '
---     let col=  read (drop 9 (show th)) `mod` (36-31)+31
---     return $ (show t) <> "\x1b["++ show col ++ ";49m" ++ sps ++ show (th,x) ++ "\x1b[0m\n"
-
-    -- 256 colors
-  --   let col= toHex $ read  (drop 9 (show th)) `mod` 255
-  --   return $ "\x1b[38;5;"++ col++ "m" ++ sps ++ show (th,x) ++  "\x1b[0m\n"
-  -- where
-  -- toHex :: Int -> String
-  -- toHex 0= mempty
-  -- toHex l=
-  --     let (q,r)= quotRem l 16
-  --     in toHex q ++ (show $ (if r < 9  then toEnum ( fromEnum '0' + r) else  toEnum (fromEnum  'A'+ r -10):: Int))
-
--- tr ::(Show a,MonadIO m) => a -> m()
--- tr x= liftIO $ do hPutStr h "=======>" ; putStrLn $ color   x
-
--- tr x= return () !>   unsafePerformIO (color x)
--- -- | trace if -DDEBUG is set
--- tr x=  trace (color x) $ return ()
-
--- -- | trace to the standard error either even if ghc's flag -DDEBUG is set
--- ttr x= trace1 ( "=======>" <> color x) $  return ()
-
--- -- | trace to the standard output
--- tttr x = liftIO $ putStrLn $ color x
-
-
--- tracec x f= Debug.trace (color x) f
 
 ofType = error ": proxy data being evaluated"  -- used as   ofType :: TypeNeeded
-
--- type StateIO = StateT TranShip IO
-
-
--- newtype TransIO a = Transient { runTrans :: StateIO (Maybe a) }
-
--- type SData = ()
-
--- type EventId = Int
-
--- type TransIO = TransIO
 
 {-# NOINLINE idGen #-}
 idGen= unsafePerformIO $ newIORef (0 :: Int)
@@ -165,492 +95,11 @@ idGen= unsafePerformIO $ newIORef (0 :: Int)
 genNewId :: MonadIO m => m Int
 genNewId= liftIO $ atomicModifyIORef idGen $ \n -> (n+1,n)
 
--- data Status = Dead                   -- killed waiting to be eliminated
---               --  | DeadParent             -- Dead with some childs active
---                | Alive                  -- working
---               --  | Parent                 -- with some childs
---               --  | Listener [IdCallback]  -- The number of callbacks inside react ans a MVarS.
-
---   deriving (Eq, Show,Ord)
-
--- type Listener= String
-
--- data LifeCycle =LF Status [Listener] deriving Show
-
--- -- | To allow the use of <|> with maybe values: `maybeTrans something <|> alternate trans expr`
--- maybeTrans :: Maybe a -> TransIO a
--- maybeTrans = Transient . return
-
--- eq2 Parent Parent = True
--- eq2 (Listener _) (Listener _) = True
--- eq2 Dead Dead = True
--- eq2 DeadParent DeadParent = True
--- eq2 _ _ = False
-
--- eq2 (LF st _) (LF st' _)= st == st'
-
 listener :: IdCallback -> LifeCycle -> LifeCycle
 listener id (LF st ls)= LF st $ id:ls
--- listener id (LF st n)= LF st $ id:n
--- listener id  _ = Listener [id]
 
 delistener :: IdCallback -> LifeCycle -> Status -> LifeCycle
 delistener id (LF st ls) finst= LF finst $ delete id ls
--- delistener id  l@(Listener [id']) finallc
---     | id == id'= finallc -- if null $ lazy $ readMVarChildren c
---             -- then Dead
---             -- else DeadParent
---     | otherwise= l
-
--- -- | The 'Log' data type represents the current log data, which includes information about whether recovery is enabled, the partial log builder, and the hash closure.
--- data Log  = Log{ recover :: Bool , partLog :: Builder, restLog :: [[Builder]],  hashClosure :: Int} deriving (Show)
-
--- data RestLog= Fragment [[Builder]] | Jump LocalClosure
-
--- merge :: PolyMap -> PolyMap -> PolyMap
--- merge = M.unionWithKey combine
-
--- data Backtrack1 a = Backtrack1 (Maybe a) [SData]
-
--- isOfTypeBacktrack t= typeRepTyCon t == typeRepTyCon (typeOf (ofType :: Backtrack ()))
-
--- isOfTypeLog t= typeRepTyCon t == typeRepTyCon (typeOf(ofType :: Log))
-
--- combine :: TypeRep -> SData -> SData -> SData
--- combine t x y =   -- tracec ("Merging type: " ++ show t) $ 
-  
---   if isOfTypeBacktrack t then    
---         let list  = case unsafeCoerce x :: Backtrack1 () of
---                         Backtrack1 _ list  -> list
---             list' = case unsafeCoerce y :: Backtrack1 () of
---                         Backtrack1 _ list' -> list'
---         in   unsafeCoerce $ Backtrack1 Nothing ( list' ++ list)
-
---   else if isOfTypeLog t then
---         let log= unsafeCoerce x  :: Log
---             log'= unsafeCoerce y :: Log
---         in   unsafeCoerce $ log'{restLog = restLog log ++ restLog log'} 
-
---   else y -- Default behavior: take the second value
-
-
------- MOVED TO LEngine.hs -----------
-
-
--- -- | TranShip describes the context of a TransIO computation:
--- data TranShip = forall a b. TranShip
---   {
---     fcomp       :: a -> TransIO b
---     -- ^ List of continuations
-
---   , mfData      :: PolyMap
---     -- ^ State data accessed with get/set/Data/State/RState etc operations
-
---   , mfSequence  :: Int
---   , rThreadId   :: IORef ThreadId
---   , freeTh      :: Bool
---     -- ^ When 'True', threads are not killed using kill primitives
-
---   , parent      :: IORef(Maybe TranShip)
---     -- ^ The parent of this thread
-
---   , children    :: MVar [TranShip]
---     -- ^ Forked child threads, used only when 'freeTh' is 'False'
-
---   , maxThread   :: Maybe (IORef Int)
---     -- ^ Maximum number of threads that are allowed to be created
-
---   , labelth     :: IORef (LifeCycle, BS.ByteString)
---     -- ^ Label the thread with its lifecycle state and a label string
---   , parseContext :: ParseContext
---   , execMode :: ExecMode
---   } deriving Typeable
-
--- threadId s= lazy $ readIORef $ rThreadId s
-
--- -- {-# NOINLINE threadId #-}
--- -- threadId x= unsafePerformIO $ readIORef $ pthreadId x
-
--- data ParseContext  = ParseContext { more   :: TransIO  (StreamData BSL.ByteString)
---                                   , buffer :: BSL.ByteString
---                                   , done   :: IORef Bool} deriving Typeable
-
--- -- | To define primitives for all the transient monads:  TransIO, Cloud and Widget
--- class MonadState TranShip m => TransMonad m
-
--- instance  MonadState TranShip m => TransMonad m
-
-
--- instance MonadState TranShip TransIO where
---   get     = Transient $ gets Just
---   put x   = Transient $ put x >>  return (Just ())
---   state f =  Transient $ do
---     s <- get
---     let ~(a, s') = f s
---     put s'
---     return $ Just a
-
--- -- | Run a computation in the underlying state monad. it is a little lighter and
--- -- performant and it should not contain advanced effects beyond state.
--- noTrans :: StateIO x -> TransIO  x
--- noTrans x = Transient (x <&> Just)
-
-
-
--- -- emptyEventF :: ThreadId -> IORef (LifeCycle, BS.ByteString) -> MVar [TranShip] -> TranShip
--- emptyEventF th label par childs =
---   TranShip { -- event      = mempty
---         --  , xcomp      = empty
---            fcomp      = const empty
---          , mfData     = mempty
---          , mfSequence = 0
---          , rThreadId   = lazy $ newIORef th -- unsafePerformIO $ newIORef th
---          , freeTh     = False
---          , parent     = par
---          , children   = childs
---          , maxThread  = Nothing
---          , labelth    = label
---          , parseContext = ParseContext (return SDone) mempty (unsafePerformIO $ newIORef True)
---          , execMode = Serial}
-
--- -- | Run a transient computation with a default initial state. This is for basic testing. This does NOT support effects
--- runTransient :: TransIO a -> IO (Maybe a, TranShip)
--- runTransient t = do
---   th     <- myThreadId
---   label  <- newIORef  (LF Alive [], mempty)
---   childs <- newMVar []
---   par    <- newIORef Nothing
---   let topState = emptyEventF th label par childs
---   runStateT (runTrans t) topState
-
--- -- | only used by keep* primitives
--- runTransient1 :: TransIO a -> IO (Maybe a, TranShip)
--- runTransient1 t = do
---   th     <- myThreadId
---   label  <- newIORef  (LF Alive [], mempty)
---   childs <- newMVar []
---   par    <- newIORef Nothing
---   let topState = emptyEventF th label par childs
---   writeIORef rtopState topState
---   runStateT (runTrans t) topState
-
--- {-#NOINLINE rtopState#-}
--- rtopState= unsafePerformIO $ newIORef $ error "no top state defined"
-
--- -- | Run a transient computation with a given initial state. This is for basic testing. This does NOT support effects
--- runTransState :: TranShip -> TransIO x -> IO (Maybe x, TranShip)
--- runTransState st x = runStateT (runTrans x) st
-
-
-
--- emptyIfNothing :: Maybe a -> TransIO a
--- emptyIfNothing =  Transient  . return
-
-
--- -- | Get the continuation context: continuation, state varables, child threads etc
--- getCont :: TransIO TranShip
--- getCont = Transient $ gets Just
-
--- -- | Run the continuation included in the state
--- runCont :: p -> TranShip -> StateT TranShip IO (Maybe a)
--- runCont x TranShip{ fcomp = fs } =do
---    runTrans $ unsafeCoerce fs  x
-
-
--- -- runContHang :: p -> TranShip -> StateT TranShip IO (Maybe a)
--- -- runContHang x TranShip{ fcomp = fs } =do
--- --    let   fs'=  \r -> do hang; fs r
--- --    runTrans $ unsafeCoerce fs'  x
-
-
--- -- | Run the continuation included in the state. The result in the IO monad.
--- runContIO :: p -> TranShip -> IO (Maybe a, TranShip)
--- runContIO x cont = runStateT (runCont x cont) cont
-
--- -- runContHang' :: p -> TranShip -> IO (Maybe a, TranShip)
--- -- runContHang' x cont = runStateT (runContHang x cont) cont
-
--- -- | Warning: Radically untyped stuff. handle with care
--- getContinuations :: StateIO (a -> TransIO b)
--- getContinuations = do
---   TranShip { fcomp = fs } <- get
---   return $ unsafeCoerce fs
-
--- {-
--- runCont cont = do
---   mr <- runClosure cont
---   case mr of
---     Nothing -> return Nothing
---     Just r -> runContinuation cont r
--- -}
-
--- -- | Compose a list of continuations.
--- {-# INLINE compose #-}
--- compose :: (a -> TransIO b) -> (a -> TransIO b)
--- -- compose []     = const empty
--- compose =  id -- (f:fs) = \x -> f x >>= compose fs
-
--- -- -- | Run the closure  (the 'x' in 'x >>= f') of the current bind operation.
--- -- -- runClosure :: TranShip -> StateIO (Maybe a)
--- -- runClosure x   = unsafeCoerce (runTrans x)
-
-
-
--- -- | Save a closure and a continuation ('x' and 'f' in 'x >>= f').
--- setContinuation ::  (a -> TransIO b) -> (c -> TransIO d) -> StateIO ()
--- setContinuation   c fs = modify $ \TranShip{..} -> TranShip {fcomp = c >=> unsafeCoerce fs ,   .. }
-
--- -- -- | Save a closure and continuation, run the closure, restore the old continuation.
--- -- -- | NOTE: The old closure is discarded.
--- -- withContinuation :: b -> TransIO a -> TransIO a
--- -- withContinuation c mx = do
--- --   TranShip { fcomp = fs, .. } <- get
--- --   put $ TranShip { fcomp = unsafeCoerce c >=> fs, .. }
--- --   r <- mx
--- --   restoreStack fs
--- --   return r
-
--- -- | Restore the continuations to the provided ones.
--- -- | NOTE: Events are also cleared out.
--- restoreStack :: TransMonad m => (a -> TransIO b) -> m ()
--- restoreStack fs = modify $ \TranShip {..} -> TranShip {  fcomp = fs, .. }
-
-
-
--- -- Instances for Transient Monad
-
--- instance Functor TransIO where
---   -- Alabado sea Dios y Jesucristo su Hijo
---   fmap f mx = do
---     x <- mx
---     return $ f x
-
-
--- -- | the applicative instance executes both terms in parallel if the first term executes in a different thread.
--- -- Since any of the two terms can return 0, 1 or more results, the result of the applicative will be a stream of
--- -- results depending on what is the value of each term has in real time. 
--- --
--- -- It is not a combinatorial applicative: if one of the terms hasn't returned at least one result, any value produced
--- -- by the other term is not buffered and it is ignored.
--- --
--- -- It has also a Serial execution mode used for parsing. 
--- instance Applicative TransIO where
---   pure :: a -> TransIO a
---   pure a  = Transient . return $ Just a
-
---   (<*>) :: TransIO (a -> b) -> TransIO a -> TransIO b
---   mf <*> mx = do
-
---     r1 <- liftIO $ newIORef Nothing
---     r2 <- liftIO $ newIORef Nothing
---     fparallel r1 r2 <|> xparallel r1 r2
-
---     where
-
---     fparallel r1 r2= do
---       tr "fparallel"
---       f <- mf
---       liftIO $ writeIORef r1 (Just f)
---       mr <- liftIO (readIORef r2)
---       case mr of
---             Nothing -> empty
---             Just x  -> return $ f x
-
---     xparallel r1 r2 = do
---       tr "xparallel"
---       mr <- liftIO (readIORef r1)
---       case mr of
---             Nothing -> do
-
---               p <- gets execMode
---               tr ("EXECMODE",p)
---               if p== Serial then empty else do
-
---                        -- the first term may be being executed in parallel and will give his result later
---                        x <- mx
---                        liftIO (writeIORef r2 $ Just x)
-
---                        mr <- liftIO (readIORef r1)
---                       --  tr ("XPARALELL",isJust mr)
---                        case mr of
---                          Nothing -> empty
---                          Just f  -> return $ f x
-
-
---             Just f -> do
---               x <- mx
---               liftIO $ writeIORef r2 (Just x)
---               return $ f x
-
-
-
-
--- -- | stop the current computation and does not execute any alternative computation
--- fullStop :: TransIO stop
--- fullStop= do modify $ \s ->s{execMode= Remote} ; stop
-
--- -- #ifndef ghcjs_HOST_OS11
--- instance Monad TransIO where
---   return   = pure
---   x >>= f  = Transient $ do
---     k <- setEventCont  f
---     mk <- runTrans x
---     resetEventCont k
---     case mk of
---       Just r  -> runTrans (f r)
---       Nothing -> return Nothing
-
-
-
--- -- #else
-
--- -- instance Monad TransIO where
--- --   return =  pure
--- --   x >>= f = Transient $ do
--- --        id1 <- genNewId
--- --        tr id1
--- --        setEventCont x  f id1
--- --        delData P.noHtml
--- --        mk <- runTrans x
--- --        form1 <- getData `onNothing` return P.noHtml
--- --        resetEventCont mk
--- --        case mk of
--- --          Just k  -> do
--- --             delData P.noHtml
--- --             mk <- runTrans $ f k
--- --             form2 <- getData `onNothing` return P.noHtml
--- --             setData $ form1 <> (P.span P.! P.id id1 $ form2)
--- --             return mk
--- --          Nothing -> do
--- --             setData  $ form1 <> (P.span P.! P.id id1 $ P.noHtml)
--- --             return Nothing
-
--- -- #endif
-
--- -- | Set the current closure and continuation for the current statement
--- -- #ifndef ghcjs_HOST_OS11
-
--- {-# INLINABLE setEventCont #-}
--- setEventCont :: (a -> TransIO b) -> StateIO (a -> TransIO c)
--- setEventCont  f  = do
---   TranShip{fcomp= k} <- get
---   let k' y = unsafeCoerce f y >>=  k
---   modify $ \TranShip { .. } -> TranShip { fcomp = k', .. }
---   return $ unsafeCoerce k
-
--- {-# INLINABLE resetEventCont #-}
--- resetEventCont k= modify $ \TranShip { .. } -> TranShip {fcomp = k, .. }
--- -- #else
--- -- setEventCont  x f id = modify $ \TranShip { fcomp = fs, .. }
--- --                            -> TranShip { xcomp = strip x
--- --                                      , fcomp =  unsafeCoerce(rend f id) :  fs
--- --                                      , .. }  
--- --   where
--- --   --rend :: (b ->TransIO b) -> JSString  -> b -> TransIO b
--- --   rend f id x= runWidgetId ( f x) id `asTypeOf` f x
-
--- --   strip x=  do
--- --     r <- x
--- --     delData P.noHtml
--- --     return r
-
--- -- --runWidget' :: TransIO b -> Elem   -> TransIO b
--- -- runWidget' action e  = do
--- --     mr <- runTrans action -- <*** (noTrans $ do                        -- !> "runVidget'"
-
--- --     torender <- getData `onNothing` (return  P.noHtml)
--- --     tr "build de runWidget"
-
--- --     liftIO $ P.build torender e >> return()
-
--- --     return mr
-
-
--- -- runWidgetId :: TransIO b -> JSString   -> TransIO b
--- -- runWidgetId w id= Transient $ do
--- --     tr ("runWidgetId",id)
--- --     e <- liftIO $ elemById id  `onNothing` error ("not found" ++ show id)
--- --     liftIO $ P.clearChildren  e
--- --     runWidget' w  e
-
--- --     where
--- --     --elemById :: MonadIO m  => JSString -> m (Maybe Elem)
--- --     elemById id= liftIO $ do
--- --       re <- elemByIdDOM id
--- --       fromJSVal re
-
--- -- foreign import javascript unsafe  
--- --       "document.getElementById($1)" 
--- --       elemByIdDOM
--- --       :: JSString -> IO JSVal
-
--- -- #endif
-
-
-
--- -- #ifdef ghcjs_HOST_OS11
--- -- {-#NOINLINE rprefix #-}
--- -- rprefix= unsafePerformIO $ newIORef 0
-
--- -- genNewId ::  (MonadState TranShip m, MonadIO m) => m  JSString
--- -- genNewId=  do
--- --       r <- liftIO $ atomicModifyIORef rprefix (\n -> (n+1,n))
--- --       n <- genId
--- --       let nid= fromString $  ('n':show n)  ++ ('p':show r)
--- --       nid `seq` return  nid
-
-
-
-
-
--- -- --getPrev ::  StateIO  JSString
--- -- --getPrev= return $ pack ""
--- -- #endif
--- -- | a version of callCC where the continuation is taken from the state
--- -- callCC :: TransIO a -> TransIO b
--- -- callCC comp= Transient $ do
--- --   TranShip{fcomp=k} <- get
--- --   runTrans $ comp >>= unsafeCoerce k
-
--- withCont :: StateIO a ->  TransIO b
--- withCont comp= noTrans $ do
---   TranShip{fcomp=k} <- get
---   comp >>= unsafeCoerce k
-
--- -- callCCState :: StateIO a ->  StateIO b
--- -- callCCState comp= do
--- --   TranShip{fcomp=k} <- get
--- --   runTrans $ comp >>= unsafeCoerce k
-
--- instance MonadIO TransIO where
---   liftIO x = Transient $ liftIO x <&> Just
-
--- instance Monoid a => Monoid (TransIO a) where
---   mempty      = return mempty
-
-
---   mappend  = (<>)
-
--- instance (Monoid a) => Semigroup (TransIO a) where
---   (<>)=  mappendt
-
-
--- instance (Monoid a,Monad m) => Semigroup (StateT s m a) where
---   (<>)=  mappendt
-
--- mappendt x y = mappend <$> x <*> y
-
-
--- instance Alternative TransIO where
---     empty = Transient $ return  Nothing
---     (<|>) x y = Transient $ do
---                 mx <- runTrans x
---                 was <- gets execMode
---                 if was == Remote
---                   then return Nothing
---                   else case mx of
---                         Nothing ->  runTrans y
---                         _ -> return mx
 
 -- | executes both arguments and return both results. The execution depends on the threading
 -- . Unlike <|> , which only executes the second term when the first returns Nothing in the
@@ -1545,16 +994,16 @@ setIndexData n val= modifyData' (M.insert n val) (M.singleton n val)
 
 -- STRefs for the Transient monad
 
-newtype Ref a = Ref (IORef a)
+newtype Ref a = Ref (IORef  (Maybe a))
 
 
 -- | Initializes a new mutable reference  (similar to STRef in the state monad)
 -- It is polimorphic. Each type has his own reference
 -- It return the associated IORef, so it can be updated in the IO monad
-newRState:: (MonadIO m,TransMonad m, Typeable a) => a -> m (IORef a)
+newRState:: (MonadIO m,TransMonad m, Typeable a) => a -> m (IORef (Maybe a))
 newRState x= do
     ttr ("CREATING REF",typeOf x)
-    ref@(Ref rx) <- Ref <$> liftIO (newIORef x)
+    ref@(Ref rx) <- Ref <$> liftIO (newIORef $ Just x)
     setData  ref
     return rx
 
@@ -1564,35 +1013,53 @@ newRState x= do
 -- this one update it if it already exist
 setRState:: (MonadIO m,TransMonad m, Typeable a) => a -> m ()
 setRState x= do
-    Ref ref <- getData `onNothing` do
-                            ref <- Ref <$> liftIO (newIORef x)
-                            tr ("CREATING REF",typeOf x)
-                            setData  ref
-                            return  ref
+    Ref ref <- getData `onNothing` (Ref <$> newRState x)
+                          -- do
+                          --   ref <- Ref <$> liftIO (newIORef x)
+                          --   tr ("CREATING REF",typeOf x)
+                          --   setData  ref
+                          --   return  ref
     tr ("setRState",typeOf x)
-    liftIO $ atomicModifyIORef ref $ const (x,())
+    liftIO $ atomicModifyIORef ref $ const (Just x,())
 
 
 
 -- | Get the value of the mutable reference created with newRState
 getRData :: (MonadIO m, TransMonad m, Typeable a) => m (Maybe a)
-getRData= do
+getRData= res where
+  res=do
     mref <- getData
     case mref of
-     Just (Ref ref) -> do
-        Just <$> do r <- liftIO (readIORef ref)
-                    ttr ("getRData",typeOf r)
-                    return r
+     Just (Ref ref) ->  do
+       mr <- liftIO (readIORef ref)
+       case mr of 
+        Nothing -> do delState (ofType  `asTypeOf` typ  res) ;return Nothing
+        justr -> return justr
+  
+       
      Nothing ->  tr "getRData Nothing" >> return Nothing
+  
+  typ ::  m (Maybe a) -> Ref a
+  typ = error "type level"
 
 -- | return the reference value. It has not been  created, the computation stop and executes the anternative computation if any
 getRState :: Typeable a => TransIO a
 getRState= transient getRData
 
-delRState :: (MonadState TranShip m, Typeable a) => a -> m ()
-delRState x= delState (undefined `asTypeOf` ref x)
-  where ref :: a -> Ref a
-        ref = undefined
+delRState :: (MonadState TranShip m, MonadIO m, Typeable a) => a -> m ()
+delRState x = do
+  mref <- getData  
+  case mref `asTypeOf`  typ x of
+    Nothing -> return()
+    Just (Ref ref) ->  do delState (ofType  `asTypeOf` fromJust (typ  x)) ; liftIO $ writeIORef ref Nothing
+  where
+  typ ::  a -> Maybe (Ref a)
+  typ= error "type level"
+
+
+-- delRState x= delState (undefined `asTypeOf` ref x)
+--   where ref :: a -> Ref a
+--         ref = undefined
 
 -- ----
 -- -- composition of states: when two execution lines converge (collect, applicatives,node messaging) sometimes is necessary to merge the two states
@@ -1751,12 +1218,7 @@ waitEvents io= do
     abduce
     return r
   
-   
--- waitEvents io = do
---   mr <- parallel (SMore <$> io)
---   case mr of
---     SMore  x -> return x
---     SError e -> back   e
+
 
 -- | Run an IO computation asynchronously  carrying
 -- the result of the computation in a new thread when it completes.
@@ -2310,11 +1772,11 @@ react1 x = react x $ return()
   'reactId', like `react` gives the continuation as the function to be called when an external event happens, but also register internally the callback data  in order to clean the callback environment when a new callback is registered with the same identifier. This happens frequently in console actions, which are invoked internally by transient, but also it is necessary for freeing and finalizing resources when an external callback is removed. In that case `getCallbackData` gives the data that the external source of events may need for the removal. Alabado sea Dios.
 -}
 reactId :: Bool -> String -> TypeCallback -> String -> ((eventdata -> IO response) -> IO b) -> IO response -> TransIO eventdata
-reactId keep id t msg setHandler iob= transient $ do
+reactId keepIt id t msg setHandler iob= transient $ do
         modify $ \s -> s{execMode=let rs= execMode s in if rs /= Remote then Parallel else rs}
 
         cont <- get
-        when keep $ changeStatusCont cont $ \(status, lab) -> ((listener id status,lab )) -- <> BS.pack ",react"))
+        when keepIt $ changeStatusCont cont $ \(status, lab) -> ((listener id status,lab )) -- <> BS.pack ",react"))
 
         let cb dat = do
               tr "callback"
@@ -2327,7 +1789,7 @@ reactId keep id t msg setHandler iob= transient $ do
               -- example    readEVar1 ev >>= longcomputation: keep'/collect/await could kill the thread if not hanged
               runContCleanup cont' dat 
               iob
-        when keep $ liftIO $ addInternalCallbackData id t msg cont $ Callb cb
+        when keepIt $ liftIO $ addInternalCallbackData id t msg cont $ Callb cb
         handlerReturn <- liftIO $ setHandler  cb
         setState $ HandlerReturn handlerReturn
 
@@ -3323,7 +2785,7 @@ newEVar = liftIO $ do
 -- * Waits for events until the stream is finished
 -- * No explicit loops needed as this is the default behavior
 -- * Remains active until 'cleanEVar', 'lastWriteEVar' or 'delReadEvarPoint` are called
--- * Multiple executions in a loop will register the continuation multiple times
+-- * If it is in a loop it will register the continuation multiple times. Loops are not ok in Transient
 -- * Use 'cleanEVar' to avoid multiple registrations if needed
 readEVar :: EVar a -> TransIO a
 readEVar ev= do
@@ -3382,6 +2844,7 @@ delReadEVarPoint (EVar ref) id =liftIO $ do
 writeEVar :: MonadIO m => EVar a -> a -> m ()
 writeEVar (EVar ref) x = do
        conts <- liftIO $ readIORef ref
+       ttr ("WRITE EVAR subscriptions",length conts)
        -- freThreads to detach the forked thread from the calling context tree. 
        -- it will be atached to the called context. Glory to God
       --  freeThreads $ fork $  <-- the threads should'nt be free and run in the same thread to allow synchronous execution if wanted
@@ -3534,6 +2997,7 @@ getEVarFromMailbox' mboxid= ev where
    let name= MailboxId mboxid $ typeOf $ typeOfEv ev
    mbs <- liftIO $ readIORef mailboxes
    let mev =  M.lookup name mbs
+   ttr("getEVarFromMailbox",length mbs, name, isJust mev)
    case mev of
      Nothing ->newMailbox name >> getEVarFromMailbox' mboxid
      Just ev ->return $ unsafeCoerce ev
