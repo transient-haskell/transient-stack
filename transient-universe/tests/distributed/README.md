@@ -34,7 +34,7 @@ counted, not read by eye.
 | `CollectTest` | `runcol.sh <tag> <binary> <port>` | `collectc` with `minput` across a restart |
 | `AppJob` | `runajob.sh <tag> <case> <n2\|n0\|none> <binary> <port>` | runAt + job with a node killed and restarted (`jobterm`, `nested`, `caller`; `injob` and `seqterm`: a job and a sequence inside the first term). `AJ_SLOW` sets the slow term (µs) |
 | `ParseSerial` | `runparse.sh` | the applicative in Serial mode: parsers over a string and over streams (chunks cutting the numbers, one byte per chunk). The asynchronous-chunks cases give NO RESULT with the old applicative too |
-| `AppJob both` (with `seqjob`: the caller restarts while the remote stays up; fails, see `AppJob.hs`) | `runboth.sh <tag> <n1\|n0> <binary> <port>` | the caller and the remote node die together while the remote waits, and restart in either order. Restarting the caller first works; restarting the remote first duplicates the execution (see `AppJob.hs`) |
+| `AppJob both` (and `seqjob`: the caller restarts while the remote stays up) | `runboth.sh <tag> <n1\|n0> <binary> <port>` | the caller and the remote node die together while the remote waits, and restart in either order. Works restarting either node first. With an applicative (`caller`, `injob`) and the caller dead, the result arrives twice: the job stays inside the applicative |
 | `AppMinput` | `runminput.sh` | applicative of REST inputs (`minput`) |
 | `AssertTests` | `runassert.sh <tag> <binary> <port>`, `assertone.sh <index> <binary> <port>` | the assertion suite (four nodes). `assertone.sh` runs one test (`ASSERT_ONLY`) and reads `RESULT.txt` |
 

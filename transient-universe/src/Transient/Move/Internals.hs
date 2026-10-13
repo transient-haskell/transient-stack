@@ -1961,7 +1961,10 @@ listenNew port conn' = do
           sendRaw conn "OK" --    !> "CLOS detected"
           tr ("listenNew REMOTE NODE", unsafePerformIO $ readIORef $ remoteNode conn, idConn conn )
 
-          mread conn
+          -- when the other node closes the connection (it fell), the reader finishes: the connection is marked as
+          -- closed, so that the next 'msend' reconnects instead of writing to a dead socket, where the write succeeds
+          -- and the message is lost
+          mread conn <|> (mclose conn >> empty)
     _ -> do
       -- it is a HTTP request
       -- processMessage the current request in his own thread and then (<|>) any other request that arrive in the same connection

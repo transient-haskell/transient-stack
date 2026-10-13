@@ -3,11 +3,12 @@
 --   jobterm   the two terms of an applicative have a job inside the remote body; n2 dies during its wait
 --   nested    runAt n1 (runAt n2 body): the inner node n2 dies during its wait
 --   caller    job; applicative of two slow remote terms; the caller dies during the applicative
+--             (the job of the caller stays inside the applicative, so the call is repeated and the result arrives twice)
 --   both      job; runAt n1 (job inside); the caller and n1 die together during the wait, restart in either order
 --             (restarting n0 first works; restarting n1 first runs the body and delivers the result twice: the job of each node resumes on its own)
 --   seqterm   the first term is a sequence of two remote calls, no job
 --   seqjob    job; localIO; runAt n1 (body with a job); the caller dies and restarts while n1 stays up
---             (FAILS today: n1 answers over the old connection, the write to the dead socket succeeds silently and the answer is lost)
+--             (n1 answers over a new connection: the reader of the incoming connection marks it closed at EOF)
 --   injob     a job inside the first term of the applicative (the job is executed)
 -- The result must arrive once at the caller: "RESULT <value>".
 --
