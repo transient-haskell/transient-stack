@@ -3,7 +3,8 @@
 --   jobterm   the two terms of an applicative have a job inside the remote body; n2 dies during its wait
 --   nested    runAt n1 (runAt n2 body): the inner node n2 dies during its wait
 --   caller    job; applicative of two slow remote terms; the caller dies during the applicative
---   injob     job inside the first term of the applicative: the job is ignored (see job' in Job.hs), the result arrives
+--   seqjob    job; localIO; runAt n1 slow  (no applicative); the caller dies during the runAt
+--   injob     job inside the first term of the applicative (FAILS: n2 receives a log anchored at the job and executes the first term)
 -- The result must arrive once at the caller: "RESULT <value>".
 --
 --   ajob -p start/127.0.0.1/<port>/saveonexit                       (a node that is killed)
@@ -40,6 +41,10 @@ main = void $ keep $ initNode $ inputNodes <|> do
     "nested"  -> do x <- runAt n1 $ do y <- runAt n2 (body 2 slow)
                                        return (y + 10)
                     return (x, 0)
+    "seqjob"  -> do job
+                    localIO $ putStrLn "CALLER AFTER JOB"
+                    a <- runAt n1 (plain 1 slow)
+                    return (a, 0)
     "caller"  -> do job
                     localIO $ putStrLn "CALLER AFTER JOB"
                     (,) <$> runAt n1 (plain 1 500000) <*> runAt n2 (plain 2 slow)
