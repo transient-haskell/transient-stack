@@ -157,21 +157,39 @@ receive1  lc = do
       let hdrs= fromMaybe (unsafeCoerce emptyHeaders) $ unsafeCoerce $ M.lookup (typeOf (ofType :: HTTPHeaders))  map
       modify $ \st -> st{mfData= M.insert (typeOf (ofType :: HTTPHeaders)) hdrs $ mfData st }
       
+      
+      -- -- propagate prevDBRef from cross-session '#' routing so continuations find the browser session
+      -- case fmap unsafeCoerce (M.lookup (typeOf (ofType :: PrevClos)) map) of
+      --   Just (PrevClos dbr _ _ _ _) ->
+      --     void $ modifyData' (\current -> current{prevDBRef = dbr})
+      --                        (error "receive1: SLast: missing PrevClos")
+      --   Nothing -> return ()
+      
+      
       setLog (idConn conn') logs s2 closr
 
-      
+
 
 
     Right (SMore logs, s2, closr, map) -> do
-      ttr (lc,"RECEIVED <------- SMORE", logs)
       -- cdata <- liftIO $ readIORef $ connData conn'
       -- liftIO $ writeIORef (connData conn) cdata
       let conn' = fromMaybe (error "receive1: no connection") $ unsafeCoerce $ M.lookup (typeOf (ofType :: Connection))  map
+      ttr (lc,"RECEIVED <------- SMORE",idConn conn', logs)
 
       -- insert the  headers of the coming state in the local state
       let hdrs= fromMaybe (unsafeCoerce emptyHeaders) $ unsafeCoerce $ M.lookup (typeOf (ofType :: HTTPHeaders))  map
       modify $ \st -> st{mfData= M.insert (typeOf (ofType :: HTTPHeaders)) hdrs $ mfData st }
       
+      
+      -- -- propagate prevDBRef from cross-session '#' routing so continuations find the browser session
+      -- case fmap unsafeCoerce (M.lookup (typeOf (ofType :: PrevClos)) map) of
+      --   Just (PrevClos dbr _ _ _ _) ->
+      --     void $ modifyData' (\current -> current{prevDBRef = dbr})
+      --                        (error "receive1: SMore: missing PrevClos")
+      --   Nothing -> return ()
+
+
       setData conn'{calling= calling conn}
 
       -- tr ("receive REMOTE NODE'", unsafePerformIO $ readIORef $ remoteNode conn',idConn conn')
@@ -239,7 +257,7 @@ setLog idConn log sessionId  closr = do
   -}
 
 endpoint :: Maybe BSS.ByteString  -> TransIO ()
-endpoint  maybeName =   do
+endpoint  maybeName = do
 
   log@Log{..} <- getLog
   ttr("RECOVER",recover)
@@ -247,7 +265,10 @@ endpoint  maybeName =   do
   ttr("endpoint log",maybeName,log,pstring)
   closName <- maybe ( return $ BSS.pack . show $ hashClosure ) return maybeName
   PrevClos dbprevclos mn _ isapp iscollect  :: PrevClos <- getData `onNothing` error "teleport: please use `initNode to perform distrubuted computing"
+  ttr ("ENDPOINT PREVCLOS",mn,dbprevclos)
+  
   let idSession = if isJust mn then fromJust mn else fst $ getSessClosure dbprevclos :: SessionId
+  ttr ("ENDPOINT PREVCLOS",mn,dbprevclos,idSession)
 
   ttr("endpoint",closName, idSession,partLog,restLog,recover )
   let dblocalclos = getDBRef $ kLocalClos idSession (ClosureId closName) :: DBRef LocalClosure
@@ -583,14 +604,15 @@ processMessage s1@(SessionId ss1) closl s2 closr mlog deleteClosure = do
       '#' -> do  -- is a jump
         let (sx,sx')= BSS.span(/= '-') ss1
         let s= BSS.tail sx; s'= BSS.tail sx'
-        let contref= getDBRef $ kLocalClos (SessionId s) closl
+        let contref = getDBRef $ kLocalClos (SessionId s) closl
             contref'= getDBRef $ kLocalClos (SessionId s') closl
 
         liftIO $  do
+          -- create a new closure copy of the endpoint referenced but with the new session id
           cl <- (atomically $ readDBRef contref) `onNothing` errClosure conn (SessionId s) closl
           let cl'= cl{localSession=SessionId s',prevClos= contref} --,localCont=Nothing}
           atomically $ writeDBRef (getDBRef $ kLocalClos (SessionId s') closl) cl'
-        
+        -- send to this new closure
         modifyState' (\pc ->pc{prevDBRef= contref'}) $ error "processMessage: no prevclos"
 
 
@@ -668,9 +690,10 @@ getClosureLog (SessionId "0") (ClosureId "0") = do
 
 getClosureLog idSession clos = do
   ttr ("getClosureLog", idSession, clos)
-  closReg <- liftIO $ atomically $ readDBRef (getDBRef $ kLocalClos idSession clos) `onNothing` error ("closure not found in DB:" <> show (idSession, clos))
-  liftIO $ takeMVar (localMvar closReg)
-  closReg <- liftIO $ atomically $ readDBRef (getDBRef $ kLocalClos idSession clos) `onNothing` error ("closure not found in DB:" <> show (idSession, clos))
+  let dbref= getDBRef $ kLocalClos idSession clos
+  closReg <- liftIO $ atomically (readDBRef dbref)  `onNothing` error ("closure not found in DB:" <> show (idSession, clos))
+  liftIO $ takeMVar (localMvar closReg) -- avoid being recovered by different threads
+  closReg <- liftIO $ atomically $ readDBRef dbref  `onNothing` error ("closure not found in DB:" <> show (idSession, clos))
   case localCont closReg of
     Nothing -> do
       prev <- liftIO $ atomically $ readDBRef (prevClos closReg) `onNothing` error "prevClos not found"
