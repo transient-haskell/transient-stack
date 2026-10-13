@@ -3,6 +3,14 @@
 {-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
 {-# HLINT ignore "Use typeRep" #-}
 
+-- | The 'Loggable' type class and its standard instances.
+--
+-- 'Loggable' extends @(Show, Read, Typeable)@ with an efficient binary\/text
+-- serialisation layer used by 'Transient.Move.Logged.logged' to checkpoint
+-- computation state to disk so it can be resumed after a restart.
+--
+-- Values are serialised to a 'Data.ByteString.Builder' and deserialised via a
+-- 'TransIO' parser (see "Transient.Parse"). Fields are separated by @/@.
 module Transient.Loggable where
 
 import Transient.Internals
@@ -21,6 +29,12 @@ import Control.Monad.IO.Class
 import Data.Text(Text)
 import Data.Text.Encoding as TE
 
+{- | Values that can be serialised to\/from the Transient log format.
+
+Minimal definition: nothing — the default implementations use 'show'\/'reads'
+wrapped by 'fragment'.  Override for efficiency or when the default
+@Show@\/@Read@ round-trip is unsuitable.
+-}
 class (Show a, Read a,Typeable a) => Loggable a where
     serialize :: a -> Builder
     serialize = byteString . BSS.pack . show
@@ -38,17 +52,6 @@ class (Show a, Read a,Typeable a) => Loggable a where
       readsErr s=unsafePerformIO $  return (reads s) `catch`\(e :: SomeException) ->  return []
 
 
-    {-
-    deserializePure s = r
-      where
-      -- hideously inefficient
-      r= case readsErr $ BS.unpack s   of -- `traceShow` ("deserialize",typeOf $ typeOf1 r,s) of
-           []       -> Nothing  -- !> "Nothing"
-           (r,t): _ -> return (r, BS.pack t)
-      {-# INLINE readsErr #-}
-      readsErr s=unsafePerformIO $ return(reads s) `catch`\(e :: SomeException) ->  return []
-    -}
-
     deserialize ::  TransIO a
     deserialize = x
        where
@@ -58,7 +61,8 @@ class (Show a, Read a,Typeable a) => Loggable a where
 
 
 
--- | read a fragment of the log path until unescaped separator      
+-- | Read a segment of the log path up to the next unescaped separator (@/@).
+-- Quoted substrings (@\"…\"@) are included verbatim so embedded slashes are preserved.
 fragment s
        |BS.null s= (mempty,mempty)
        |otherwise=
@@ -70,12 +74,6 @@ fragment s
                          res= (r<> "\"" <> r' <> "\"" <> r'', rest'')
                      in  res
             else     (r,rest)
-
--- instance Show Builder where
---  show b= show $ toLazyByteString b
-
-
-
 
 
 instance Loggable a => Loggable (StreamData a) where
@@ -145,66 +143,8 @@ instance   (Typeable a, Loggable a) => Loggable [a]  where
                  <|> 
                   (unsafeCoerce . BS.unpack <$> deserialize)
 
--- instance   (Typeable a, Loggable a) => Loggable [a]  where
---     serialize :: (Typeable a, Loggable a) => [a] -> Builder
---     serialize []= byteString "[]"
---     serialize s@(x:xs)
---               | typeOf x== typeRep (Proxy :: Proxy Char) = serialize $ BS.pack (unsafeCoerce s)
---               | otherwise = serialize x <> serialize' xs
---           where
---           serialize' []= mempty
---           serialize' (x:xs)= byteString "/" <> serialize x <>  serialize' xs
--- -- >>> serialize ["hello","world"]
--- -- "hello/world"
-
---     deserialize :: (Typeable a, Loggable a) => TransIO [a]
---     deserialize= r
---       where
---       ty :: TransIO [a] -> [a]
---       ty = undefined
---       r= if typeOf (ty r) /= typeRep (Proxy :: Proxy String)
---               then try (tChar '[' >> sepBy deserialize (tChar ',') <* tChar ']')
---                  <|> sepBy deserialize (tChar '/')
---               else
---                 do
---                   try $ tChar '\"'
---                   withGetParseString $ \s -> maybe empty return (deserializePure s)
---                  <|> (unsafeCoerce . BS.unpack <$> deserialize)
--- instance   (Typeable a, Loggable a) => Loggable [a]  where
---     serialize :: (Typeable a, Loggable a) => [a] -> Builder
---     serialize []= byteString "[]"
---     serialize s@(x:xs)
---               | typeOf x== typeRep (Proxy :: Proxy Char) = serialize $ BS.pack (unsafeCoerce s)
---               | otherwise = serialize x <> serialize' xs
---           where
---           serialize' []= mempty
---           serialize' (x:xs)= byteString "/" <> serialize x <>  serialize' xs
--- -- >>> serialize ["hello","world"]
--- -- "hello/world"
-
---     deserialize :: (Typeable a, Loggable a) => TransIO [a]
---     deserialize= r
---       where
---       ty :: TransIO [a] -> [a]
---       ty = undefined
---       r= if typeOf (ty r) /= typeRep (Proxy :: Proxy String)
---               then try (tChar '[' >> sepBy deserialize (tChar ',') <* tChar ']')
---                  <|> sepBy deserialize (tChar '/')
---               else
---                 do
---                   try $ tChar '\"'
---                   withGetParseString $ \s -> maybe empty return (deserializePure s)
---                  <|> (unsafeCoerce . BS.unpack <$> deserialize)
-
-
+-- | Consume a @/@ separator (or skip leading spaces) between fields.
 sspace= tChar '/' <|> (many (tChar ' ') >> return ' ')
-
-
--- sspace=  oneSeparator <* dropSpaces
--- oneSeparator= withGetParseString $ \s -> 
---    if (not $ BS.null s) && (BS.head s) /= '/' 
---       then return (BS.head s, BS.tail s)
---       else empty
 
 instance Loggable Char
 instance Loggable Float
@@ -249,10 +189,6 @@ instance (Loggable a, Loggable b) => Loggable (Either a b)
 -- #ifdef ghcjs_HOST_OS
 
 
--- intDec i= Builder $ \s -> pack (show i) <> s
--- int64Dec i=  Builder $ \s -> pack (show i) <> s
-
--- #endif
 instance (Loggable k, Ord k, Loggable a) => Loggable (M.Map k a)  where
   serialize v= intDec (M.size v) <> M.foldlWithKey' (\s k x ->  s <> "/" <> serialize k <> "/" <> serialize x ) mempty v
   deserialize= do
@@ -262,12 +198,15 @@ instance (Loggable k, Ord k, Loggable a) => Loggable (M.Map k a)  where
                      <*> (tChar '/' *> deserialize)
       return $ M.fromList list
 
+-- | Escape every @/@ in a 'ByteString' as @//@ so it survives the @/@ field separator.
 dupSlash s= BS.foldl dupCharSlash (lazyByteString "") s where
   dupCharSlash s '/'=  (s <> lazyByteString "//") !> "slash"
   dupCharSlash s c= s <> lazyByteString (BS.singleton c) !> c
 
+-- | Characters treated as field separators in the log format.
 separators = "/:\t\n; " :: String
 
+-- | Inverse of 'dupSlash': unescape @//@ back to @/@ while consuming up to the next bare separator.
 undupSlash = do
     sandbox' $ do r <- anyChar ; when (r `elem` ']':separators)  empty
 
