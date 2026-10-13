@@ -427,7 +427,7 @@ noExState s= error $ s <> ": no execution state. Use initNode to init the Cloud 
 --
 -- == Logged terms of an applicative
 --
--- In an applicative ('applicativeNode' in "Transient.Move.Defs" explains how its nodes compose)
+-- In an applicative ('appHook' in "Transient.Move.Defs" explains how its nodes compose)
 -- the term that is asynchronous leaves @w\/@ (@addWait@) in the thread T0, that goes on with the
 -- next term, while its result arrives in another thread. When 'isApplicative' is set, that @w\/@ is
 -- a mutable 'Wait' segment, and 'logged' fills it with the value of the term as soon as it is

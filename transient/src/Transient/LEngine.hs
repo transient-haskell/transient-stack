@@ -310,7 +310,42 @@ instance Applicative TransIO where
   pure a  = Transient . return $ Just a
 
   (<*>) :: TransIO (a -> b) -> TransIO a -> TransIO b
-  mf <*> mx =  do
+  mf <*> mx = hookedAp mf mx
+
+-- | Hooks of the applicative. (It is a @data@ and not a @newtype@: the values of the state are shown as @()@ in the traces, which forces them, and a bare function can not be forced as @()@.) A program can install an 'AppHook' in the state (with 'setData') so that something is
+-- done around the two terms of every @<*>@ of 'TransIO' in the computations that run with that state, and in
+-- all the types that are derived from 'TransIO' (the instances of a newtype over 'TransIO' do not have to be
+-- defined again). 'Transient.Move.Defs' installs the hook that logs the result of both terms of a distributed
+-- applicative, see @appHook@.
+--
+-- Without a hook, the applicative is the one described in 'apTransIO'.
+data AppHook = AppHook { newAppNode :: IO AppNode }
+
+-- | The hooks of a node of the applicative (one @<*>@): L is the left term, R the right one. They are executed
+-- in the thread that gets the result of each term, so they can run in different threads.
+data AppNode = AppNode
+  { appAfterL  :: TransIO ()  -- ^ at the end of L
+  , appBeforeR :: TransIO ()  -- ^ at the start of R
+  , appAfterR  :: TransIO ()  -- ^ at the end of R
+  , appEnd     :: TransIO ()  -- ^ at the end of the node, also in the thread that gets no result from it
+  }
+
+hookedAp :: TransIO (a -> b) -> TransIO a -> TransIO b
+hookedAp mf mx = do
+    mhook <- gets $ \s -> (fmap unsafeCoerce $ M.lookup (typeOf (undefined :: AppHook)) (mfData s) :: Maybe AppHook)
+    case mhook of
+      Nothing                -> apTransIO mf mx
+      Just (AppHook newNode) -> do
+        node <- liftIO newNode
+        let mf' = do f <- mf; appAfterL node; return f
+            mx' = do appBeforeR node; x <- mx; appAfterR node; return x
+        r <- apTransIO mf' mx' <|> (appEnd node >> empty)
+        appEnd node
+        return r
+
+-- | The applicative of 'TransIO' without hooks.
+apTransIO :: TransIO (a -> b) -> TransIO a -> TransIO b
+apTransIO mf mx =  do
 
     isapp <- gets isApplicative
     modify $ \s ->s{isApplicative= True}

@@ -310,7 +310,7 @@ callTo node remoteProc = wormhole node $ atRemote remoteProc
 --   return r
 
 
--- | Superseded by the applicative of 'Cloud' ('applicativeNode' in "Transient.Move.Defs"), which resolves the
+-- | Superseded by the applicative of 'Cloud' ('appHook' in "Transient.Move.Defs"), which resolves the
 -- distributed applicatives by itself: it is no longer necessary to wrap them. It is kept for the programs that
 -- already use it, and none of the tests does.
 --
@@ -1788,7 +1788,7 @@ listen node@(Node _ port _ _) =  do
   -- fork connectionTimeouts
   --  fork loopClosures
 
-  setData emptyLog -- Log {recover = False, partLog = mempty, hashClosure = 0 {-,fromCont=False -}}
+  setData emptyLog -- Log {recover = False, partLog = mempty, hashClosure = 0}
 
   conn' <- tryState <|> defConnection
   chs <- liftIO $ newIORef M.empty
