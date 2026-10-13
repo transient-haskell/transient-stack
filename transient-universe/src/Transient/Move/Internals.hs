@@ -888,6 +888,8 @@ webSend con bs = localExceptions $ do
         return $ Just time
     _ -> error "webSend: no HTTP/HTTPS connection"
 
+-- | Send raw bytes over a connection. Dispatches on the connection type
+-- (TLS, plain TCP, WebSocket, HTTP2Node, etc.) and handles keep-alive.
 msend :: Connection -> BL.ByteString -> TransIO ()
 #ifndef ghcjs_HOST_OS
 
@@ -1088,6 +1090,7 @@ parMany p = do
   tr ("parmany isdone",d)
   if d then empty else p <|> parMany p
 
+-- | Read a stream of 'StreamData' packets from @conn@ in parallel, deserializing each one.
 parallelReadHandler :: Loggable a => Connection -> TransIO (StreamData a)
 parallelReadHandler conn = do
   -- onException $ \(e :: IOError) -> empty
@@ -1127,6 +1130,7 @@ getWebServerNode :: TransIO Node
 getWebServerNode = getNodes >>= return . Prelude.head
 #endif
 
+-- | Close a connection, releasing the underlying socket/TLS context.
 mclose :: MonadIO m => Connection -> m ()
 #ifndef ghcjs_HOST_OS
 
@@ -1175,11 +1179,11 @@ exclusiveCon mx = do
   liftIO $ putMVar conSection ()
   return r
 
--- | find the node, with connection updated, in the list of nodes
+-- | Find the node (with its connection pool) in the global node list.
 lookupNode :: MonadIO m => Node -> m  [Node]
 lookupNode node= filter (== node) <$> getNodes
 
--- check for cached connection and return it, otherwise tries to connect with connect1 without cookie check
+-- | Connect to @node@, reusing a cached connection from the pool when available.
 mconnect' :: Node -> TransIO Connection
 mconnect' node' = exclusiveCon $ do
   tr ("MCONNECT",node')
@@ -1435,6 +1439,7 @@ mconnect1 (node@(Node host port _ services)) = do
           return $ Just (conn {connData = cdata}, noParseContext)
         _ -> do tr "RECEIVED CLOSE"; liftIO $ WS.sendClose wscon ("" :: BS.ByteString); return Nothing
 
+-- | Return 'True' if @host@ refers to the local machine (localhost or a local interface IP).
 isLocal :: String -> Bool
 isLocal host =
   host == "localhost"
@@ -1584,6 +1589,7 @@ mconnect node' = do
 #ifndef ghcjs_HOST_OS
 
 
+-- | Open a TCP socket to @host@:@port@ with the given receive buffer size.
 connectTo' :: Int -> NS.HostName -> NS.ServiceName -> IO NS.Socket
 connectTo' bufSize host port = do
   -- tr ("HOSTPORT", host, port)
@@ -1610,9 +1616,11 @@ connectToWS  h (PortNumber p) = do
 #endif
 
 
+-- | Global list of open outgoing connections (used for cleanup on shutdown).
 connectionList :: IORef [Connection]
 connectionList = unsafePerformIO $ newIORef []
 
+-- | Build a minimal default 'Connection' for a Self (in-process) endpoint.
 defConnection :: TransIO Connection
 
 noParseContext =
@@ -1647,6 +1655,7 @@ defConnection = do
 
 #ifndef ghcjs_HOST_OS
 
+-- | Override the receive buffer size for the current connection (default 8192 bytes).
 setBuffSize :: Int -> TransIO ()
 setBuffSize size = do
   conn <- getData `onNothing` defConnection -- !> "DEFF3")
@@ -1713,8 +1722,7 @@ toHex l =
   let (q, r) = quotRem l 16
     in toHex q <> (BS.singleton $ if r <= 9 then toEnum (fromEnum '0' + r) else toEnum (fromEnum 'A' + r -10))
 
--- listen incoming requests
-
+-- | Bind and listen on @port@, returning the server socket.
 listenOn :: NS.ServiceName -> IO NS.Socket
 listenOn port = do
   addr <- resolve
@@ -1730,6 +1738,8 @@ listenOn port = do
       NS.listen sock 1024
       return sock
 
+-- | Accept incoming connections on @port@, wrapping each in an HTTP\/WebSocket
+-- connection and dispatching packets to 'execLog' via the Transient mailbox.
 listenNew port conn' = do
   sock <- liftIO $ listenOn port
 
@@ -2165,6 +2175,8 @@ noHTTP = onAll $ do
 
 #endif
 
+-- | Read a stream of 'StreamData' responses from a remote node connection
+-- established via 'wormhole' or 'mconnect'.
 listenResponses :: Loggable a => TransIO (StreamData a)
 listenResponses = do
   labelState "listen responses"
@@ -2275,6 +2287,8 @@ resetRemote ident = do
             liftIO $ killBranch cont
             return ()
 
+-- | Dispatch an incoming 'NodeMSG' packet: route it to the matching closure,
+-- handle errors and stream termination, or resume a waiting 'receive1' call.
 execLog :: StreamData NodeMSG -> TransIO ()
 execLog mlog = transient $ do
   tr "EXECLOG"
@@ -2429,6 +2443,8 @@ servePage (method, uri, headers :: NWS.Headers) = do
                 "HTTP/1.0 404 Not Found\nContent-Length: 13\r\nConnection: close\r\n\r\nNot Found 404"
       empty
 
+-- | Expose a raw HTTP endpoint: only runs during recovery and responds with the
+-- bytestring produced by @w@, respecting HTTP\/1.0 vs 1.1 keep-alive.
 api :: TransIO BS.ByteString -> Cloud ()
 api w = Cloud $ do
   log <- getLog
@@ -2491,6 +2507,7 @@ getRawHeaders = dropSpaces >> (withGetParseString $ \s -> return $ scan mempty s
 
 type PostParams = [(BS.ByteString, String)]
 
+-- | Parse an @application\/x-www-form-urlencoded@ body into @[(key, value)]@ pairs.
 parsePostUrlEncoded :: TransIO PostParams
 parsePostUrlEncoded = do
   dropSpaces
@@ -2524,6 +2541,7 @@ isBrowserInstance= False
 #endif
 
 {-# NOINLINE emptyPool #-}
+-- | Allocate an empty connection pool 'MVar'.
 emptyPool :: MonadIO m => m (MVar Pool)
 emptyPool = liftIO $ newMVar []
 
@@ -2532,9 +2550,11 @@ emptyPool = liftIO $ newMVar []
 createNodeServ :: NS.HostName -> Int -> [Service] -> IO Node
 createNodeServ h p svs = return $ Node h p Nothing svs
 
+-- | Create a plain node with no services.
 createNode :: MonadIO m => NS.HostName -> Int -> m Node
 createNode h p = liftIO $ createNodeServ h p []
 
+-- | Create an ephemeral web node (hostname @\"webnode\"@, random port, empty pool).
 createWebNode :: MonadIO m => m Node
 createWebNode = liftIO $ do
   pool <- emptyPool
@@ -2542,6 +2562,7 @@ createWebNode = liftIO $ do
   return $ Node "webnode" port (Just pool) [Service $ M.fromList [("webnode", "")]]
 
 
+-- | Global list of known cluster nodes (STM transactional variable).
 nodeList :: TVar [Node]
 nodeList = unsafePerformIO $ newTVarIO []
 
@@ -2844,6 +2865,7 @@ cleanConnectionData c = liftIO $ do
 
 delta = 60 -- 3*60
 
+-- | Background loop that closes idle connections and flushes stale closures from TCache.
 connectionTimeouts :: TransIO ()
 connectionTimeouts = do
   labelState "loop connections"
