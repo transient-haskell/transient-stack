@@ -347,7 +347,9 @@ endpoint1  maybeName = do
               ttr("send the segment to the alternative branch",recover, partLog, restLog,mode,not $ null restLog)
               if recover 
                 then do
-                  guard $ not $ null restLog
+                  -- only for a "w/" segment: injectHere is for the others. Without this, after a successful
+                  -- injectHere (it ends with empty) this alternative would run as well, with a segment that is not "w/"
+                  guard $ not (null restLog) && isw
                   mode <- gets execMode
                   ttr ("alternative comp. recover",mode)
                   setParseString $ BS.drop 2 segment
