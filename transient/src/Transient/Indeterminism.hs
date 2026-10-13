@@ -16,7 +16,7 @@ module Transient.Indeterminism (
 choose, for, collect, collect', group, groupByTime, burst
 ) where
 
-import Transient.Internals 
+import Transient.Internals
 
 import Data.IORef
 import Control.Applicative
@@ -24,33 +24,13 @@ import Data.Monoid
 import Data.Maybe
 import Control.Concurrent
 import Control.Monad.State
--- import Control.Exception hiding (onException)
--- import qualified Data.ByteString.Char8 as BS
 
--- import System.IO.Unsafe
-
--- | inject a stream of  values in the computation in as much threads as are available. You can use the
--- 'threads' primitive to control the parallelism.
---
--- unlike normal loops, two or more choose primitives or expressions that use choose can be composed algebraically
+-- | Inject a stream of values into the computation, spawning a thread per element.
+-- Use the 'threads' primitive to control the degree of parallelism.
+-- Unlike normal loops, two or more 'choose' expressions can be composed algebraically.
 choose :: [a] -> TransIO a
 choose =  foldr ((<|>) . async . return) empty
 
--- -- | inject a stream of SMore values in the computation in as much threads as are available. transmit the end of stream witha SLast value
--- chooseStream  ::  [a] -> TransIO (StreamData a)
--- chooseStream []= empty
--- chooseStream   xs = do
---     evs <- liftIO $ newIORef xs
---     parallel $ do
---            es <- atomicModifyIORef evs $ \es -> let tes= tail es in (tes,es)
---            case es  of
---             []  -> return SDone
---             x:_  -> x `seq` return $ SMore x
-
-
--- -- | Same as 'choose', but slower and more parallized in some cases
-
---
 
 
 

@@ -1,4 +1,5 @@
---  Transient.Internals was divided into Transient.LEngine and Transient.Core. This simulates the original Transient.Internals
+-- | Compatibility shim: re-exports 'Transient.LEngine' and 'Transient.Core' under the original
+-- @Transient.Internals@ name so existing code does not need to be updated.
 module Transient.Internals (
   module Transient.LEngine,
   module Transient.Core
