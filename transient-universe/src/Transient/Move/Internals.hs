@@ -687,6 +687,8 @@ teleport =  do
             let msg=  SMore $ ClosureData closRemote sessRemote clos idSession tosend
             ttr ("msg to send",msg)
             msend conn $ toLazyByteString $ serialize msg
+            -- the computation goes on in the other node, with its own jobs: the job of this one is finished
+            finishJob
             -- setConcurrentClosure idConn 
 
             -- subsequent paquets sent to this remote closure will address this closure directly since it has been created
@@ -700,6 +702,22 @@ teleport =  do
 
   
 
+
+-- | A job is finished when a later job is executed ('Transient.Move.Job.job'). When the later job is in another node,
+-- the job is finished when the call to that node has been sent without error: if this node is restarted, the
+-- call is not repeated. (If sending fails, the job stays, to be retried.) Inside an applicative the job stays: the
+-- other terms have not been sent yet.
+finishJob :: TransIO ()
+finishJob = do
+  -- 'isApplicative' is cleared inside the logged statements; the term of the applicative is marked in 'PrevClos'
+  app  <- maybe False isApplicativ <$> (getData :: TransIO (Maybe PrevClos))
+  mjob <- getData :: TransIO (Maybe Job)
+  case mjob of
+    Just j | not app -> do
+      ttr ("finishJob", j)
+      liftIO $ atomically $ delDBRef (getDBRef $ keyResource j :: DBRef Job)
+      delState j
+    _ -> return ()
 
 -- | The connection to respond to. In a called side whose connection is a Self connection (the replay of a job
 -- after a restart, which has no connection to the caller), it is opened to the node of the caller, stored in the closure

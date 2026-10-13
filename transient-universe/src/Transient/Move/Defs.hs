@@ -355,6 +355,11 @@ modifyLog f= do
 -- not only on how many there are of each kind. (An additive hash gave the same name to different points,
 -- e.g. an endpoint inside a previous remote call and an endpoint after it.)
 
+-- | A persistent job record: tracks the closure to resume, the node it runs on,
+-- and any error string from the last failed attempt.
+data Job= Job {jobClosure :: DBRef LocalClosure,jobNode :: Node, jobError :: Maybe String}  deriving (Typeable,Read,Show)
+instance TC.Indexable Job where key (Job dbr  _ _)= 'J':keyObjDBRef dbr
+
 -- | Build the TCache key for a 'LocalClosure': @\<closureId\>-\<sessionId\>@.
 kLocalClos (SessionId idSess) (ClosureId clos) = BC.unpack clos <> "-" <> BC.unpack idSess
 

@@ -6,9 +6,14 @@
 --   both      job; runAt n1 (job inside); the caller and n1 die together during the wait, restart in either order
 --             (restarting n0 first works; restarting n1 first runs the body and delivers the result twice: the job of each node resumes on its own)
 --   seqterm   the first term is a sequence of two remote calls, no job
---   seqjob    job; localIO; runAt n1 slow  (no applicative); the caller dies during the runAt
+--   seqjob    job; localIO; runAt n1 (body with a job); the caller dies and restarts while n1 stays up
+--             (FAILS today: n1 answers over the old connection, the write to the dead socket succeeds silently and the answer is lost)
 --   injob     a job inside the first term of the applicative (the job is executed)
 -- The result must arrive once at the caller: "RESULT <value>".
+--
+-- A job is finished when the call to another node has been sent without error (the later job is in that node, see
+-- 'finishJob' in Transient.Move.Internals). So the remote bodies that must survive a fall have a job (@body@), and a
+-- remote body without a job (@plain@) is executed at most once when its caller falls.
 --
 --   ajob -p start/127.0.0.1/<port>/saveonexit                       (a node that is killed)
 --   ajob -p start/127.0.0.1/<port>/jobs/exec                        (restart)
@@ -52,13 +57,13 @@ main = void $ keep $ initNode $ inputNodes <|> do
                     return (a, 0)
     "seqjob"  -> do job
                     localIO $ putStrLn "CALLER AFTER JOB"
-                    a <- runAt n1 (plain 1 slow)
+                    a <- runAt n1 (body 1 slow)
                     return (a, 0)
     "caller"  -> do job
                     localIO $ putStrLn "CALLER AFTER JOB"
-                    (,) <$> runAt n1 (plain 1 500000) <*> runAt n2 (plain 2 slow)
+                    (,) <$> runAt n1 (plain 1 500000) <*> runAt n2 (body 2 slow)
     _         -> (,) <$> (do job; localIO $ putStrLn "JOB IN TERM"; runAt n1 (plain 1 500000))
-                      <*> runAt n2 (plain 2 slow)
+                      <*> runAt n2 (body 2 slow)
   localIO $ putStrLn $ "RESULT " <> show r
   r1 <- runAt n1 $ localIO $ do putStrLn $ "AFTER AT N1 " <> show r; return r
   localIO $ putStrLn $ "BACK " <> show r1

@@ -39,11 +39,6 @@ import Unsafe.Coerce
 
 import Control.Concurrent(threadDelay)
 
--- | A persistent job record: tracks the closure to resume, the node it runs on,
--- and any error string from the last failed attempt.
-data Job= Job {jobClosure :: DBRef LocalClosure,jobNode :: Node, jobError :: Maybe String}  deriving (Typeable,Read,Show)
-instance TC.Indexable Job where key (Job dbr  _ _)= 'J':keyObjDBRef dbr
-
 -- | -- a job is intended to create tasks that will finish even if the program is interrupted
 --
 -- If the state of the program is commited (saved) the created thread is restored
