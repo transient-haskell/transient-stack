@@ -44,14 +44,18 @@ trace1= Debug.trace
 
 
 
+-- | Increase the trace indentation level by 2.
 indent, outdent :: MonadIO m => m ()
 
+-- | Decrease the trace indentation level by 2.
 indent =  liftIO $ modifyIORef rindent $ \n -> n+2
 outdent=  liftIO $ modifyIORef rindent $ \n -> n-2
 
 
 {-# NOINLINE rindent #-}
+-- | Global IORef tracking the current trace indentation level.
 rindent= unsafePerformIO $ newIORef 0
+-- | Format a value with a timestamp, thread-id colour, and current indentation.
 color :: Show a => a -> String
 color x= unsafePerformIO $ do
     t <- getCurrentTime
@@ -71,6 +75,7 @@ tttr :: (MonadIO m, Show a) => a -> m ()
 tttr x = liftIO $ putStrLn $ "\x1b[34mINFO\x1b[0m " <> color x
 
 
+-- | Conditionally trace @x@ (only when -DDEBUG is set) while returning @f@.
 tracec x f= Debug.trace (color x) f
 
 type StateIO = StateT TranShip IO
@@ -146,9 +151,6 @@ data TranShip = forall a b. TranShip
 lazy= unsafePerformIO
 
 threadId s= lazy $ readIORef $ rThreadId s
-
--- {-# NOINLINE threadId #-}
--- threadId x= unsafePerformIO $ readIORef $ pthreadId x
 
 instance Read SomeException where
   readsPrec n str  = [(SomeException $ ErrorCall str,"")] -- $ "attempting to deserialize  error: <"<> str <> ">"
@@ -236,6 +238,7 @@ runTransient1 t = do
   runStateT (runTrans t) topState
 
 {-#NOINLINE rtopState#-}
+-- | Global IORef holding the top-level 'TranShip' state (set by 'runTransient1').
 rtopState= unsafePerformIO $ newIORef $ error "no top state defined"
 
 -- | Run a transient computation with a given initial state. This is for basic testing. This does NOT support effects
@@ -244,11 +247,7 @@ runTransState st x = runStateT (runTrans x) st
 
 
 
--- emptyIfNothing :: Maybe a -> TransIO a
--- emptyIfNothing =  Transient  . return
-
-
--- -- | Get the continuation context: 
+-- | Get the current continuation (constructed via 'callCC' over the state monad transformer).
 getCont :: StateIO (a -> TransIO b)
 getCont= do
   let f x = callCC (\k ->   k $ unsafeCoerce  x)
@@ -265,32 +264,9 @@ callCC f = Transient $ \ c -> runContT (f (\ x -> Transient $ \ _ ->  c $ Just x
 
 
 
--- runContHang :: p -> TranShip -> StateT TranShip IO (Maybe a)
--- runContHang x TranShip{ fcomp = fs } =do
---    let   fs'=  \r -> do hang; fs r
---    runTrans $ unsafeCoerce fs'  x
-
-
 -- | Run the continuation included in the state. The result in the IO monad.
 runContIO :: p -> TranShip -> IO (Maybe a, TranShip)
 runContIO x cont = runStateT (runCont x cont) cont
-
--- runContHang' :: p -> TranShip -> IO (Maybe a, TranShip)
--- runContHang' x cont = runStateT (runContHang x cont) cont
-
--- -- | Warning: Radically untyped stuff. handle with care
--- getContinuations :: StateIO (a -> TransIO b)
--- getContinuations = do
---   TranShip { fcomp = fs } <- get
---   return $ unsafeCoerce fs
-
-{-
-runCont cont = do
-  mr <- runClosure cont
-  case mr of
-    Nothing -> return Nothing
-    Just r -> runContinuation cont r
--}
 
 -- | Compose a list of continuations.
 {-# INLINE compose #-}
@@ -422,6 +398,7 @@ instance (Monoid a) => Monoid (Transient r StateIO a) where
 instance Monoid a => Semigroup (Transient r StateIO a) where
     (<>)=  mappendt
 
+-- | Lift 'mappend' into the 'Transient' monad: run both branches and combine their results.
 mappendt x y = mappend <$> x <*> y
 
 
@@ -461,13 +438,14 @@ instance Show ParseError where
 
 instance Exception ParseError
 
+-- | Like 'read' but throws 'ParseError' with type information on failure.
 read' s= case readsPrec' 0 s of
     [(x,"")] -> x
 
     _  -> throw $ ParseError $ "reading " ++ s
 
 
-
+-- | Like 'readsPrec' but wraps IO exceptions as 'ParseError'.
 readsPrec' n = unsafePerformIO . readWithErr n
 
   where
