@@ -310,7 +310,7 @@ callTo node remoteProc = wormhole node $ atRemote remoteProc
 --   return r
 
 
--- | Superseded by the applicative of 'Cloud' ('appHook' in "Transient.Move.Defs"), which resolves the
+-- | Superseded by the applicative of 'Cloud' ('apTransIO' in "Transient.LEngine"), which resolves the
 -- distributed applicatives by itself: it is no longer necessary to wrap them. It is kept for the programs that
 -- already use it, and none of the tests does.
 --

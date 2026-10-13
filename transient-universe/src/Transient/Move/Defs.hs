@@ -5,7 +5,7 @@
 -- Dedicado a Jesucristo, mi salvador
 -- Y a mi hija
 
-module Transient.Move.Defs (module Transient.Move.Defs, Log(..), LogSeg(..), LogB(..), FragmentType(..), ClosureKey, emptyLog, hashStep, hashExec, hashDone, hashWait, hashApp) where
+module Transient.Move.Defs (module Transient.Move.Defs, Log(..), LogSeg(..), LogB(..), FragmentType(..), ClosureKey, emptyLog, hashStep, hashExec, hashDone, hashWait, hashApp, hashTerm, hashNode) where
 
 import Transient.Internals
 import Transient.EVars
@@ -54,9 +54,10 @@ import Control.Applicative
 -- intermediate value can be checkpointed and replayed across restarts.
 --
 -- All the instances are derived from 'TransIO', including the ones that are defined with its applicative
--- (@Semigroup@, @Monoid@, @Num@...). The applicative of 'TransIO' consults the 'AppHook' that 'appHook' installs in
--- the state of the node, so the distributed conjunctions made with any of them are resolved as the ones made
--- with @<*>@, and a new binary operator defined for 'TransIO' does not have to be defined again for 'Cloud'.
+-- (@Semigroup@, @Monoid@, @Num@...). The applicative of 'TransIO' puts in the log the result of both terms of a
+-- distributed applicative ('apTransIO' in "Transient.LEngine"), so the distributed conjunctions made with any of them
+-- are resolved as the ones made with @<*>@, and a new binary operator defined for 'TransIO' does not have to be
+-- defined again for 'Cloud'.
 newtype Cloud a = Cloud {unCloud :: TransIO a}
   deriving
     ( AdditionalOperators,
@@ -273,7 +274,7 @@ instance Show LocalClosure where show lc= keyResource lc
 -- | A log segment: either immutable or a mutable hole.
 --
 -- Mutable holes solve the problem of the logs of the applicative with asynchronous terms
--- (see the documentation of 'logged' and 'appHook'). In @f \<*> x@, @fparallel@
+-- (see the documentation of 'logged' and 'apTransIO'). In @f \<*> x@, @fparallel@
 -- executes @f@ and @xparallel@ executes @x@ ('Transient.LEngine'). When the first term is
 -- asynchronous, the two branches continue in different threads with different logs, and the one
 -- that completes the applicative takes the value of the other term from memory, not from the log.
@@ -309,16 +310,6 @@ fixed b = LogB [Fixed b]
 waitSeg :: IORef Builder -> LogB
 waitSeg w = LogB [Wait w]
 
--- | 'Next' segment: the log of the second term of an applicative (initially empty).
-nextSeg :: IORef LogB -> LogB
-nextSeg x = LogB [Next x]
-
--- | Remove the last segment if it is that 'Next' hole.
-dropNext :: IORef LogB -> LogB -> LogB
-dropNext h (LogB segs) = case reverse segs of
-    Next h' : rest | h == h' -> LogB (reverse rest)
-    _                        -> LogB segs
-
 -- | The segments that the second log adds to the first one, which is a prefix of it.
 deltaLog :: LogB -> LogB -> LogB
 deltaLog (LogB initial) (LogB after) = LogB (drop (length initial) after)
@@ -330,7 +321,6 @@ renderLog (LogB segs) = foldMap seg segs
   where
   seg (Fixed b) = b
   seg (Wait r)  = BI.builder $ \k br -> readIORef r >>= \b -> BI.runBuilderWith b k br
-  seg (Next r)  = BI.builder $ \k br -> readIORef r >>= \l -> BI.runBuilderWith (renderLog l) k br
   seg (Pending io) = BI.builder $ \k br -> io >>= \l -> BI.runBuilderWith (renderLog l) k br
 
 -- | True if the log is empty.
@@ -364,65 +354,6 @@ modifyLog f= do
 -- is combined with 'hashStep', which is not commutative: the name depends on the order of the steps,
 -- not only on how many there are of each kind. (An additive hash gave the same name to different points,
 -- e.g. an endpoint inside a previous remote call and an endpoint after it.)
-
--- | The hook of the applicative of 'TransIO' ('AppHook') that logs the result of both terms of a distributed
--- applicative. It is installed in the state of the node by @initNode@, so it is the applicative of every
--- type derived from 'TransIO' ('Cloud' among them). Each @\<*>@ is a node with two sides: the left term L and
--- the right term R. A side may be another applicative node, so the nodes compose and it works with any number
--- of terms.
---
--- == Problem
---
--- @TransIO@'s @\<*>@ ('Transient.LEngine') executes L and R in parallel if L is asynchronous: the thread
--- T0 that executes L gets no result and goes on with R, while the result of L arrives in another thread T1.
--- The thread that completes the node (the one that receives the last result) takes the value of the other
--- side from memory. Its log has only its own side, so a remote node that replays that log (or a restart)
--- can not complete the applicative:
---
--- > T1 (completes by L):  ... v1/          -- v2 is missing
--- > T0 (completes by R):  ... w/  v2/      -- v1 is missing (see the Wait segment of 'logged')
---
--- == Mechanism
---
--- 1. At the end of L, in whatever thread, a @Next H@ segment is left at the end of its log. @H@ is
---    shared by the node and will contain the log of R.
---
--- 2. At the start of R, if the last segment of the log is that @Next H@, L has finished in the same thread
---    and R continues in it with its own log: the segment is removed. If it is not, L is asynchronous.
---
--- 3. At the end of R, in whatever thread, the segments that R has added to the log are saved in @H@.
---    The thread that completes the node by L has always @H@ filled, since it only continues when R has
---    a result. Its log is then @... v1\/ v2\/@, as in the replay.
---
--- 4. The hash of the path after the node is the same in every thread and in the replay: it depends on the end
---    of L and not on the thread that completes the node (see 'hashStep'). It is set also in the thread that gets
---    no result, since the next term of an enclosing node starts from it.
---
--- When L finishes in the same thread as R (an applicative of synchronous terms) the @Next@ segment is added and
--- removed, so the log is the same as without the hook.
-appHook :: AppHook
-appHook = AppHook $ do
-    h        <- newIORef mempty   -- the log of R
-    hEndL    <- newIORef Nothing  -- the hash at the end of L
-    initialR <- newIORef mempty   -- the log at the start of R
-    let -- the hash at the end of L, same in every thread: at the start of R in the thread that gets no
-        -- result from L (L asynchronous) and after L in the others
-        endL = do l <- getLog
-                  liftIO $ writeIORef hEndL $ Just $ hashClosure l
-    return AppNode
-      { appAfterL  = do endL
-                        void $ modifyLog (\l -> l{partLog= partLog l <> nextSeg h})
-      , appBeforeR = do endL
-                        void $ modifyLog (\l -> l{partLog= dropNext h $ partLog l})
-                        getLog >>= liftIO . writeIORef initialR . partLog
-      , appAfterR  = do after   <- partLog <$> getLog
-                        initial <- liftIO $ readIORef initialR
-                        liftIO $ writeIORef h $ deltaLog initial after
-      , appEnd     = do mh <- liftIO $ readIORef hEndL
-                        forM_ mh $ \hl ->
-                            void $ modifyLog (\l -> l{hashClosure= hashStep hl hashApp})
-      }
-
 
 -- | Build the TCache key for a 'LocalClosure': @\<closureId\>-\<sessionId\>@.
 kLocalClos (SessionId idSess) (ClosureId clos) = BC.unpack clos <> "-" <> BC.unpack idSess

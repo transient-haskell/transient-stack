@@ -360,7 +360,7 @@ endpoint1  maybeName = do
                   -- logged): the statement that skipped is not replayed, so its step must be applied here
                   app <- gets isApplicative
                   void $ modifyLog (\l -> l {recover = True, partLog=mempty,restLog= tail restLog
-                                              ,hashClosure= if app then hashStep hash hashDone else hashClosure l})
+                                              ,hashClosure= if app then hashStep hash hashTerm else hashClosure l})
                   
                 else do
                   tr "set the log for alternative computation"
@@ -427,7 +427,7 @@ noExState s= error $ s <> ": no execution state. Use initNode to init the Cloud 
 --
 -- == Logged terms of an applicative
 --
--- In an applicative ('appHook' in "Transient.Move.Defs" explains how its nodes compose)
+-- In an applicative ('apTransIO' in "Transient.LEngine" explains how its nodes compose)
 -- the term that is asynchronous leaves @w\/@ (@addWait@) in the thread T0, that goes on with the
 -- next term, while its result arrives in another thread. When 'isApplicative' is set, that @w\/@ is
 -- a mutable 'Wait' segment, and 'logged' fills it with the value of the term as soon as it is
@@ -543,7 +543,7 @@ logged mx =  sandboxDataCond handle $ do
               waitMark= if app then waitSeg wref else wait
               -- in an applicative the hole stands for the value of mx: same hash as the path with the value,
               -- so that endpoint names do not depend on whether the hole was filled when the log was replayed
-              waitHash finalLog= if app then hashStep (hashClosure initialLog) hashDone
+              waitHash finalLog= if app then hashStep (hashClosure initialLog) hashTerm
                                         else hashStep (hashClosure finalLog) hashWait
           tr ("finish logged stmt of type",typeOf logit, "with empty")
           prevc <- getData `onNothing` noExState "logged"

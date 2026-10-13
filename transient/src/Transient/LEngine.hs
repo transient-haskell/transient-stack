@@ -26,7 +26,7 @@ import Control.Exception
 import qualified Data.ByteString.Char8                  as BS
 import qualified Data.ByteString.Lazy.Char8             as BSL
 import Data.String
-import Data.ByteString.Builder (Builder)
+import Data.ByteString.Builder (Builder, string7)
 
 import System.IO.Unsafe
 import Data.Time.Clock
@@ -119,8 +119,6 @@ data LogSeg
     -- ^ immutable segment
   | Wait (IORef Builder)
     -- ^ written by @addWait@ in an applicative term that is asynchronous; it contains @w\/@ until the term is resolved
-  | Next (IORef LogB)
-    -- ^ the log that the second term of an applicative writes (empty until it is resolved)
   | Pending (IO LogB)
     -- ^ the log of a term of an applicative that may not be resolved yet: it is read when the log is serialised
 
@@ -144,11 +142,13 @@ emptyLog= Log False (LogB []) []  0
 hashStep :: Int -> Int -> Int
 hashStep h c = (h * 31 + c) `mod` 2147483647
 
-hashExec, hashDone, hashWait, hashApp :: Int
+hashExec, hashDone, hashWait, hashApp, hashTerm, hashNode :: Int
 hashExec= 1
 hashDone= 2
 hashWait= 3
 hashApp= 4
+hashNode= 6   -- entering a node of an applicative: nested nodes start at different points of the path
+hashTerm= 5   -- the first term of an applicative, whatever its steps: it can not coincide with the path inside the term
 
 -- | TranShip describes the context of a TransientIO computation:
 data TranShip = forall a b. TranShip
@@ -180,8 +180,6 @@ data TranShip = forall a b. TranShip
   , isApplicative :: Bool
   , mfLog :: Log
     -- ^ the log of the execution of a distributed computation. A field and not an entry of 'mfData': it is used in every step
-  , onApplicative :: Maybe AppHook
-    -- ^ hooks of the applicative: see 'AppHook'. A field and not a 'mfData' entry: it is read in every @<*>@
   } deriving Typeable
 
 -- data IsApplicative= NoApp | AppFirst | AppSecond deriving Eq
@@ -255,8 +253,7 @@ emptyTranShip th label par childs =
          , parseContext = ParseContext (return SDone) mempty (unsafePerformIO $ newIORef True)
          , execMode = Serial
          , isApplicative= False
-         , mfLog= emptyLog
-         , onApplicative= Nothing}
+         , mfLog= emptyLog}
 
 -- | Run a transient computation with a default initial state. This is for basic testing. This does NOT support effects
 runTransient :: TransIO a -> IO (Maybe a, TranShip)
@@ -355,100 +352,105 @@ instance Applicative TransIO where
   pure a  = Transient . return $ Just a
 
   (<*>) :: TransIO (a -> b) -> TransIO a -> TransIO b
-  mf <*> mx = hookedAp mf mx
+  mf <*> mx = apTransIO mf mx
 
--- | Hooks of the applicative. A computation can set the field 'onApplicative' of its state so that something is
--- done around the two terms of every @<*>@ of 'TransIO' that runs with that state, and in all the types that are
--- derived from 'TransIO' (the instances of a newtype over 'TransIO' do not have to be defined again).
--- 'Transient.Move.Defs' defines the hook that logs the result of both terms of a distributed applicative, see
--- @appHook@.
+-- | The applicative of 'TransIO'. Each @<*>@ is a node with two sides, the left term L and the right term R, that
+-- can be other nodes, so it works with any number of terms.
 --
--- The field is ambient: the @\<*>@ of a 'TransIO' computation inside a @local@ also finds it. That is harmless: the
--- hook leaves no trace when the first term finishes in the same thread, and the log of what runs inside a logged
--- statement is replaced by its value when the statement ends. (Clearing the field while @local@ runs does not
--- work: the threads that are forked inside it never see the restoring of the field.)
+-- == The log of the applicative
 --
--- Without a hook the applicative is the one described in 'apTransIO'.
+-- If the first term is asynchronous, L and R run in parallel in different threads. The thread that completes
+-- the node is the one that gets the last result, and its log would have only its own side: a remote node (or a
+-- restart) that replays it could not complete the applicative. The two 'IORef' of the node, that hold the result
+-- of each term, hold also what the term added to the log ('mfLog'):
 --
--- (It is a @data@ and not a @newtype@: the values of the state are shown as @()@ in the traces, which forces
--- them, and a bare function can not be forced as @()@.)
-data AppHook = AppHook { newAppNode :: IO AppNode }
-
--- | The hooks of a node of the applicative (one @<*>@): L is the left term, R the right one. They are executed
--- in the thread that gets the result of each term, so they can run in different threads.
-data AppNode = AppNode
-  { appAfterL  :: TransIO ()  -- ^ at the end of L
-  , appBeforeR :: TransIO ()  -- ^ at the start of R
-  , appAfterR  :: TransIO ()  -- ^ at the end of R
-  , appEnd     :: TransIO ()  -- ^ at the end of the node, also in the thread that gets no result from it
-  }
-
-hookedAp :: TransIO (a -> b) -> TransIO a -> TransIO b
-hookedAp mf mx = do
-    mhook <- gets onApplicative
-    case mhook of
-      Nothing                -> apTransIO mf mx
-      Just (AppHook newNode) -> do
-        node <- liftIO newNode
-        let mf' = do f <- mf; appAfterL node; return f
-            mx' = do appBeforeR node; x <- mx; appAfterR node; return x
-        r <- apTransIO mf' mx' <|> (appEnd node >> empty)
-        appEnd node
-        return r
-
--- | The applicative of 'TransIO' without hooks.
+--  * At the end of L, in whatever thread, @r1@ gets the value of L and the segments that L added to the log.
+--  * R starts with the log of the start of the node followed by a 'Pending' hole that reads @r1@: the log of L if
+--    it is known when the log is serialised, @w\/@ if it is not. The partial steps of L that its thread left in the
+--    log (e.g. its first endpoint) are not part of the log of R. At the end of R, @r2@ gets its value and its
+--    segments.
+--  * The thread that sees both results completes the node with the log of the start followed by the segments of L and
+--    of R, in whichever order they arrived.
+--
+-- Hash: L counts as one step (@hashTerm@), the same in every thread and in the replay of a log with @w\/@, whatever
+-- the number of statements of L. At the end of the node the hash advances with @hashApp@, also in the thread that
+-- gets no result from the node.
+--
+-- When L finishes in the same thread as R (an applicative of synchronous terms) nothing is added to the log.
 apTransIO :: TransIO (a -> b) -> TransIO a -> TransIO b
 apTransIO mf mx =  do
 
     isapp <- gets isApplicative
     modify $ \s ->s{isApplicative= True}
 
-    r1 <- liftIO $ newIORef Nothing
-    r2 <- liftIO $ newIORef Nothing
+    -- the log and the hash at the start of the node. Entering the node advances the hash, so the nodes nested in the
+    -- first term do not repeat the path of this one
+    Log{partLog= LogB seg0, hashClosure= hc} <- gets mfLog
+    let h0= hashStep hc hashNode
+    modify $ \s -> s{mfLog= (mfLog s){hashClosure= h0}}
+    let n0   = length seg0
+        hL   = hashStep h0 hashTerm     -- after the first term, whatever its steps
+        hEnd = hashStep h0 hashApp      -- after the node
+
+    r1 <- liftIO $ newIORef Nothing     -- value of the first term and the segments that it added to the log
+    r2 <- liftIO $ newIORef Nothing     -- the same for the second one
 
     let restoreflag= modify $ \s -> s{isApplicative= isapp}
+        setLog segs h= modify $ \s -> s{mfLog= (mfLog s){partLog= LogB segs, hashClosure= h}}
+        setHash h= modify $ \s -> s{mfLog= (mfLog s){hashClosure= h}}
+        addedSince n= gets $ \s -> let LogB segs= partLog (mfLog s) in drop n segs
 
-    r <-  (fparallel r1 r2 <|> xparallel r1 r2) <|> (restoreflag >> empty)
+        -- the thread that sees both results completes the node
+        join ld rd= setLog (seg0 ++ ld ++ rd) hEnd
+
+        fparallel= do
+          tr "fparallel"
+          f <- mf
+          ld <- addedSince n0
+          liftIO $ writeIORef r1 (Just (f, ld))
+          setHash hL
+          mr <- liftIO (readIORef r2)
+          case mr of
+                Nothing      -> empty
+                Just (x, rd) -> do join ld rd; return $ f x
+
+        xparallel= do
+          tr "xparallel"
+          mr <- liftIO (readIORef r1)
+          case mr of
+                Nothing -> do
+                  p <- gets execMode
+                  tr ("EXECMODE",p)
+                  -- the first term may be being executed in parallel and will give its result later
+                  if p== Serial then empty else runR
+                Just _  -> runR
+
+        runR= do
+          -- the log of the second term: the start of the node followed by a hole for the first term. If the first
+          -- term is not resolved when the log is serialised, the hole is what the first term has left in this thread
+          -- (the tokens @w\/@ of the terms that are pending, so a replay skips them), without the values that the
+          -- statements of the term get later: the term may go on after them. When it is resolved, the hole is
+          -- all that the term added.
+          pending <- addedSince n0
+          let frozen (Wait _)= Fixed $ string7 "w/"
+              frozen sg      = sg
+              hole= Pending $ do
+                      m <- readIORef r1
+                      return $ case m of
+                         Just (_, ld) -> LogB ld
+                         Nothing      -> LogB (map frozen pending)
+          setLog (seg0 ++ [hole]) hL
+          x <- mx
+          rd <- addedSince (n0 + 1)
+          liftIO $ writeIORef r2 (Just (x, rd))
+          mr <- liftIO (readIORef r1)
+          case mr of
+            Nothing      -> empty
+            Just (f, ld) -> do join ld rd; return $ f x
+
+    r <-  (fparallel <|> xparallel) <|> (restoreflag >> setHash hEnd >> empty)
     restoreflag
     return r
-
-    where
-
-    fparallel r1 r2= do
-      tr "fparallel"
-      f <- mf
-      liftIO $ writeIORef r1 (Just f)
-      mr <- liftIO (readIORef r2)
-      case mr of
-            Nothing -> empty
-            Just x  -> return $ f x
-
-    xparallel r1 r2 = do
-      tr "xparallel"
-      mr <- liftIO (readIORef r1)
-      case mr of
-            Nothing -> do
-
-              p <- gets execMode
-              tr ("EXECMODE",p)
-              if p== Serial then empty else do
-
-                       -- the first term may be being executed in parallel and will give his result later
-                       x <- mx
-                       liftIO (writeIORef r2 $ Just x)
-
-                       mr <- liftIO (readIORef r1)
-                      --  tr ("XPARALELL",isJust mr)
-                       case mr of
-                         Nothing -> empty
-                         Just f  -> return $ f x
-
-
-            Just f -> do
-              x <- mx
-              liftIO $ writeIORef r2 (Just x)
-              return $ f x
-
 
 
 
