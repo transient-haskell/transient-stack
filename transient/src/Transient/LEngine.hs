@@ -392,7 +392,7 @@ apTransIO mf mx =  do
         hL   = hashStep h0 hashTerm     -- after the first term, whatever its steps
         hEnd = hashStep h0 hashApp      -- after the node
 
-    r1 <- liftIO $ newIORef Nothing     -- value of the first term and the segments that it added to the log
+    r1 <- liftIO $ newIORef Nothing     -- value of the first term, the segments that it added to the log, and the thread that got it
     r2 <- liftIO $ newIORef Nothing     -- the same for the second one
 
     let restoreflag= modify $ \s -> s{isApplicative= isapp}
@@ -407,7 +407,8 @@ apTransIO mf mx =  do
           tr "fparallel"
           f <- mf
           ld <- addedSince n0
-          liftIO $ writeIORef r1 (Just (f, ld))
+          me <- liftIO myThreadId
+          liftIO $ writeIORef r1 (Just (f, ld, me))
           setHash hL
           mr <- liftIO (readIORef r2)
           case mr of
@@ -423,7 +424,21 @@ apTransIO mf mx =  do
                   tr ("EXECMODE",p)
                   -- the first term may be being executed in parallel and will give its result later
                   if p== Serial then empty else runR
-                Just _  -> runR
+                Just (_, ld, t) -> do
+                  me <- liftIO myThreadId
+                  -- the first term finished in this thread: its segments are already in the log, the second term goes
+                  -- on after them and only the hash is normalised. Otherwise (it finished in another thread while this
+                  -- one was starting) the log of this thread has to be rebuilt.
+                  if t == me then runSync ld else runR
+
+        runSync ld= do
+          x <- mx
+          rd <- addedSince (n0 + length ld)
+          liftIO $ writeIORef r2 (Just (x, rd))
+          mr <- liftIO (readIORef r1)
+          case mr of
+            Nothing          -> empty
+            Just (f, _, _)   -> do setHash hEnd; return $ f x
 
         runR= do
           -- the log of the second term: the start of the node followed by a hole for the first term. If the first
@@ -437,7 +452,7 @@ apTransIO mf mx =  do
               hole= Pending $ do
                       m <- readIORef r1
                       return $ case m of
-                         Just (_, ld) -> LogB ld
+                         Just (_, ld, _) -> LogB ld
                          Nothing      -> LogB (map frozen pending)
           setLog (seg0 ++ [hole]) hL
           x <- mx
@@ -446,7 +461,7 @@ apTransIO mf mx =  do
           mr <- liftIO (readIORef r1)
           case mr of
             Nothing      -> empty
-            Just (f, ld) -> do join ld rd; return $ f x
+            Just (f, ld, _) -> do join ld rd; return $ f x
 
     r <-  (fparallel <|> xparallel) <|> (restoreflag >> setHash hEnd >> empty)
     restoreflag
