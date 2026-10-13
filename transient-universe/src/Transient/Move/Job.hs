@@ -12,7 +12,7 @@
 -- Author: Alabado sea Dios que inspira todo lo bueno que hago. Porque Él es el que obra en mi
 --
 {-# LANGUAGE ScopedTypeVariables #-}
-module Transient.Move.Job(job, config, runJobs,collectc,getMicroSeconds) where
+module Transient.Move.Job(job, config, runJobs,collectc,getMicroSeconds, Ping(..)) where
 import Transient.Internals
 import Transient.Move.Internals
 import Transient.Move.Defs
@@ -21,7 +21,6 @@ import Transient.Move.Logged
 import qualified Data.ByteString.Char8 as BC
 import Control.Monad.IO.Class
 import Data.TCache  hiding (onNothing)
--- import Data.TCache.DefaultPersistence as TC(key)
 import Data.TCache.IndexQuery
 import qualified Data.TCache.DefaultPersistence as TC
 
@@ -38,11 +37,10 @@ import System.Time
 import System.IO
 import Unsafe.Coerce 
 
--- newtype Job= Job (Int,BC.ByteString)  deriving (Typeable,Read,Show,Eq)
+-- | A persistent job record: tracks the closure to resume, the node it runs on,
+-- and any error string from the last failed attempt.
 data Job= Job {jobClosure :: DBRef LocalClosure,jobNode :: Node, jobError :: Maybe String}  deriving (Typeable,Read,Show)
 instance TC.Indexable Job where key (Job dbr  _ _)= 'J':keyObjDBRef dbr
--- data Jobs= Jobs{pending :: [Job]}  deriving (Read,Show)
--- instance TC.Indexable Jobs where key _= "__Jobs"
 
 -- | -- a job is intended to create tasks that will finish even if the program is interrupted
 --
@@ -108,20 +106,21 @@ job' mname  =  local $  do
       Nothing ->                       liftIO $ atomically $ writeDBRef (getDBRef $ keyResource this)  this{jobError= Just $ show e}
 
 
+-- | Remove a job from TCache and clear it from the current state.
 jobRemove :: Job -> TransIO ()
 jobRemove job= do
       ttr ("jobRemove", job)
       liftIO $ atomically $ delDBRef  (getDBRef $ keyResource job :: DBRef Job)
       delState job
-      -- TODO: the endpoint of the job should receive a SDone
 
 
 
--- A node notify that it is ready to continue unfinished jobs
-newtype Ping= Ping Node
 newtype AllJobsExecutedFor= AllJobsExecutedFor Node
 
 
+-- | Resume all pending 'job's on startup: replays each saved closure so the
+-- computation continues from where it was interrupted.  Also listens for 'Ping'
+-- messages from other nodes to resume jobs that were running there.
 runJobs= do
   local $ fork $ do
     liftIO $ index jobNode
@@ -146,15 +145,14 @@ runJobs= do
       job@(Job dbr _ _) <- (liftIO $  atomically $ readDBRef j) `onNothing` error ("runJobs(commJobs): job not found " ++ show j)
 
       let (s,clos) = getSessClosure dbr ::  (SessionId, ClosureId)
+
       (logs,clos') <- getClosureLog s clos
       -- conn :: Connection <- getData `onNothing` error "runJobs(commJobs): conn not found"
       map <- gets mfData
       setState job
       ttr ("JOB LOG",logs,"send to closure",localClos clos',isJust $ localEvar clos',isJust $ localCont clos',TC.key clos',dbr)
+
       noTrans $ sendToClosure logs s closureId0 map False clos'
-    -- jobRemove job  -- don't remove because it could have spawned new processes
-    -- tttr "end job initializations"
-    -- putMailbox' node $ AllJobsExecutedFor node
 
 
 
@@ -211,11 +209,8 @@ collectc n delta action= Cloud $ sandboxDataCond preserveCollectFlag $ unCloud $
   t <- onAll $ fromIntegral <$> getMicroSeconds
   let timeleft= let t'= tfin - t in max t' 0
   ttr ("TIMELEFT",timeleft)
-  -- node <- onAll getMyNode
   initState <- gets mfData
   states <- onAll $ liftIO $ newIORef M.empty
-  -- remove duplicate backtracking handlers
-  -- removeBacktracking
   onAll $ newRState $ CollectJobs []
   r <- local $ collect' n timeleft $ unCloud $ do
           r <- action
@@ -231,8 +226,8 @@ collectc n delta action= Cloud $ sandboxDataCond preserveCollectFlag $ unCloud $
             
             -- add to the list of collect jobs to delete at the end of collect
             Ref ref  <- getState <|> error "collectc: no state Ref CollectJobs"
-            CollectJobs jobs <- liftIO $ readIORef ref
-            liftIO $ writeIORef ref $ CollectJobs $ j:jobs
+            Just (CollectJobs jobs) <- liftIO $ readIORef ref
+            liftIO $ writeIORef ref $ Just $ CollectJobs $ j:jobs
 
           -- merge all states for the result
           onAll $  do
@@ -283,18 +278,13 @@ collectc n delta action= Cloud $ sandboxDataCond preserveCollectFlag $ unCloud $
 
 data Backtrack1 a = Backtrack1 (Maybe a) [SData]
 
-  -- removeBacktracking :: TransMonad m => m ()
-  -- removeBacktracking =  modify $ \st -> st{mfData= M.filterWithKey f $ mfData st}
-  --   where
-  --   -- change to filterKeys, currently websockets needs Data.Map < 0.8
-  --   f t _=   -- t == typeOf(ofType :: Backtrack Finish)  ||
-  --           typeRepTyCon  t /=  typeRepTyCon (typeOf (ofType :: Backtrack ()))
-
+-- | Return the current time in microseconds.
 getMicroSeconds = liftIO $ do
         (TOD seconds picos) <- getClockTime
         return (seconds * 1000000 + picos `div` 1000000)
 
--- | a endpoint should remove the previous job since it is a on-demand job
+-- | Like 'endpoint' but removes the current 'Job' first, since on-demand
+-- endpoints do not need to persist across restarts.
 endpointc mname= do
   mprev :: Maybe Job <- getData
   when (isJust mprev) $
@@ -304,37 +294,4 @@ endpointc mname= do
 
 
 
--- -- | persistent collect. Unlike Transient.collect,  keeps the results across intended and unintended
--- -- shutdowns and restarts.  It was substituted by collectc
--- collectp :: Loggable a => Int -> Integer -> Cloud a -> Cloud [a]
--- collectp n delta  mx=  do
---   onAll $ liftIO $ writeIORef save True
---   tinit <- local getMicroSeconds
---   tr("COLLECTPP",n,delta)
-
---   let tfin= tinit +  delta
---       numbered= n > 0
-
---       collectp' n  delta 
---        | n <= 0 && numbered = return []
---        | otherwise= do
---         (rs,delta') <- local $ do
---             t <-  getMicroSeconds
-
---             let delta'=  tfin -t
---             ttr ("delta'",delta')
---             rs <- if delta' <= 0 then return [] else collectSignal True n (fromIntegral delta) $ unCloud mx
---             ttr ("RS",rs)
-
---             -- tiene que obtener el delta historico dentro de local, para saber si tiene que recuperar mas jobs
---             -- Alabado sea Dios
---             return (rs,delta')
---         let len= length rs
---         tr ("ITERATION",n,len)
---         let n'= if numbered then n - len else 0
---         if delta'<= 0 || (numbered && len>= n) then return rs else return rs <>  
---                     (job >>  collectp' n' delta')
-
---   tr ("COLLECTP",n,delta)
---   collectp' n delta
 
