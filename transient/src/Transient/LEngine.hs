@@ -95,18 +95,15 @@ type EventId = Int
 type TransientIO = TransIO
 
 
-data ExecMode = Remote | Parallel | Serial
+data ExecMode = Remote | Parallel | Serial 
   deriving (Typeable, Eq, Show)
 
 
 type PolyMap = M.Map TypeRep SData
 
 
-data Status = Dead                   -- killed waiting to be eliminated
-              --  | DeadParent             -- Dead with some childs active
-               | Alive                  -- working
-              --  | Parent                 -- with some childs
-              --  | Listener [IdCallback]  -- The number of callbacks inside react ans a MVarS.
+data Status = Dead                   -- Finished waiting to be eliminated
+            | Alive                  -- working
 
   deriving (Eq, Show,Ord)
 
@@ -141,7 +138,10 @@ data TranShip = forall a b. TranShip
     -- ^ Label the thread with its lifecycle state and a label string
   , parseContext :: ParseContext
   , execMode :: ExecMode
+  , isApplicative :: Bool
   } deriving Typeable
+
+-- data IsApplicative= NoApp | AppFirst | AppSecond deriving Eq
 
 lazy= unsafePerformIO
 
@@ -210,7 +210,8 @@ emptyTranShip th label par childs =
          , maxThread  = Nothing
          , labelth    = label
          , parseContext = ParseContext (return SDone) mempty (unsafePerformIO $ newIORef True)
-         , execMode = Serial}
+         , execMode = Serial
+         , isApplicative= False}
 
 -- | Run a transient computation with a default initial state. This is for basic testing. This does NOT support effects
 runTransient :: TransIO a -> IO (Maybe a, TranShip)
@@ -264,11 +265,7 @@ runCont x TranShip { fcomp = fs } = runTrans $
 runContIO :: p -> TranShip -> IO (Maybe a, TranShip)
 runContIO x cont = runStateT (runCont x cont) cont
 
--- | Warning: Radically untyped stuff. handle with care
-getContinuations :: StateIO [a -> TransIO b]
-getContinuations = do
-  TranShip { fcomp = fs } <- get
-  return $ unsafeCoerce  fs
+
 
 -- | Compose a list of continuations. substitutes : for  >=>
 {-# INLINE compose #-}
@@ -288,10 +285,6 @@ setContinuation   c fs = do
 
 
 
--- | Restore the continuations to the provided ones.
--- | NOTE: Events are also cleared out.
-restoreStack :: TransMonad m => [a -> TransIO a] -> m ()
-restoreStack fs = modify $ \TranShip {..} -> TranShip {  fcomp = fs, .. }
 
 
 
@@ -317,11 +310,19 @@ instance Applicative TransIO where
   pure a  = Transient . return $ Just a
 
   (<*>) :: TransIO (a -> b) -> TransIO a -> TransIO b
-  mf <*> mx = do
+  mf <*> mx =  do
+
+    -- isapp <- gets isApplicative
+    -- modify $ \s ->s{isApplicative= True}
 
     r1 <- liftIO $ newIORef Nothing
     r2 <- liftIO $ newIORef Nothing
-    fparallel r1 r2 <|> xparallel r1 r2
+
+    -- let restoreflag= do modify $ \s -> s{isApplicative= isapp} 
+
+    r <-  (fparallel r1 r2 <|> xparallel r1 r2) -- <|> (restoreflag >> empty)
+    -- restoreflag
+    return r
 
     where
 
@@ -531,6 +532,17 @@ instance AdditionalOperators TransIO where
       runTrans mb
       restoreStack fs
       return  a
+      where
+      -- | Warning: Radically untyped stuff. handle with care
+      getContinuations :: StateIO [a -> TransIO b]
+      getContinuations = do
+        TranShip { fcomp = fs } <- get
+        return $ unsafeCoerce  fs
+      -- | Restore the continuations to the provided ones.
+      -- | NOTE: Events are also cleared out.
+      restoreStack :: TransMonad m => [a -> TransIO a] -> m ()
+      restoreStack fs = modify $ \TranShip {..} -> TranShip {  fcomp = fs, .. }
+
 
   (<**) :: TransIO a -> TransIO b -> TransIO a
   (<**) ma mb =
@@ -543,23 +555,23 @@ infixl 4 <***, <**, **>
 
 
 
--- | Run @b@ once, discarding its result when the first task in task set @a@
--- has finished. Useful to start a singleton task after the first task has been
--- setup.
-(<|) :: TransIO a -> TransIO b -> TransIO a
-(<|) ma mb = Transient $ do
-  fs  <- getContinuations
-  ref <- liftIO $ newIORef False
-  setContinuation (cont ref)  fs
-  r   <- runTrans ma
-  restoreStack fs
-  return  r
-  where cont ref x = Transient $ do
-          n <- liftIO $ readIORef ref
-          if n
-            then return $ Just x
-            else do liftIO $ writeIORef ref True
-                    runTrans mb
-                    return $ Just x
+-- -- | Run @b@ once, discarding its result when the first task in task set @a@
+-- -- has finished. Useful to start a singleton task after the first task has been
+-- -- setup.
+-- (<|) :: TransIO a -> TransIO b -> TransIO a
+-- (<|) ma mb = Transient $ do
+--   fs  <- getContinuations
+--   ref <- liftIO $ newIORef False
+--   setContinuation (cont ref)  fs
+--   r   <- runTrans ma
+--   restoreStack fs
+--   return  r
+--   where cont ref x = Transient $ do
+--           n <- liftIO $ readIORef ref
+--           if n
+--             then return $ Just x
+--             else do liftIO $ writeIORef ref True
+--                     runTrans mb
+--                     return $ Just x
 
 

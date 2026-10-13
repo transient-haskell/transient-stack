@@ -23,6 +23,7 @@
 -----------------------------------------------------------------------------
 {-# LANGUAGE  CPP, ExistentialQuantification, FlexibleInstances, ScopedTypeVariables, UndecidableInstances #-}
 {-# LANGUAGE InstanceSigs #-}
+{-# LANGUAGE NamedFieldPuns #-}
 module Transient.Move.Logged(Cloud(..),
 Loggable(..), logged, endpoint, received, param, getLog, exec,wait, emptyLog,
  Log(..),hashExec,genPersistId,persistDBRef,firstCont,
@@ -61,17 +62,20 @@ exec :: Builder
 exec=  lazyByteString $ BS.pack "e/"
 -- | Log marker for a waiting (alternative) branch (@w\/@).
 wait :: Builder
-wait=  lazyByteString $ BS.pack "w/"
+wait=   lazy $ newIORef $ lazyByteString $ BS.pack "w/"
 
 -- | Record the last closure reached on a given connection, so that subsequent
 -- messages from that node are routed to the correct continuation.
 setLastClosureForConnection :: (MonadIO m,TransMonad m) => Int -> Closure -> m ()
-setLastClosureForConnection c cl = void $ setIndexData c (lazy $ newIORef cl)
+setLastClosureForConnection c cl =do
+   ttr ("setLastClosureForConnection",c, cl)
+   void $ setIndexData c (lazy $ newIORef cl)
 
 -- | Update an already-recorded last-closure entry, or create one if absent.
 updateLastClosureForConnection :: (TransMonad m,MonadIO m) => Int -> Closure -> m ()
 updateLastClosureForConnection c cl= do
   mref <- getIndexData c
+  ttr ("updateLastClosureForConnection", c, cl)
   case mref of
     Nothing -> void $ setIndexData c (lazy $ newIORef cl)
     Just ref -> liftIO $ writeIORef ref cl
@@ -80,9 +84,15 @@ updateLastClosureForConnection c cl= do
 getLastClosureForConnection ::  (TransMonad m, MonadIO m, Alternative m) => Int -> m Closure
 getLastClosureForConnection c = do
   mref <- getIndexData c
+  ttr ("getLastClosureForConnection", c,isJust mref)
+
   case mref of
     Nothing -> empty
-    Just ref -> liftIO $ readIORef ref
+    Just ref ->do
+      cl <- liftIO $ readIORef ref
+      ttr ("getLastClosureForConnection", c,cl)
+      return cl
+
 
 
 newtype PersistId = PersistId Integer deriving (Read, Show, Typeable)
@@ -92,7 +102,7 @@ instance TC.Indexable PersistId where key _ = "persistId"
 persistDBRef = getDBRef "persistId" :: DBRef PersistId
 
 -- | Atomically allocate a globally unique integer from the TCache-persisted counter.
-genPersistId :: TransIO Integer
+genPersistId :: MonadIO m => m Integer
 genPersistId = liftIO $
   atomically $ do
     PersistId n <- readDBRef persistDBRef `onNothing` return (PersistId 0)
@@ -106,37 +116,57 @@ receive1 ::  LocalClosure -> TransIO ()
 
 receive1  lc = do
   guard (isJust  $ localEvar lc) <|> error "receive: No EVar"
-  conn <- getState
+  conn <- tryState
 
   tr ("RECEIVE1'",localClos lc)
   labelState $ "endpoint " <> let ClosureId id =localClos lc in id
 
   let ev= fromJust $ localEvar lc
-  ctr :: Maybe ClosToRespond <- getData
+  -- ctr :: Maybe ClosToRespond <- getData
 
-  mr <- if isJust ctr then readEVar1 ev else readEVar ev
+  mr <- readEVar ev -- if isJust ctr then readEVar1 ev else readEVar ev
 
   -- tr ("RECEIVED", mr)
 
   case mr of
-    Right (SDone, _, _, _)    -> error "endpoint/teleport: SDone not expected"
-    Right (SError e, _, _, _) -> error $ show ("unexpected remote error:",e)
-    Right (SLast logs, s2, closr, map) -> do
+    Right (SDone, _, _, _,_)    -> error "endpoint/teleport: SDone not expected"
+    Right (SError e, _, _, _,_) -> error $ show ("unexpected remote error:",e)
+    Right (SLast logs, s2, closr, map, isfromremote) -> do
       cleanEVar ev
       ttr ("RECEIVED <------- SLAST", logs)
       liftIO $ writeResource lc{localEvar = Nothing}
       let conn' = fromMaybe (error "receive1: no connection") $ unsafeCoerce $ M.lookup (typeOf (ofType :: Connection))  map
+
+      -- let hdrs= fromMaybe (unsafeCoerce emptyHeaders) $ unsafeCoerce $ M.lookup (typeOf (ofType :: HTTPHeaders))  map
+      
+      modify $ \st -> st{mfData= transfer [typeOf (ofType :: ClosToRespond),
+                                          (typeOf (ofType :: HTTPHeaders))] 
+                                           map  $ mfData st }
+      
       setData conn'{calling= calling conn}
 
-      let hdrs= fromMaybe (unsafeCoerce emptyHeaders) $ unsafeCoerce $ M.lookup (typeOf (ofType :: HTTPHeaders))  map
-      modify $ \st -> st{mfData= M.insert (typeOf (ofType :: HTTPHeaders)) hdrs $ mfData st }
+      when isfromremote $ do
+        app <- gets isApplicative
+        when (not app) $ setLastClosureForConnection (idConn conn)  (getDBRef (kLocalClos s2 closr))
+      
       setLog (idConn conn') logs s2 closr
 
-    Right (SMore logs, s2, closr, map) -> do
+    Right (SMore logs, s2, closr, map,isfromremote) -> do
       let conn' = fromMaybe (error "receive1: no connection") $ unsafeCoerce $ M.lookup (typeOf (ofType :: Connection))  map
       ttr (lc,"RECEIVED <------- SMORE",idConn conn', logs)
-      let hdrs= fromMaybe (unsafeCoerce emptyHeaders) $ unsafeCoerce $ M.lookup (typeOf (ofType :: HTTPHeaders))  map
-      modify $ \st -> st{mfData= M.insert (typeOf (ofType :: HTTPHeaders)) hdrs $ mfData st }
+      -- let hdrs= fromMaybe (unsafeCoerce emptyHeaders) $ unsafeCoerce $ M.lookup (typeOf (ofType :: HTTPHeaders))  map
+      
+
+      -- pass lastClosureForConnection, clostorespond and and HTTP headers
+      modify $ \st -> st{mfData= transfer [typeOf (ofType :: ClosToRespond),
+                                          (typeOf (ofType :: HTTPHeaders))] 
+                                           map  $ mfData st }
+    
+      when isfromremote $ do
+        app <- gets isApplicative
+        when (not app) $ setLastClosureForConnection (idConn conn)  (getDBRef (kLocalClos s2 closr))
+      
+
       setData conn'{calling= calling conn}
       setLog (idConn conn') logs s2 closr
 
@@ -145,21 +175,30 @@ receive1  lc = do
       throwt except
       empty
 
+-- | Copy the values of the given keys from one map into another.  Keys not
+-- present in the source map leave the destination untouched.  The inserts are
+-- nested, so @transfer [k1,k2] from to@ is
+-- @M.insert k1 v1 (M.insert k2 v2 to)@ for the keys that exist in @from@.
+transfer :: Ord k => [k] -> M.Map k v -> M.Map k v -> M.Map k v
+transfer ks from to = foldr ins to ks
+  where ins k acc = maybe acc (\v -> M.insert k v acc) $ M.lookup k from
+{-# INLINE transfer #-}
 
 -- | Consume the first fragment of a log list.  A 'Jump' teleports execution
 -- to the referenced closure; 'Fragment' and 'Collect' return the builder
 -- directly.
 firstFragment :: [FragmentType] -> TransIO Builder
-firstFragment logs = case head logs of
+firstFragment logs = if null logs then mempty else case head logs of
   Jump key   -> do
     let (s,c) = getSessClosure (getDBRef key)
     noTrans $ processMessage s c sessionId0 closureId0 (Right $ tail logs) False
     empty
   Fragment x -> return x
-  Collect xs -> for xs
+  Collect xs -> for $ reverse xs
 
 -- | Install a fragment list as the current parse buffer and set 'recover=True'.
 setLogFromFile :: [FragmentType] -> TransIO ()
+setLogFromFile [] = return()
 setLogFromFile logs = do
   log <- firstFragment logs
   tr ("SENDING LOG",log)
@@ -171,9 +210,9 @@ setLogFromFile logs = do
 -- | Record the last-reached closure for a connection and install the log
 -- fragment list as the recovery parse buffer.
 setLog idConn log sessionId  closr = do
-  tr ("setLog for",idConn,"Closure",sessionId, closr,log  )
-  void $ updateLastClosureForConnection idConn (getDBRef $ kLocalClos sessionId closr) --  (Closure sessionId closr [])
-  setState $ ClosToRespond $ getDBRef $ kLocalClos sessionId closr
+  ttr ("setLog for",idConn,"Closure",sessionId, closr,log  )
+  -- app <- gets isApplicative
+  -- when (not app) $ setLastClosureForConnection idConn  (getDBRef (kLocalClos sessionId closr))
   setLogFromFile  log  
 
 
@@ -185,14 +224,15 @@ Endpoints can be continued by messages written to their 'EVar'.  The name is
 stable across nodes that share the same code base, so distributed peer nodes
 refer to the same continuation by the same identifier.
 -}
-endpoint :: Maybe BSS.ByteString  -> TransIO ()
-endpoint  maybeName = do
+endpoint maybeName= endpoint1 maybeName <|> (tttr "escape" >> empty)
+endpoint1 :: Maybe BSS.ByteString  -> TransIO ()
+endpoint1  maybeName = do
 
-  log@Log{..} <- getLog
+  log@Log {recover, partLog, restLog, hashClosure=hash} <- getLog
   ttr("RECOVER",recover)
   pstring <- giveParseString
   ttr("endpoint log",maybeName,log,pstring)
-  closName <- maybe ( return $ BSS.pack . show $ hashClosure ) return maybeName
+  closName <- maybe ( return $ BSS.pack $ show  hash ) return maybeName
   PrevClos dbprevclos mn _ isapp iscollect  :: PrevClos <- getData `onNothing` error "teleport: please use `initNode to perform distrubuted computing"
   let idSession = if isJust mn then fromJust mn else fst $ getSessClosure dbprevclos :: SessionId
   ttr ("ENDPOINT PREVCLOS",mn,dbprevclos,idSession)
@@ -204,6 +244,7 @@ endpoint  maybeName = do
 
 
   mr <- liftIO $ atomically $ readDBRef dblocalclos
+ 
   closure <- do
       case mr of
         Just locClos@LocalClosure {..} -> do
@@ -211,13 +252,13 @@ endpoint  maybeName = do
           closure <- if toLazyByteString partLog== mempty -- two consecutive endpoints
             then return locClos
             else do 
-              
               ev <-  newEVar 
               return locClos {localEvar = Just ev, localCont = Just cont,localLog= 
                       if  recover  then localLog               -- unaltered
                       else if  iscollect  then  Collect $ partLog:
                         case localLog of
                           Collect rest -> rest -- all the paths are stored in the closure log
+                          Fragment rest -> [rest]
                           other -> error $ "teleport, collect mismatch: " <> show other
                       else Fragment partLog}                          -- only the current and remove the previous
           -- preservePath= True
@@ -257,43 +298,57 @@ endpoint  maybeName = do
 
           return  closure
 
-  conn <- getState <|> error "endpoint: No connection" :: TransIO Connection
-  let   
-    injectNextSegment=  do
+  conn <- tryState <|> error "endpoint: No connection" :: TransIO Connection
+
+  let injectNextSegment=  do
         ttr ("inject", recover, partLog, restLog)
         guard $ not $ null restLog
         b <- firstFragment restLog
         let segment= toLazyByteString b
             isw=  "w/" `BS.isPrefixOf` segment
-        guard (recover  && not isw)
-           <|> do 
-            -- send the segment to the alternative branch
-            if recover 
-              then do
-                guard $ not $ null restLog
-                setParseString $ BS.drop 2 segment
-                void $ modifyData' (\l -> l {recover = True, partLog=mempty,restLog= tail restLog}) emptyLog
-              else 
-                setState log{partLog= "w/",restLog= if not $ null restLog then tail restLog else restLog}
-            -- log <-getLog
-            -- ttr ("setting wait",log)
-            empty
-        ttr "INJECT"
-        setState conn
-        mfdata <- gets mfData
-        let msg= Right $ (SMore restLog          :: StreamData [FragmentType]
-                          , idSession            :: SessionId
-                          , ClosureId closName   :: ClosureId
-                          , mfdata               :: PolyMap )
-        writeEVar (fromJust $ localEvar closure) msg
-        empty
+
+        let injectHere= do
+              guard (recover && not isw)
+              
+              ttr ("inject in this branch", recover, partLog, restLog)
+              setState conn
+              mfdata <- gets mfData
+              let msg= Right $ (SMore restLog          :: StreamData [FragmentType]
+                                , idSession            :: SessionId
+                                , ClosureId closName   :: ClosureId
+                                , mfdata               :: PolyMap
+                                , False   )  -- is not from a remote node
+              -- substitute for sendToClosure
+              writeEVar (fromJust $ localEvar closure) msg
+              -- noTrans $ sendToClosure restLog idSession (ClosureId closName) mfdata False closure False
+              when(not $ null restLog) $ void $ modifyData' (\l -> l {partLog=mempty,restLog= tail restLog}) emptyLog
+              -- modify $ \s -> s{execMode= Remote}
+              empty
+
+        let leaveToAlternative= do
+              mode <- gets execMode
+              ttr("send the segment to the alternative branch",recover, partLog, restLog,mode,not $ null restLog)
+              if recover 
+                then do
+                  guard $ not $ null restLog
+                  mode <- gets execMode
+                  ttr ("alternative comp. recover",mode)
+                  setParseString $ BS.drop 2 segment
+                  void $ modifyData' (\l -> l {recover = True, partLog=mempty,restLog= tail restLog}) emptyLog
+                  
+                else do
+                  tr "set the log for alternative computation"
+                  setState log{partLog= "w/",restLog= if not $ null restLog then tail restLog else restLog,hashClosure=hash  + hashWait}
+              -- log <-getLog
+              -- ttr ("setting wait",log)
+              empty
   
+        injectHere <|> leaveToAlternative
         
 
   receive1 closure <|> void injectNextSegment   
-  
-
-                                        
+  log <- getLog
+  ttr ("HASH",hashClosure log)                                    
   ttr "AFTER ENDPOINT"
   return ()
 
@@ -334,6 +389,7 @@ hashExec= 100000
 hashWait= 1000
 
 -- | Throw a missing-execution-state error with a context label.
+noExState :: String -> a
 noExState s= error $ s <> ": no execution state. Use initNode to init the Cloud computation"
 
 
@@ -374,11 +430,11 @@ logged mx =  sandboxDataCond handle $ do
           let initialSegment= partLog initialLog
           rest <- getParseBuffer
 
-          ttr ("LOGGED:", if recover initialLog then "recovering" else "executing" <> " logged stmt of type",typeOf logit,"parseString", rest,"PARTLOG",partLog initialLog)
+          ttr ("LOGGED:", hashClosure initialLog,rest,if recover initialLog then "recovering" else "executing" <> " logged stmt of type",typeOf logit,"parseString", rest,"PARTLOG",partLog initialLog)
           
           setData initialLog{partLog=  initialSegment <> exec, hashClosure= hashClosure initialLog + hashExec}
 
-          r <-(if not $ BS.null rest then recoverIt else  mx)  <|> addWait initialLog 
+          r <-(if not $ BS.null rest then recoverIt else  ttr "EXECUTING" >> mx)  <|> addWait initialLog 
 
           rest <- giveParseString
 
@@ -389,16 +445,18 @@ logged mx =  sandboxDataCond handle $ do
 
           prevc <- getData `onNothing` noExState "logged"
           ttr ("recov",recov,rest,restLog initialLog)
-          tr ("HADTELEPORT", preservePath prevc,recov)
 
-          let hash= hashClosure initialLog{-Alabado sea Dios-} + hashDone -- hashClosure finalLog
+          let hash= hashClosure initialLog{-Alabado sea Dios-} + hashDone 
+          l <-getLog
+          ttr ("LOGGED RETURN HASH", hashClosure l + hashDone)
 
+          ttr ("PREVCLOS LOGGED AFTER",prevc)
           if preservePath prevc
             then do
-              modifyState'  (\finalLog -> finalLog{recover=recov,  hashClosure= hash }) emptyLog
+              modifyState'  (\finalLog -> finalLog{recover=recov,  hashClosure= hash {- hashClosure finalLog + hashDone -} }) emptyLog
 
             else
-              modifyState'  (\finalLog -> finalLog{recover=recov, partLog= parlog, hashClosure= hash }) emptyLog
+              modifyState'  (\finalLog -> finalLog{recover=recov, partLog= parlog, hashClosure= hash {-hashClosure finalLog + hashDone -} }) emptyLog
 
           return r
 
@@ -409,21 +467,23 @@ logged mx =  sandboxDataCond handle $ do
           -- the alternative branch has been chosen. This is a algebraic composition. the execution continues in the alternative branch
           --
           let initialSegment= partLog initialLog
-          ttr ("finish logged stmt of type",typeOf logit, "with empty")
+          tr ("finish logged stmt of type",typeOf logit, "with empty")
           prevc <- getData `onNothing` noExState "logged"
 
           rest <- giveParseString
 
           let recov= not $ (BS.null rest && null (restLog initialLog))
-          ttr ("HADTELEPORT", preservePath prevc,recov)
+          tr ("addWait: HADTELEPORT", preservePath prevc,recov)
 
           if preservePath prevc
             then do
+              ttr "PRESERVEPATH  addWait"
               modifyState'  (\finalLog -> finalLog{recover=recov
-                    ,partLog=partLog finalLog 
+                    ,partLog=partLog finalLog <> wait
                     ,hashClosure= hashClosure finalLog + hashWait }) emptyLog
 
-            else
+            else do
+              ttr "NORMAL addWait"
               modifyState'  (\finalLog -> finalLog{recover=recov
                   , partLog= initialSegment <> wait
                   , hashClosure= hashClosure finalLog  + hashWait }) emptyLog
@@ -440,12 +500,12 @@ logged mx =  sandboxDataCond handle $ do
         let (h,t)=  BS.splitAt 2 s
         case  (BS.unpack h,t) of
           ("e/",r) -> do
-            -- tr "EXEC"
+            ttr "EXEC"
             setParseString r
             mx
 
           ("w/",r) -> do
-            tr "WAIT"
+            ttr "WAIT"
             setParseString r
             modify $ \s -> s{execMode= if execMode s /= Remote then Parallel else Remote}
                           -- in recovery, execmode can not be parallel(NO; see below)
@@ -459,7 +519,7 @@ logged mx =  sandboxDataCond handle $ do
       typeOfr _= undefined
 
       r= (do
-        -- tr "VALUE"
+        ttr "VALUE"
         -- set serial for deserialization, restore execution mode
         x <- do mod <- gets execMode;modify $ \s -> s{execMode=Serial}; r <- deserialize; modify $ \s -> s{execMode= mod};return r
         tr ("value parsed",x)
@@ -526,16 +586,23 @@ processMessage s1@(SessionId ss1) closl s2 closr mlog deleteClosure = do
         let contref = getDBRef $ kLocalClos (SessionId s) closl
             contref'= getDBRef $ kLocalClos (SessionId s') closl
 
-        liftIO $  do
+        ev <- newEVar
+
+        prevclos <- liftIO $  do
           -- create a new closure copy of the endpoint referenced but with the new session id
           cl <- (atomically $ readDBRef contref) `onNothing` errClosure conn (SessionId s) closl
-          let cl'= cl{localSession=SessionId s',prevClos= contref} --,localCont=Nothing}
-          atomically $ writeDBRef (getDBRef $ kLocalClos (SessionId s') closl) cl'
+
+          let cl'= cl{localSession=SessionId s'} -- ,localEvar = Just ev} --,prevClos= prevclos} --,localCont=Nothing}
+          atomically $ writeDBRef contref'  cl'
+          return $ prevClos cl
         -- send to this new closure
-        modifyState' (\pc ->pc{prevDBRef= contref'}) $ error "processMessage: no prevclos"
-        processMessage (SessionId s') closl  s2 closr mlog deleteClosure
+        modifyState' (\pc ->pc{prevDBRef= prevclos}) $ error "processMessage: no prevclos"
+        return()
+        ttr ("SEND TO SESSION",s)
+        processMessage (SessionId s) closl  s2 closr mlog deleteClosure
 
       _ -> do
+
           mcont <- liftIO $ atomically $
               readDBRef (getDBRef (kLocalClos s1 closl) :: DBRef LocalClosure)
 
@@ -551,8 +618,12 @@ processMessage s1@(SessionId ss1) closl s2 closr mlog deleteClosure = do
               tr "AFTER RESTORECLOS"
               case mlog of
                 Right log -> do
+                  ttr ("CLOSTORESPOND1",s2,closr)
+                  setState $ ClosToRespond $ getDBRef $ kLocalClos s2 closr
+
+
                   mfdata <- gets mfData
-                  sendToClosure ((log' :: [FragmentType]) <> log) s2 closr mfdata deleteClosure closreg
+                  sendToClosure ((log' :: [FragmentType]) <> log) s2 closr mfdata deleteClosure closreg True
                 Left except -> do
                   tr ("receive:", except)
                   runTrans $ writeEVar (fromJust $ localEvar closreg) $ Left except
@@ -561,11 +632,13 @@ processMessage s1@(SessionId ss1) closl s2 closr mlog deleteClosure = do
 
             Just closreg@LocalClosure {localEvar = Just ev, localCont = Just cont} -> do
               tr "localcont found"
+
               when (synchronous conn) $ liftIO $ void (tryPutMVar (localMvar closreg) ())
               case mlog of
                 Right log -> do
+                  setState $ ClosToRespond $ getDBRef $ kLocalClos s2 closr
                   mfdata <- gets mfData
-                  sendToClosure log s2 closr mfdata deleteClosure closreg
+                  sendToClosure log s2 closr mfdata deleteClosure closreg True
                 Left except -> do
                   tr ("receive:", except)
                   runTrans $ writeEVar ev $ Left except
@@ -578,19 +651,18 @@ errClosure conn s clos = do
   tr err
   throw err
 
-
 -- | Write a log fragment to a closure's 'EVar', using 'SLast' if
 -- @deleteClosure@ is 'True' (last message) or 'SMore' otherwise.
-sendToClosure :: [FragmentType] -> SessionId -> ClosureId -> PolyMap -> Bool -> LocalClosure -> StateIO ()
-sendToClosure logs s2 closr map deleteClosure clos@LocalClosure{localEvar = mev} = do
+sendToClosure :: [FragmentType] -> SessionId -> ClosureId -> PolyMap -> Bool -> LocalClosure -> IsFromRemoteNode -> StateIO ()
+sendToClosure logs s2 closr map deleteClosure clos@LocalClosure{localEvar = mev} is = do
   tr "before writeevar"
   case mev of
     Nothing -> error $ show ("NO EVAR IN CLOSURE",clos)
     Just ev -> do
       runTrans $ do
         if deleteClosure
-            then writeEVar ev $ Right (SLast logs, s2, closr, map)
-            else writeEVar ev $ Right (SMore logs, s2, closr, map)
+            then writeEVar ev $ Right (SLast logs, s2, closr, map,is)
+            else writeEVar ev $ Right (SMore logs, s2, closr, map,is)
       return()
 
 
@@ -608,8 +680,8 @@ getClosureLog idSession clos = do
   ttr ("getClosureLog", idSession, clos)
   let dbref= getDBRef $ kLocalClos idSession clos
   closReg <- liftIO $ atomically (readDBRef dbref)  `onNothing` error ("closure not found in DB:" <> show (idSession, clos))
-  liftIO $ takeMVar (localMvar closReg) -- avoid being recovered by different threads
-  closReg <- liftIO $ atomically $ readDBRef dbref  `onNothing` error ("closure not found in DB:" <> show (idSession, clos))
+-- liftIO $ takeMVar (localMvar closReg) -- avoid being recovered by different threads
+-- closReg <- liftIO $ atomically $ readDBRef dbref  `onNothing` error ("closure not found in DB:" <> show (idSession, clos))
   case localCont closReg of
     Nothing -> do
       prev <- liftIO $ atomically $ readDBRef (prevClos closReg) `onNothing` error "prevClos not found"
@@ -623,22 +695,29 @@ getClosureLog idSession clos = do
       tr ("JUST", idSession, clos)
       return (mempty, closReg)
 
+less (ClosureId s1) (ClosureId s2)
+   | BSS.length s1 < BSS.length s2= True
+   | BSS.length s1 > BSS.length s2= False
+   | s1 < s2= True
+   | otherwise= False
 
 -- | Collect the log fragments on the path from @remclos@ up to (but not
 -- including) @prevclos@, stopping at 'dbClos0'.
+
 getClosureLogFrom :: DBRef LocalClosure -> DBRef LocalClosure -> StateIO [FragmentType]
 getClosureLogFrom prevclos remclos
   | prevclos == dbClos0 = return mempty
+  -- | snd (getSessClosure prevclos) `less` snd (getSessClosure remclos)= getClosureLogFrom remclos prevclos
   | otherwise = do
   prevReg <- liftIO $ atomically $ readDBRef prevclos `onNothing` error ("closure not found in DB:" <> keyObjDBRef prevclos)
-  tr ("getClosureLogFrom", prevclos, remclos)
+  ttr ("getClosureLogFrom", prevclos, remclos)
   case prevclos == remclos of
     False -> do
       prevLog <- getClosureLogFrom (prevClos prevReg) remclos
       let locallogclos = localLog prevReg
-      tr ("PREVLOG",  prevLog)
-      tr ("LOCALLOG", prevclos, locallogclos)
-      tr ("SUM",      prevLog <> [locallogclos])
+      ttr ("PREVLOG",  prevLog)
+      ttr ("LOCALLOG", prevclos, locallogclos)
+      ttr ("SUM",      prevLog <> [locallogclos])
       return (prevLog <> [locallogclos])
     True ->
       return mempty

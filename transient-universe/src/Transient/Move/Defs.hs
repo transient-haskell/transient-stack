@@ -11,7 +11,7 @@ import Transient.Internals
 import Transient.EVars
 import Transient.Loggable
 import Transient.Parse
-
+import {-# SOURCE #-} Transient.Move.Logged (endpoint, noExState)
 import Data.ByteString.Builder
 import qualified Data.TCache.DefaultPersistence as TC
 import Data.TCache  hiding (onNothing)
@@ -42,6 +42,7 @@ import Data.IORef
 import Data.Aeson
 import qualified Data.Map                               as M
 import qualified Data.Vector                            as V
+import Control.Monad
 import Control.Monad.State
 import Control.Applicative
 
@@ -53,8 +54,7 @@ newtype Cloud a = Cloud {unCloud :: TransIO a}
   deriving
     ( AdditionalOperators,
       Functor,
-      Semigroup,
-      Monoid,
+      Semigroup, Monoid,
       Alternative,
       Applicative,
       MonadFail,
@@ -63,6 +63,28 @@ newtype Cloud a = Cloud {unCloud :: TransIO a}
       Fractional,
       MonadState TranShip
     )
+
+
+
+--       --  prevc@(PrevClos{isApplicative= mode}) <- getState
+--        log <- getLog
+--        isapp <- gets isApplicative
+--       --  when (isapp == AppFirst) $ do modify $ \s ->s{isApplicative= AppSecond}; endpoint Nothing <|> guard (not $ recover log)
+
+--       --  setState prevc{isApplicative= True}
+--       --  modify $ \s ->s{isApplicative= True}
+--        ttr "APPLICATIVE SET"
+--        r <- (a <*> b)  <|> (do modify $ \s ->s{isApplicative= isapp} ; empty)
+--       --  void $ modifyState' (\prev -> prev{isApplicative = mode}) $ error "Cloud Applicative: state not found"
+--        modify $ \s ->s{isApplicative= isapp}
+--        return r
+
+-- instance Monoid a => Monoid (Cloud a) where
+--   mempty      = return mempty
+--   mappend  = (<>)
+
+-- instance (Monoid a) => Semigroup (Cloud a) where
+--   (<>)=  mappendt
 
 
 instance ToJSON B.ByteString where
@@ -97,13 +119,17 @@ instance Loggable SessionId where
 data PrevClos = PrevClos{ prevDBRef     :: DBRef LocalClosure
                         , pnewSession   :: Maybe SessionId
                         , preservePath  :: Bool
-                        , isApplicative :: Bool
+                        , isApplicativ :: Bool
                         , isCollect     :: Bool
                         } deriving Show
+
+instance Default PrevClos where 
+  def= PrevClos dbClos0 Nothing False False False
 
 -- | last remote closure in a teleport waiting for responses in the execution flow
 newtype ClosToRespond= ClosToRespond (DBRef LocalClosure) -- {remSession :: SessionId, remClosure :: ClosureId}
 
+-- data ConcurrentClosure= ConcurrentClosure (DBRef LocalClosure)
 
 
 -- | Broadcast message: a node signals it is ready to resume unfinished jobs.
@@ -215,6 +241,8 @@ data ConnectionData
 #endif
    deriving (Show)
 
+type IsFromRemoteNode= Bool
+
 -- | A TCache-persisted closure record.  Stored under key @\<closureId\>-\<sessionId\>@.
 -- 'localLog' is the serialised log fragment; 'localEvar' is the live EVar that
 -- 'receive1' writes to when a remote response arrives.
@@ -224,7 +252,7 @@ data LocalClosure = LocalClosure
     prevClos      :: DBRef LocalClosure,
     localLog      :: FragmentType,
     localMvar     :: MVar (),
-    localEvar     :: Maybe (EVar (Either CloudException (StreamData [FragmentType], SessionId, ClosureId, PolyMap))),
+    localEvar     :: Maybe (EVar (Either CloudException (StreamData [FragmentType], SessionId, ClosureId, PolyMap,IsFromRemoteNode))),
     localCont     :: Maybe TranShip
   }
 
@@ -404,14 +432,14 @@ setCookie name valueandparams= do
   setState $ Cookies $ (name,valueandparams):cs
   where
   getCookies :: TransIO Cookies
-  getCookies= getState <|> return (Cookies [])
+  getCookies= tryState <|> return (Cookies [])
 
 
 -- | Read a named cookie from the current HTTP request headers.
 -- Returns 'Nothing' if the cookie is absent or the header list is empty.
 getCookie :: BL.ByteString -> TransIO (Maybe BS.ByteString)
 getCookie name= do
-  HTTPHeaders _ headers :: HTTPHeaders <- getState <|>  return (HTTPHeaders undefined [])
+  HTTPHeaders _ headers :: HTTPHeaders <- tryState <|>  return (HTTPHeaders undefined [])
   tr ("getCookie HTTP HEADERS",headers)
   let receivedCookie= lookup "Cookie" headers
 

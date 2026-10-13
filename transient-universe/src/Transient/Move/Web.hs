@@ -83,7 +83,8 @@ import Control.Exception hiding(try,onException)
 
 data InitSendSequence = InitSendSequence
 
-newtype Publishing = Publishing [String]
+type ShowIt= Bool
+data Publishing = Publishing ShowIt [String]
 
 data IsCommand = IsCommand deriving (Show)
 
@@ -175,7 +176,7 @@ initSession idSession = when (idSession == "0") $ do
  <|> return()
   where
   getSessionFromCookieAndLog= logged $ do
-      HTTPHeaders _ headers <- getState <|> return (HTTPHeaders undefined [])
+      HTTPHeaders _ headers <- tryState <|> return (HTTPHeaders undefined [])
       when (null headers) $
           error "initSession: no Headers"  -- sin contexto HTTP (Self/cross-call/replay): no generar sesión
       mc <- getCookie "state"
@@ -193,12 +194,12 @@ minput (ident :: String) msg' = onAll $ sandboxData (ofType :: ClosToRespond) $ 
   where
     msg= encode msg'
     response = do
-      ttr "MINPUT"
+      ttr ("MINPUT", ident)
       delState (ofType :: ClosToRespond)
       modify $ \s -> s {execMode = if execMode s == Remote then Remote else Parallel}
       local $ do
         log <- getLog
-        conn <- getState -- if connection not available, execute alternative computation
+        conn <- tryState -- if connection not available, execute alternative computation
         let closLocal = hashClosure log
         mynode <- getMyNode
         PrevClos dbprevclos mn _ _ _ :: PrevClos <- getData `onNothing` noExState "minput"
@@ -217,20 +218,19 @@ minput (ident :: String) msg' = onAll $ sandboxData (ofType :: ClosToRespond) $ 
         ttr ("params",params)
         let httpreq = mempty {requrl = urlbase} <> params :: HTTPReq
             httpreqsess= mempty {requrl = urlbase  </> "S" <> BS.fromStrict idSession} <> params :: HTTPReq
-            msgdat
-              | typeOf msg' == typeOf (ofType :: String) = BS.pack  $ unsafeCoerce  msg'
-              | typeOf msg' == typeOf (ofType :: BS.ByteString) = unsafeCoerce msg'
-              | otherwise = msg
-              
+            -- msgdat must be valid JSON. `msg = encode msg'` already covers all cases:
+            -- String -> "text", number -> 42, tuple -> [..]. sendOption inserts it raw.
+            msgdat = msg
+
         -- publish immediately if we're inside a publish block
-        Publishing keys <- getState  <|> return (Publishing [])
+        Publishing visible keys <- tryState  <|> return (Publishing True [])
         let idata = InputData ident msgdat httpreqsess
         liftIO $ mapM_ (\k -> atomicModifyIORef rpublished $ \map ->
             (let idatas = idata : fromMaybe [] (M.lookup k map) in M.insert k idatas map, ())) keys
-        connected log  idSession conn closLocal  httpreq -- <|> commandLine conn log httpreq
+        connected visible log  idSession conn closLocal  httpreq -- <|> commandLine conn log httpreq
 
 
-    connected log  idSession conn closLocal  httpreq = do
+    connected visible log  idSession conn closLocal  httpreq = do
 
       cdata <- liftIO $ readIORef $ connData conn
 
@@ -253,13 +253,14 @@ minput (ident :: String) msg' = onAll $ sandboxData (ofType :: ClosToRespond) $ 
                 initSession idSession
                 return r
 
-                
+
               _ -> do
                 sendCookies conn
-
-                let tosend = str "{ \"msg\":" <>  msg <> str ", \"req\":" <> encode httpreq <> str "}"
-                let l = fromIntegral $ BS.length tosend
-                msend conn $ toHex l <> str "\r\n" <> tosend <> "\r\n"
+                ttr ("sendIT? visibe, recovrer?",visible, recover log)
+                when (visible && not (recover log)) $ do
+                  let tosend = str "{ \"msg\":" <>  msg <> str ", \"req\":" <> encode httpreq <> str "}"
+                  let l = fromIntegral $ BS.length tosend
+                  msend conn $ toHex l <> str "\r\n" <> tosend <> "\r\n"
                 tr "after msend"
                 endpointEtc
                 r <- readResponse
@@ -288,26 +289,28 @@ minput (ident :: String) msg' = onAll $ sandboxData (ofType :: ClosToRespond) $ 
     
       endpointEtc= do
         
-
-
         endpoint (Just $ BC.pack ident)
         -- for cross-sessions where there is a jump
         -- in which one user/session invokes a link/endpoint of another
         mmfdata <- getSessionData
       
         when (isJust mmfdata) $ do
-          tr ("mmfdata",mmfdata)
+          ttr ("mmfdata",mmfdata)
           let mfdata= fromJust mmfdata
 
           -- merge the state of the computation that created the encpoint with the state of the coming computation
           modify $ \s-> s{mfData= merge mfdata $ mfData s}
-            -- endpoint (Just $ BC.pack ident) <|> return()
+          -- endpoint (Just $ BC.pack ident) <|> return()
 
       merge = M.unionWithKey combine
-      combine t x y=  if    t == typeOf (ofType :: Connection) ||
-                            t == typeOf (ofType :: PrevClos)  ||
-                            t == typeOf (ofType :: Log) 
-                      then y else x
+      combine :: TypeRep -> SData -> SData -> SData
+      combine t x y | t == typeOf (ofType :: Connection) = x
+                    | t == typeOf (ofType :: PrevClos) = 
+                           let pc= unsafeCoerce y
+                           in unsafeCoerce  $ pc{pnewSession= Just $ fst . getSessClosure $ prevDBRef $ unsafeCoerce x} 
+                    -- | t == typeOf (ofType :: PrevClos) = y
+                    | t == typeOf (ofType :: Log) = y
+                    | otherwise= x
 
     (</>) x y = x <> str "/" <> y
     str = BS.pack
@@ -334,22 +337,29 @@ followup = flip minput
 rpublished= lazy $ newIORef (M.empty :: M.Map String [InputData])
 -- | makes a `minput`  to be discoverable by  `publish` so that the endpoint may be available for other users.
 -- The first parameter is the key where many endpoints may be published. The second parameter is the endpoint (`minput`) itself
-publish k i= publishn [k] i
+publish visible k i= publishn visible [k] i
 
 -- | Like 'publish' but registers the endpoint under multiple keys simultaneously.
-publishn ::  [String] -> Cloud a -> Cloud a
-publishn keys inp= Cloud $ sandboxData (ofType :: Publishing) $ do
-  setState $ Publishing keys
-  unCloud inp
+publishn :: ShowIt -> [String] -> Cloud a -> Cloud a
+publishn visible keys inp= do
+  ttr ("publish",keys)
+  job  -- to force the execution so that the endpoint is in rpublished 
+  Cloud $ sandboxData (ofType :: Publishing) $ do
+    setState $ Publishing visible keys
+    unCloud inp
+  
 
 
 -- | Send all endpoints registered under @key@ via 'publish' to the connected browser.
 -- Call this at the start of a session to surface pending interactions to the user.
-published ::  String -> TransIO ()
-published k=  do
-    inputdatas <- ( liftIO (readIORef rpublished) >>= return . M.lookup k) `onNothing` return []
-    ttr ("PUBLISHED", inputdatas)
-    foldr ((<>) . (\(InputData id msg url ) ->  sendOption msg url)) mempty inputdatas
+published ::  String -> Cloud ()
+published k=  local $ do
+    log <- getLog
+    when (not $ recover log) $ do
+      inputdatas <- ( liftIO (readIORef rpublished) >>= return . M.lookup k) `onNothing` return []
+      ttr ("PUBLISHED", inputdatas)
+      foldr ((<>) . (\(InputData id msg url ) ->  sendOption msg url)) mempty inputdatas
+      empty
 
 -- | Retrieve the current 'Endpoints' map from recoverable state, or an empty map.
 getEndpoints= getRState <|> return (Endpoints M.empty)
@@ -360,7 +370,7 @@ showURL= getURL >>= liftIO . print
 -- | Get the URL string for the current point in the computation
 getURL :: TransIO String
 getURL = do
-  mprev <- getState
+  mprev <- tryState
   (SessionId sess, ClosureId clos) <- case mprev of
     Nothing -> return (sessionId0, closureId0)
     Just prev -> liftIO $ do
@@ -395,7 +405,7 @@ getURL = do
 optionEndpoints :: Loggable a => Cloud a
 optionEndpoints = do
     ttr ("optionEndpoints")
-    onAllNodes $ newRState $ Endpoints M.empty
+    onAllDeep $ newRState $ Endpoints M.empty
     local $ do
       option ("endpt" :: String) "info about a endpoint"
       Endpoints endpts <- getEndpoints
@@ -420,7 +430,7 @@ sendCookies conn= do
       ttr ("COOKIES",cookies)
       when (not $ BS.null cookies) $ msend conn cookies
   where
-  getCookies= getState <|> return (Cookies [])
+  getCookies= tryState <|> return (Cookies [])
 
 
   getCookiesStr= do
@@ -458,7 +468,7 @@ timeoutOk now created = diffUTCTime now created < 3600  -- 1h timeout
 -- Used by 'sendOption' so that clicking a 'published' link restores the correct context.
 setSessionData ::  PolyMap -> TransIO ()
 setSessionData val = do
-  SessionId sessionId <- (getState >>= return . fst . getSessClosure . prevDBRef) <|> return  sessionId0
+  SessionId sessionId <- (tryState >>= return . fst . getSessClosure . prevDBRef) <|> return  sessionId0
   ttr ("setSessionData",sessionId)
   liftIO $ do
     now <- getCurrentTime
@@ -508,7 +518,7 @@ sendOption msg req = do
   mfdata <- gets mfData
   setSessionData mfdata
 
-  SessionId key <- (getState >>= return . fst . getSessClosure . prevDBRef) <|> return  sessionId0
+  SessionId key <- (tryState >>= return . fst . getSessClosure . prevDBRef) <|> return  sessionId0
 
   mfdatakey <- gets mfData
 
@@ -516,10 +526,9 @@ sendOption msg req = do
   let (SessionId id',_) = getSessClosure dbr
       id= BS.fromStrict id'
   let url'= requrl req 
-  sendFragment $ "{ \"msg\":\"" <>  msg <> "\", \"req\":" <> encode (req {requrl = url'}) <> "}"
+  sendFragment $ "{ \"msg\":" <>  msg <> ", \"req\":" <> encode (req {requrl = url'}) <> "}"
 
   where
-
   long id= do
     s <- tTakeUntilToken "/T"
     ses <-tTakeUntilToken "/"
@@ -560,7 +569,7 @@ moutput = local . output
 -- Resolves the live browser connection via 'ensureWebConn' before sending.
 sendFragment :: BS.ByteString -> TransIO ()
 sendFragment tosend = do
-  conn <- getState
+  conn <- tryState
   ttr ("sendFragment conn", idConn conn, "remoteNode", unsafePerformIO $ readIORef $ remoteNode conn)
   let l = fromIntegral $ BS.length tosend
   ttr ("TOSEND",tosend,l)
@@ -639,7 +648,7 @@ instance (Loggable a, ToJSON a, FromJSON a) => Loggable (POSTData a)  where
 
 data Vars= Vars[BS.ByteString]
 varunique s= do
-      Vars vars <- getState <|> let v= Vars [] in setState v >> return v
+      Vars vars <- tryState <|> let v= Vars [] in setState v >> return v
       if null $ filter (== s) vars then do setState $ Vars (s:vars); return s
                                     else varunique $ BS.snoc s 'x'
 
@@ -740,7 +749,7 @@ rawHTTP node restmsg =res
 
       sendRawRecover c $ BS.pack restmsg
 
-      c <- getState <|> error "rawHTTP: no connection?"
+      c <- tryState <|> error "rawHTTP: no connection?"
       let blocked = isBlocked c -- TODO: the same flag is used now for sending and receiving
       -- tr "before blocked"
       liftIO $ takeMVar blocked
