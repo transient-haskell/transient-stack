@@ -1,14 +1,14 @@
 {-# LANGUAGE CPP,RecordWildCards,UndecidableInstances,ScopedTypeVariables,FlexibleContexts,MultiParamTypeClasses,
 ExistentialQuantification,FlexibleInstances,InstanceSigs #-}
 
-------------------------------------------------------------------------------
--- The engine contains all the basic definitions and instances
--- Intended to experiment with different instances for performance improvements
--- A computaiton in Haskell is in the form: (x >>= f) >>= f' .... .
--- The FEngine includes the "f" fragments of continuations composed as f >=> f' in the fcomp field of the TranShip state
--- It happens to be slower and uses a lot more space and garbage collection to my surprise than the LEngine
+{- |
+Function-composition engine for the Transient monad (experimental).
 
-
+Like 'Transient.LEngine' but stores the entire continuation chain as a single
+composed function (@a -> TransIO b@) in the 'fcomp' field rather than as a
+list.  Benchmarks show this is slower and allocates more than 'LEngine'; it is
+kept as a reference implementation.
+-}
 module Transient.FEngine where
 
 import Control.Monad
@@ -44,14 +44,19 @@ trace1= Debug.trace
 #endif
 
 
-indent, outdent :: MonadIO m => m ()
+-- | Increase the trace indentation level by 2.
+indent :: MonadIO m => m ()
+-- | Decrease the trace indentation level by 2.
+outdent :: MonadIO m => m ()
 
 indent =  liftIO $ modifyIORef rindent $ \n -> n+2
 outdent=  liftIO $ modifyIORef rindent $ \n -> n-2
 
 
 {-# NOINLINE rindent #-}
+-- | Global indentation counter used by the trace helpers.
 rindent= unsafePerformIO $ newIORef 0
+-- | Format a value for coloured terminal trace output, prefixed with timestamp and thread id.
 color :: Show a => a -> String
 color x= unsafePerformIO $ do
     t <- getCurrentTime
@@ -71,6 +76,7 @@ tttr :: (MonadIO m, Show a) => a -> m ()
 tttr x = liftIO $ putStrLn $ "\x1b[34mINFO\x1b[0m " <> color x
 
 
+-- | Always-on coloured trace (same as 'Debug.trace' but with 'color' formatting).
 tracec x f= Debug.trace (color x) f
 
 type StateIO = StateT TranShip IO
@@ -137,9 +143,6 @@ data TranShip = forall a b. TranShip
 lazy= unsafePerformIO
 
 threadId s= lazy $ readIORef $ rThreadId s
-
--- {-# NOINLINE threadId #-}
--- threadId x= unsafePerformIO $ readIORef $ pthreadId x
 
 instance Read SomeException where
   readsPrec n str  = [(SomeException $ ErrorCall str,"")] -- $ "attempting to deserialize  error: <"<> str <> ">"
@@ -215,7 +218,7 @@ runTransient t = do
   let topState = emptyTranShip th label par childs
   runStateT (runTrans t) topState
 
--- | only used by keep* primitives
+-- | Like 'runTransient' but also writes the top state to 'rtopState'. Used by the @keep*@ primitives.
 runTransient1 :: TransIO a -> IO (Maybe a, TranShip)
 runTransient1 t = do
   th     <- myThreadId
@@ -227,6 +230,7 @@ runTransient1 t = do
   runStateT (runTrans t) topState
 
 {-#NOINLINE rtopState#-}
+-- | Global reference to the root 'TranShip' state. Initialised by 'runTransient1'.
 rtopState= unsafePerformIO $ newIORef $ error "no top state defined"
 
 -- | Run a transient computation with a given initial state. This is for basic testing. This does NOT support effects
@@ -235,6 +239,7 @@ runTransState st x = runStateT (runTrans x) st
 
 
 
+-- | Lift a 'Maybe' into 'TransIO': 'Just' succeeds, 'Nothing' stops with 'empty'.
 emptyIfNothing :: Maybe a -> TransIO a
 emptyIfNothing =  Transient  . return
 
@@ -251,18 +256,9 @@ runCont x TranShip{ fcomp = fs } =do
    runTrans $ unsafeCoerce fs  x
 
 
--- runContHang :: p -> TranShip -> StateT TranShip IO (Maybe a)
--- runContHang x TranShip{ fcomp = fs } =do
---    let   fs'=  \r -> do hang; fs r
---    runTrans $ unsafeCoerce fs'  x
-
-
 -- | Run the continuation included in the state. The result in the IO monad.
 runContIO :: p -> TranShip -> IO (Maybe a, TranShip)
 runContIO x cont = runStateT (runCont x cont) cont
-
--- runContHang' :: p -> TranShip -> IO (Maybe a, TranShip)
--- runContHang' x cont = runStateT (runContHang x cont) cont
 
 -- | Warning: Radically untyped stuff. handle with care
 getContinuations :: StateIO (a -> TransIO b)
@@ -270,15 +266,7 @@ getContinuations = do
   TranShip { fcomp = fs } <- get
   return $ unsafeCoerce fs
 
-{-
-runCont cont = do
-  mr <- runClosure cont
-  case mr of
-    Nothing -> return Nothing
-    Just r -> runContinuation cont r
--}
-
--- | Compose a list of continuations.
+-- | In FEngine, 'compose' is the identity: the continuation is already fully composed.
 {-# INLINE compose #-}
 compose :: (a -> TransIO b) -> (a -> TransIO b)
 compose =  id 
@@ -387,6 +375,7 @@ instance Monad TransIO where
 
 
 {-# INLINABLE setEventCont #-}
+-- | Compose @f@ into the current continuation chain and return the old chain.
 setEventCont :: (a -> TransIO b) -> StateIO (a -> TransIO c)
 setEventCont  f  = do
   TranShip{fcomp= k} <- get
@@ -395,6 +384,7 @@ setEventCont  f  = do
   return $ unsafeCoerce k
 
 {-# INLINABLE resetEventCont #-}
+-- | Restore the continuation chain to @k@ (the value saved by 'setEventCont').
 resetEventCont k= modify $ \TranShip { .. } -> TranShip {fcomp = k, .. }
 
 
@@ -414,6 +404,7 @@ instance (Monoid a) => Semigroup (TransIO a) where
 instance (Monoid a,Monad m) => Semigroup (StateT s m a) where
   (<>)=  mappendt
 
+-- | Lift 'mappend' through the applicative, combining two monoidal computations.
 mappendt x y = mappend <$> x <*> y
 
 
@@ -447,13 +438,12 @@ instance Show ParseError where
 
 instance Exception ParseError
 
+-- | Total 'read': throws 'ParseError' instead of raising an impure error on parse failure.
 read' s= case readsPrec' 0 s of
     [(x,"")] -> x
-
     _  -> throw $ ParseError $ "reading " ++ s
 
-
-
+-- | 'readsPrec' lifted to IO so that parse errors can be caught and re-thrown as 'ParseError'.
 readsPrec' n = unsafePerformIO . readWithErr n
 
   where
