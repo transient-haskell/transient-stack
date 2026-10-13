@@ -655,20 +655,14 @@ keep mx = do
       syncCache
       putStrLn "\nsaved\n"
 
-
-    -- top <- topState
-    -- liftIO $ (do 
-    --   killChildren  top
-    --   killThread $ threadId top) `CE.onException` return()c
-
     case r of  Left "signal" -> do  print "exiting"; exitFailure
                _ -> return ()
     return r
 
+-- | Read and execute console commands from a file (triggered by the @file@ option).
 readFromFile= do
               option "file" "read commands from a file"
               abduce
-              -- liftIO $ threadDelay 1000000
               file <- input (const True ) "file: "
               ls <- liftIO $ readFile file
               let l= concatMap homogenize $ words ls
@@ -738,14 +732,15 @@ keepCollect n time mx = do
       Left _ -> return []
       Right x  -> return x
 
--- echo of the input when processing a command line
+-- | Set to 'True' while processing a command-line @-p@ path to echo parsed input.
 {-# NOINLINE recho #-}
 recho= unsafePerformIO $ newIORef False
 
--- is executing the command line or not
+-- | 'True' while the initial @-p@ command-line path is being executed.
 {-# NOINLINE commandLine #-}
 commandLine= unsafePerformIO $ newIORef False
 
+-- | Execute the @-p@ command-line path (if present) by injecting it into 'processLine'.
 execCommandLine :: IO ()
 execCommandLine = do
       writeIORef commandLine True
@@ -756,7 +751,7 @@ execCommandLine = do
         threadDelay 10000
         processLine    path
 
--- substitute one of more separators by a single '/'
+-- | Collapse one or more separator characters into a single @/@, preserving quoted substrings.
 subst = subst1
             where
             subst2 []=[]
@@ -770,9 +765,12 @@ subst = subst1
                   | h `elem` separators = whyNot (recho =: True) `seq` if null t then "" else '/':subst2 t
                   | otherwise= h: subst1 t
 
+-- | Operator alias for 'writeIORef'.
 (=:) = writeIORef
+-- | Alias for 'unsafePerformIO'.
 whyNot= unsafePerformIO
 
+-- | Return the @-p@ / @--path@ argument from the program's command line, or empty string if absent.
 thereIsArgPath=  do
   args <- getArgs
   ttr ("args",args)
@@ -782,6 +780,7 @@ thereIsArgPath=  do
   ttr ("argpath",r)
   return r
 
+-- | Normalise a command-line argument into the @/@-separated path format used by 'processLine'.
 homogenize "-p" = ""
 homogenize s=
     let sc= dropWhile (=='-') s
@@ -795,12 +794,8 @@ inputParse parse message = r
   where
     r = do
       liftIO $ putStr (message ++ ": " ) >> hFlush stdout
-      str <- reactId True message ConsoleCallback message (const $ return ()) (return ()) -- (addInternalCallbackData message message) (return ())
+      str <- reactId True message ConsoleCallback message (const $ return ()) (return ())
       delListener message
-
-      -- let (str',rest)= span (/= '/') str
-
-      -- liftIO $ putStrLn str
       liftIO $ print str
       (r, rest) <- withParseString (BSL.pack str) $ (,) <$> parse <*> giveParseString
       ttr ("REST",rest)
