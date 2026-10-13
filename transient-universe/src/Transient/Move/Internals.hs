@@ -310,6 +310,11 @@ callTo node remoteProc = wormhole node $ atRemote remoteProc
 --   return r
 
 
+-- | Superseded by the applicative of 'Cloud' ('applicativeNode' in "Transient.Move.Defs"), which resolves the
+-- distributed applicatives by itself: it is no longer necessary to wrap them. It is kept for the programs that
+-- already use it, and none of the tests does.
+--
+-- It makes an endpoint before the computation and sets the 'isApplicative' flag while it runs.
 concurrentCloud :: Loggable a =>  Cloud a -> Cloud a
 concurrentCloud cl=   do
     log  <- getLog
