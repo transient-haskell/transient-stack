@@ -19,10 +19,6 @@ import Transient.Move.Defs
 import Transient.Console
 import Transient.Move.Logged
 import qualified Data.ByteString.Char8 as BC
-import qualified Data.ByteString.Lazy.Char8 as BS
-import qualified Network.Socket as NS
-import qualified Network.Socket.ByteString as SBS
-import qualified System.Timeout as ST
 import Control.Monad.IO.Class
 import Data.TCache  hiding (onNothing)
 import Data.TCache.IndexQuery
@@ -122,10 +118,11 @@ newtype AllJobsExecutedFor= AllJobsExecutedFor Node
 -- | Resume all pending 'job's on startup: replays each saved closure so the
 -- computation continues from where it was interrupted.  Also listens for 'Ping'
 -- messages from other nodes to resume jobs that were running there.
-runJobs= local $ fork $ do
-  liftIO $ index jobNode
-  option "jobs" "manage jobs"
-  clearJobs <|> execJobs
+runJobs :: Cloud ()
+runJobs= forkCloud $ do
+  onAll $ liftIO $ index jobNode
+  local $ option "jobs" "manage jobs"
+  onAll clearJobs <|> execJobs
   where
   clearJobs= do
     option1 "clear" "remove jobs in this node"
@@ -139,9 +136,8 @@ runJobs= local $ fork $ do
     lockOut $ putStrLn "jobs removed"
 
   execJobs = do
-    option1 "exec" "execute jobs for this node"
-    fork $ do
-      startJobs <|> commJobs <|> pingNodes
+    local $ option1 "exec" "execute jobs for this node" >> return ()
+    local startJobs <|> local commJobs <|> pingNodes
   
   startJobs= do
     mynode <- getMyNode
@@ -152,29 +148,22 @@ runJobs= local $ fork $ do
     Ping node <- getMailbox
     launchJobsForNode node
 
-  -- A recovered node says hello to the other known nodes: it opens a connection to each one, with the greeting of a
-  -- node ("CLOS"), and closes it. The node that accepts the connection announces it ('Ping') and 'commJobs' launches the
-  -- jobs that were waiting for the node (the ones whose sending failed, see 'job'). The list of nodes is not touched.
-  --
-  -- (It is not a 'runAt' to every node: all the nodes would execute it from the same point of the program, so the
-  -- closure of the call of one node is the closure of the call that it receives from the others.)
+  -- A recovered node says hello to the other known nodes: it executes in each one the announcement of its ping
+  -- ('Ping'). 'commJobs' of that node launches the jobs that were waiting for this node (the ones whose sending
+  -- failed, see 'job').  This is why 'runJobs' is a 'Cloud' computation.
+  pingNodes :: Cloud ()
   pingNodes= do
-    mynode <- getMyNode
-    nodes  <- getNodes
-    node   <- for (filter (/= mynode) nodes)
-    cookie <- liftIO $ readIORef rcookie
-    liftIO $ void (ST.timeout 1500000 (pingOne cookie mynode node)) `catch` \(e :: SomeException) -> return ()
+    -- these are logged: the node that receives the call replays the program with the log, where @mynode@ is the
+    -- node that pings and @node@ is the node that receives the ping
+    mynode <- local getMyNode
+    nodes  <- local getNodes
+    node   <- local $ for (filter (/= mynode) nodes)
+    pingOne mynode node
     empty
 
-  pingOne cookie mynode node= do
-    addr:_ <- NS.getAddrInfo (Just NS.defaultHints {NS.addrSocketType = NS.Stream}) (Just $ nodeHost node) (Just $ show $ nodePort node)
-    sock <- NS.socket (NS.addrFamily addr) NS.Stream NS.defaultProtocol
-    (do NS.connect sock (NS.addrAddress addr)
-        SBS.sendAll sock $ BC.concat [BC.pack "CLOS ", BS.toStrict cookie, BC.pack " b \r\nHost: ", BC.pack (nodeHost mynode),
-                                      BC.pack "\r\nPort: ", BC.pack (show $ nodePort mynode), BC.pack "\r\n\r\n"]
-        _ <- ST.timeout 500000 (SBS.recv sock 16)       -- the answer of the node ("OK"); not needed
-        return ()) `finally` NS.close sock
-
+  pingOne :: Node -> Node -> Cloud ()
+  pingOne mynode node= runAt node $ local $ putMailbox $ Ping mynode
+       
   launchJobsForNode :: Node -> TransIO ()
   launchJobsForNode node= do
     dbrjobs <- liftIO $ atomically $  jobNode .==. node :: TransIO [DBRef Job]

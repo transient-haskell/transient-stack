@@ -340,11 +340,18 @@ concurrentCloud cl=   do
 -- liftConcurrent :: Loggable b => (TransIO a -> TransIO b) -> Cloud a -> Cloud b
 -- liftConcurrent f x= concurrentCloud $ liftCloud f x
 
+-- | Run @x@ aside and go on with the computation (the 'Cloud' version of a fork). 'abduce' is logged: the log of the
+-- branch of @x@ has its result and the log of the other branch has the @w\/@ of the alternative, so a replay knows
+-- which of the two branches a log belongs to.
+forkCloud :: Cloud a -> Cloud ()
+forkCloud x= (local abduce >> x >> empty) <|> return ()
+
 -- | lift a TransIO computation which accept a TransIO parameter, like, for example, `threads` etc, to the Cloud monad. Just in case this ope
 liftCloud :: Loggable b => (TransIO a -> TransIO b) -> Cloud a -> Cloud b
-liftCloud f (Cloud x) = Cloud $ do
-    log <- getLog
-    if not $ recover log then f x else x >> empty
+liftCloud f (Cloud x) = Cloud $  f x
+--  do
+--     log <- getLog
+--     if not $ recover log then f x else x >> empty
     -- do NOT work without concurrent in concurrent since any furter invocation to any endpoint in the remote node will be sliently stopped
     -- because the emptyu after x. it is necessary to filter any endpoint withing the expression.
 
@@ -1327,7 +1334,7 @@ mconnect' node' = exclusiveCon $ do
     let fnode = filter (== node) nodes
     case fnode of
       [] -> mconnect1 node -- !> "NO NODE"
-      ((Node _ _ pool _) : _) -> do
+      (node'@(Node _ _ pool _) : _) -> do
         plist <- liftIO $ readMVar $ fromJust pool
         case plist of -- !>  ("length", length plist,nodePort node) of
           (handle : _) -> do
@@ -1337,8 +1344,8 @@ mconnect' node' = exclusiveCon $ do
               else return handle
           -- !>  ("REUSED!", nodeHost node, nodePort node)
           _ -> do
-            delNodes [node]
-            r <- mconnect1 node
+            -- the registered node is used and it is not removed from the list (see 'mconnect')
+            r <- mconnect1 node'
             -- tr "after mconnect1"
             return r
 
@@ -1654,8 +1661,10 @@ mconnect node' = exclusiveCon $ do
             else return handle
         _ -> do
               -- tr "mconnect2 2"
-              delNodes [node]
-              r <- mconnect2 node
+              -- the registered node is used (it has the pool of connections): the node is not removed from the list
+              -- while the connection is tried, since it may be down just now and the other threads of the program
+              -- must not see a list of nodes without it
+              r <- mconnect2 node'
               tr "after mconnect2 3"
               return r
   where
@@ -1959,9 +1968,6 @@ listenNew port conn' = do
         else do
           tr "sending OK"
           sendRaw conn "OK" --    !> "CLOS detected"
-          -- a node has connected (maybe it has recovered): the jobs that were waiting for it are launched
-          -- ('Transient.Move.Job.runJobs')
-          putMailbox (Ping remNode)
           tr ("listenNew REMOTE NODE", unsafePerformIO $ readIORef $ remoteNode conn, idConn conn )
 
           -- when the other node closes the connection (it fell), the reader finishes: the connection is marked as
