@@ -429,17 +429,17 @@ noExState s= error $ s <> ": no execution state. Use initNode to init the Cloud 
 --
 -- In an applicative ('apTransIO' in "Transient.LEngine" explains how its nodes compose)
 -- the term that is asynchronous leaves @w\/@ (@addWait@) in the thread T0, that goes on with the
--- next term, while its result arrives in another thread. When 'isApplicative' is set, that @w\/@ is
--- a mutable 'Wait' segment, and 'logged' fills it with the value of the term as soon as it is
--- resolved. So the log of T0 carries the value of the term instead of @w\/@ when it is serialised.
+-- next term, while its result arrives in another thread. The applicative puts in the log of the
+-- next term a 'Pending' hole that is read when the log is serialised: the log of the resolved term
+-- (its value) or, if it is not resolved yet, the @w\/@ that the term has left.
 --
 -- Each term is compacted to its value, even if it went through endpoints (e.g. 'runAt',
 -- which has two teleports): a node that replays the internal path of a term would follow its
 -- teleports and could not complete the applicative. The handler of 'logged' restores the
 -- previous closure ('PrevClos'), so the internal closures of the term are not part of the path.
 --
--- The hash of a term in T0 is the same as the hash of the compacted term (@initial . done@), so
--- endpoint names do not depend on whether the 'Wait' segment was filled when the log was replayed.
+-- The hash of the first term of a node is one step ('hashTerm'), resolved or not, so endpoint
+-- names do not depend on whether the term was resolved when the log was replayed.
 --
 -- A closure created within an applicative term can not be the last closure invoked in a
 -- connection, since a node that continues from it would not have the value of the other
@@ -483,10 +483,7 @@ logged mx =  sandboxDataCond handle $ do
 
           putLog initialLog{partLog=  initialSegment <> exec, hashClosure= hashStep (hashClosure initialLog) hashExec}
 
-          -- in an applicative term, the Wait segment that addWait writes is a mutable hole (initially "w/")
-          -- that is filled below with the value of the term
           app <- gets isApplicative
-          wref <- liftIO $ newIORef $ renderLog wait
 
           -- the path is within an applicative term: receive1 must not record its closures as the last ones of the connection
           when app $ void $ modifyState' (\p -> p{isApplicativ= True}) (noExState "logged")
@@ -494,7 +491,7 @@ logged mx =  sandboxDataCond handle $ do
           -- nested logged statements within mx are not applicative terms
           r <- sandboxApp (do modify (\s -> s{isApplicative= False})
                               if not $ BS.null rest then recoverIt else  ttr "EXECUTING" >> mx)
-               <|> addWait initialLog app wref
+               <|> addWait initialLog app
 
           rest <- giveParseString
 
@@ -504,8 +501,6 @@ logged mx =  sandboxDataCond handle $ do
               -- hash of a statement compacted to its value
               compactHash= hashStep (hashClosure initialLog) hashDone
 
-          -- fill the Wait segment left by addWait in the branch that continues with the next term
-          when app $ liftIO $ writeIORef wref add
 
           prevc <- getData `onNothing` noExState "logged"
           ttr ("recov",recov,rest,restLog initialLog)
@@ -535,14 +530,13 @@ logged mx =  sandboxDataCond handle $ do
 
     -- when   p1 <|> p2, to avoid the re-execution of p1 at the
     -- recovery when p1 is asynchronous or  empty
-    addWait initialLog app wref = do
+    addWait initialLog app = do
           -- the alternative branch has been chosen. This is a algebraic composition. the execution continues in the alternative branch
           --
           let initialSegment= partLog initialLog
-              -- in an applicative, a Wait segment that will contain the value of this term
-              waitMark= if app then waitSeg wref else wait
-              -- in an applicative the hole stands for the value of mx: same hash as the path with the value,
-              -- so that endpoint names do not depend on whether the hole was filled when the log was replayed
+              waitMark= wait
+              -- in an applicative the first term counts as one step whatever it is resolved or not ('apTransIO'): same
+              -- hash as the path with its value, so that endpoint names do not depend on whether it was resolved
               waitHash finalLog= if app then hashStep (hashClosure initialLog) hashTerm
                                         else hashStep (hashClosure finalLog) hashWait
           tr ("finish logged stmt of type",typeOf logit, "with empty")
