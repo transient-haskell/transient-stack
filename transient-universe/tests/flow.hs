@@ -2535,7 +2535,7 @@ mainlog2= keep' $ unCloud $ do
   proc
   log <- getLog
   onAll $ liftIO $ print $ partLog log
-  onAll $ setParseString $ toLazyByteString $ partLog log
+  onAll $ setParseString $ toLazyByteString $ renderLog $ partLog log
   modifyState' (\log -> log{recover=True,partLog=mempty}) (error "error")
   proc
   log <- getLog

@@ -58,11 +58,12 @@ import Data.ByteString.Builder
 import Control.Concurrent.MVar
 
 -- | Log marker for an executed branch (@e\/@).
-exec :: Builder
-exec=  lazyByteString $ BS.pack "e/"
+exec :: LogB
+exec=  "e/"
 -- | Log marker for a waiting (alternative) branch (@w\/@).
-wait :: Builder
-wait=   lazy $ newIORef $ lazyByteString $ BS.pack "w/"
+-- Inside an applicative, 'logged' uses a mutable 'hole' initialised to this value instead.
+wait :: LogB
+wait=  "w/"
 
 -- | Record the last closure reached on a given connection, so that subsequent
 -- messages from that node are routed to the correct continuation.
@@ -145,10 +146,11 @@ receive1  lc = do
       
       setData conn'{calling= calling conn}
 
+      -- a closure within an applicative term can not be the last one: the other term would not be resolved there
       when isfromremote $ do
-        app <- gets isApplicative
+        PrevClos{isApplicativ= app} <- getData `onNothing` noExState "receive1"
         when (not app) $ setLastClosureForConnection (idConn conn)  (getDBRef (kLocalClos s2 closr))
-      
+
       setLog (idConn conn') logs s2 closr
 
     Right (SMore logs, s2, closr, map,isfromremote) -> do
@@ -162,10 +164,11 @@ receive1  lc = do
                                           (typeOf (ofType :: HTTPHeaders))] 
                                            map  $ mfData st }
     
+      -- a closure within an applicative term can not be the last one: the other term would not be resolved there
       when isfromremote $ do
-        app <- gets isApplicative
+        PrevClos{isApplicativ= app} <- getData `onNothing` noExState "receive1"
         when (not app) $ setLastClosureForConnection (idConn conn)  (getDBRef (kLocalClos s2 closr))
-      
+
 
       setData conn'{calling= calling conn}
       setLog (idConn conn') logs s2 closr
@@ -193,8 +196,8 @@ firstFragment logs = if null logs then mempty else case head logs of
     let (s,c) = getSessClosure (getDBRef key)
     noTrans $ processMessage s c sessionId0 closureId0 (Right $ tail logs) False
     empty
-  Fragment x -> return x
-  Collect xs -> for $ reverse xs
+  Fragment x -> return $ renderLog x
+  Collect xs -> for $ map renderLog $ reverse xs
 
 -- | Install a fragment list as the current parse buffer and set 'recover=True'.
 setLogFromFile :: [FragmentType] -> TransIO ()
@@ -249,7 +252,7 @@ endpoint1  maybeName = do
       case mr of
         Just locClos@LocalClosure {..} -> do
           tr "found dblocalclos"
-          closure <- if toLazyByteString partLog== mempty -- two consecutive endpoints
+          closure <- if nullLog partLog -- two consecutive endpoints
             then return locClos
             else do 
               ev <-  newEVar 
@@ -338,7 +341,7 @@ endpoint1  maybeName = do
                   
                 else do
                   tr "set the log for alternative computation"
-                  setState log{partLog= "w/",restLog= if not $ null restLog then tail restLog else restLog,hashClosure=hash  + hashWait}
+                  setState log{partLog= "w/",restLog= if not $ null restLog then tail restLog else restLog,hashClosure= hashStep hash hashWait}
               -- log <-getLog
               -- ttr ("setting wait",log)
               empty
@@ -384,9 +387,37 @@ firstCont =  do
   liftIO $ atomically $ writeDBRef dbClos0 this
   return this
 
-hashDone= 10000000
-hashExec= 100000
-hashWait= 1000
+-- | The hash of the execution path ('hashClosure') names the endpoints by their position in the program,
+-- so that the same point has the same name in every node and in every replay. Each step of the path
+-- is combined with 'hashStep', which is not commutative: the name depends on the order of the steps,
+-- not only on how many there are of each kind. (An additive hash gave the same name to different points,
+-- e.g. an endpoint inside a previous remote call and an endpoint after it.)
+hashStep :: Int -> Int -> Int
+hashStep h c = (h * 31 + c) `mod` 2147483647
+
+-- | Steps of the path: entering a logged statement, finishing it, an alternative branch (@w\/@),
+-- and the value of the second term of an applicative (the 'Next' hole).
+hashExec, hashDone, hashWait, hashNext :: Int
+hashExec= 1
+hashDone= 2
+hashWait= 3
+hashNext= 4
+
+-- | Position of a 'logged' statement in an applicative, known from the last segment of its initial log.
+data AppPosition
+  = NoTerm                               -- ^ not an applicative term
+  | FirstTerm                            -- ^ first term (or a term not preceded by a logged term)
+  | SecondTermAsync (IORef Builder)      -- ^ second term after an asynchronous first term: the 'Next' hole to fill
+  | SecondTermSync                       -- ^ second term after a synchronous first term, in the same thread
+
+applicativePosition :: LogB -> TransIO AppPosition
+applicativePosition l = case lastSeg l of
+    Just (Wait _ x) -> return $ SecondTermAsync x
+    Just (Next x)   -> do
+        b <- liftIO $ readIORef x
+        -- an empty Next hole: the first term has just finished in this same thread
+        return $ if BS.null (toLazyByteString b) then SecondTermSync else FirstTerm
+    _               -> return FirstTerm
 
 -- | Throw a missing-execution-state error with a context label.
 noExState :: String -> a
@@ -402,6 +433,50 @@ noExState s= error $ s <> ": no execution state. Use initNode to init the Cloud 
 -- the parent computation is finished its internal (subcomputation) logs are
 -- discarded.
 --
+-- == Logged terms of an applicative
+--
+-- In @f \<*> x@ ('Transient.LEngine') @fparallel@ executes @f@ and @xparallel@ executes @x@.
+-- If the first term is asynchronous, the current thread (T0) gets no result, writes @w\/@
+-- (@addWait@) and goes on to the second term, while the result of the first term arrives
+-- in another thread (T1). The applicative is completed by the thread that receives the
+-- last result, which takes the value of the other term from memory (@r1@, @r2@), not from its log:
+--
+-- > T0 (xparallel):  ... w/  v2/      -- v1 is missing
+-- > T1 (fparallel):  ... v1/          -- v2 is missing
+--
+-- A node that replays one of these logs (a remote node invoked after the applicative,
+-- or a restart) can not resolve the applicative. To avoid that, when 'isApplicative' is set
+-- the log has mutable segments ('LogSeg') that are filled with the value of the other term
+-- as soon as it is resolved:
+--
+-- * the first term writes 'Wait' instead of @w\/@ in T0, and fills it with its value v1.
+--
+-- * the first term writes a 'Next' hole after its value in T1. The second term finds the
+--   'Wait' at the end of its initial log in T0 and fills that 'Next' hole with its value v2.
+--
+-- So both logs become @... v1\/ v2\/@ before the applicative completes. The replay executes
+-- the first term with v1, @fparallel@ fails since there is no second value yet, and
+-- @xparallel@ executes the second term with v2 and returns @f v1 v2@.
+--
+-- When the first term is synchronous, both terms run in the same thread: the second term
+-- finds the 'Next' hole of the first term empty at the end of its log and does not fill it.
+--
+-- Each term is compacted to its value, even if it went through endpoints (e.g. 'runAt',
+-- which has two teleports): a node that replays the internal path of a term would follow its
+-- teleports and could not complete the applicative. The handler of 'logged' restores the
+-- previous closure ('PrevClos'), so the internal closures of the term are not part of the path.
+--
+-- The hash of the path must be the same in every branch and in the replay. The 'Next' step
+-- stands for the second term:
+--
+-- > first term:          initial . done . next
+-- > second term, async:  initial . next       -- initial = first term . done (addWait)
+-- > second term, sync:   initial              -- initial already includes the Next step
+--
+-- A closure created within an applicative term can not be the last closure invoked in a
+-- connection, since a node that continues from it would not have the value of the other
+-- term. 'logged' marks the term in 'PrevClos' ('isApplicativ') and 'receive1' does not
+-- update the last closure of the connection in that case.
 
 
 logged :: Loggable a => TransIO a -> TransIO a
@@ -420,53 +495,113 @@ logged mx =  sandboxDataCond handle $ do
 
     where
 
-    handle (Just mnow) (Just mprev) = Just (PrevClos (prevDBRef mnow) (pnewSession mnow) 
-                                           ( preservePath mnow || preservePath mprev) 
-                                           False 
+    -- an applicative term (the logged statement that set isApplicativ) is compacted to its value
+    -- relative to the closure previous to the term (see logit): its internal closures are not part of the path
+    handle (Just mnow) (Just mprev)
+      | isApplicativ mnow && not (isApplicativ mprev) = Just mprev
+    handle (Just mnow) (Just mprev) = Just (PrevClos (prevDBRef mnow) (pnewSession mnow)
+                                           ( preservePath mnow || preservePath mprev)
+                                           (isApplicativ mprev)  -- set by logit only within an applicative term
                                            (isCollect mnow || isCollect mprev) :: PrevClos)
     handle _ _ = error "no log initialized: use initNode before logging"
     logit = do
-          initialLog <- getLog
-          let initialSegment= partLog initialLog
+          initialLog0 <- getLog
           rest <- getParseBuffer
 
-          ttr ("LOGGED:", hashClosure initialLog,rest,if recover initialLog then "recovering" else "executing" <> " logged stmt of type",typeOf logit,"parseString", rest,"PARTLOG",partLog initialLog)
-          
-          setData initialLog{partLog=  initialSegment <> exec, hashClosure= hashClosure initialLog + hashExec}
+          -- position of this statement in an applicative (see the documentation of logged)
+          app <- gets isApplicative
+          pos <- if app then applicativePosition (partLog initialLog0) else return NoTerm
 
-          r <-(if not $ BS.null rest then recoverIt else  ttr "EXECUTING" >> mx)  <|> addWait initialLog 
+          let initialLog= initialLog0
+              initialSegment= partLog initialLog
+
+          ttr ("LOGGED:", hashClosure initialLog,rest,if recover initialLog then "recovering" else "executing" <> " logged stmt of type",typeOf logit,"parseString", rest,"PARTLOG",partLog initialLog)
+
+          setData initialLog{partLog=  initialSegment <> exec, hashClosure= hashStep (hashClosure initialLog) hashExec}
+
+          -- mutable segments of the applicative: the value of this term, written in the Wait segment
+          -- of the xparallel branch (initially "w/"), and the Next hole for the value of the second term
+          wref <- liftIO $ newIORef $ renderLog wait
+          xref <- liftIO $ newIORef mempty
+
+          -- the path is within an applicative term: receive1 must not record its closures as the last ones of the connection
+          when app $ void $ modifyState' (\p -> p{isApplicativ= True}) (noExState "logged")
+
+          -- nested logged statements within mx are not applicative terms
+          r <- sandboxApp (do modify (\s -> s{isApplicative= False})
+                              if not $ BS.null rest then recoverIt else  ttr "EXECUTING" >> mx)
+               <|> addWait initialLog app wref xref
 
           rest <- giveParseString
 
           let add= serialize r <> "/"
               recov=  not $ (BS.null rest && null (restLog initialLog))
-              parlog= initialSegment <> add
+              -- the first term of an applicative leaves a Next hole for the value of the second term
+              next= case pos of
+                  FirstTerm -> nextSeg xref
+                  _         -> mempty
+              parlog= initialSegment <> fixed add <> next
+              -- hash of a statement compacted to its value. In an applicative, the hash of the second term
+              -- is accounted for by the Next step, so that it is the same in every branch and in the replay:
+              --   first term:         initial . done . next   (the Next hole stands for the second term)
+              --   second term, async: initial . next          (its initial hash is the first term: initial . done)
+              --   second term, sync:  initial                 (its initial hash already includes the Next step)
+              compactHash= case pos of
+                  FirstTerm         -> hashStep (hashStep (hashClosure initialLog) hashDone) hashNext
+                  SecondTermAsync _ -> hashStep (hashClosure initialLog) hashNext
+                  SecondTermSync    -> hashClosure initialLog
+                  NoTerm            -> hashStep (hashClosure initialLog) hashDone
 
+          when app $ liftIO $ do
+              -- fill the Wait segment left by addWait in the xparallel branch
+              writeIORef wref add
+              -- second term: fill the Next hole of the first term in the fparallel branch
+              case pos of
+                SecondTermAsync x -> writeIORef x add
+                _                 -> return ()
 
           prevc <- getData `onNothing` noExState "logged"
           ttr ("recov",recov,rest,restLog initialLog)
 
-          let hash= hashClosure initialLog{-Alabado sea Dios-} + hashDone 
           l <-getLog
-          ttr ("LOGGED RETURN HASH", hashClosure l + hashDone)
+          ttr ("LOGGED RETURN HASH", compactHash{-Alabado sea Dios-})
 
           ttr ("PREVCLOS LOGGED AFTER",prevc)
-          if preservePath prevc
+          -- an applicative term is always compacted to its value, even if it went through endpoints (e.g. runAt):
+          -- a node that replays its internal path would follow its teleports and could not complete the applicative
+          if preservePath prevc && not app
             then do
-              modifyState'  (\finalLog -> finalLog{recover=recov,  hashClosure= hash {- hashClosure finalLog + hashDone -} }) emptyLog
+              -- the internal path is kept in the log, so a replay goes through mx again and adds the same hashes.
+              -- Continue from the final hash so that later endpoints do not collide with the internal ones (e.g. runAt)
+              modifyState'  (\finalLog -> finalLog{recover=recov, partLog= partLog finalLog <> next
+                                                  , hashClosure= hashStep (hashClosure finalLog) hashDone }) emptyLog
 
             else
-              modifyState'  (\finalLog -> finalLog{recover=recov, partLog= parlog, hashClosure= hash {-hashClosure finalLog + hashDone -} }) emptyLog
+              modifyState'  (\finalLog -> finalLog{recover=recov, partLog= parlog, hashClosure= compactHash }) emptyLog
 
           return r
 
 
+    -- restore the isApplicative flag after the computation, also when it fails or continues asynchronously in other threads
+    sandboxApp mx = do
+          app <- gets isApplicative
+          mx <*** modify (\s -> s{isApplicative= app})
+
     -- when   p1 <|> p2, to avoid the re-execution of p1 at the
     -- recovery when p1 is asynchronous or  empty
-    addWait initialLog  = do
+    addWait initialLog app wref xref = do
           -- the alternative branch has been chosen. This is a algebraic composition. the execution continues in the alternative branch
           --
           let initialSegment= partLog initialLog
+              -- in an applicative, a Wait segment that will contain the value of this term
+              -- and the reference to the Next hole of the fparallel branch, for the second term
+              waitMark= if app then waitSeg wref xref else wait
+              -- in an applicative the hole stands for the value of mx: same hash as the path with the value,
+              -- so that endpoint names do not depend on whether the hole was filled when the log was replayed
+              -- in an applicative, the hash of the first term compacted (initial . done): the second term
+              -- continues from it, as in the branch where the first term has its value
+              waitHash finalLog= if app then hashStep (hashClosure initialLog) hashDone
+                                        else hashStep (hashClosure finalLog) hashWait
           tr ("finish logged stmt of type",typeOf logit, "with empty")
           prevc <- getData `onNothing` noExState "logged"
 
@@ -479,14 +614,14 @@ logged mx =  sandboxDataCond handle $ do
             then do
               ttr "PRESERVEPATH  addWait"
               modifyState'  (\finalLog -> finalLog{recover=recov
-                    ,partLog=partLog finalLog <> wait
-                    ,hashClosure= hashClosure finalLog + hashWait }) emptyLog
+                    ,partLog=partLog finalLog <> waitMark
+                    ,hashClosure= waitHash finalLog }) emptyLog
 
             else do
               ttr "NORMAL addWait"
               modifyState'  (\finalLog -> finalLog{recover=recov
-                  , partLog= initialSegment <> wait
-                  , hashClosure= hashClosure finalLog  + hashWait }) emptyLog
+                  , partLog= initialSegment <> waitMark
+                  , hashClosure= waitHash finalLog }) emptyLog
 
           empty
 

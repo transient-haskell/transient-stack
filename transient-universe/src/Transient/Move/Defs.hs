@@ -13,6 +13,8 @@ import Transient.Loggable
 import Transient.Parse
 import {-# SOURCE #-} Transient.Move.Logged (endpoint, noExState)
 import Data.ByteString.Builder
+import qualified Data.ByteString.Builder.Internal as BI
+import Data.String (IsString(..))
 import qualified Data.TCache.DefaultPersistence as TC
 import Data.TCache  hiding (onNothing)
 
@@ -258,8 +260,88 @@ data LocalClosure = LocalClosure
 
 instance Show LocalClosure where show lc= keyResource lc
 
+-- | A log segment: either immutable or a mutable hole.
+--
+-- Mutable holes solve the problem of the logs of the applicative with asynchronous terms
+-- (see the documentation of 'logged'). In @f \<*> x@, @fparallel@ executes @f@ and
+-- @xparallel@ executes @x@ ('Transient.LEngine'). When the first term is asynchronous,
+-- the two branches continue in different threads with different logs and the one that
+-- completes the applicative takes the value of the other term from memory, not from the log.
+-- A remote node (or a restart) that replays that log could not resolve the applicative.
+-- The holes put the value of the other term in the log as soon as it is known, so any log
+-- serialised afterwards carries both values.
+data LogSeg
+  = Fixed Builder
+    -- ^ immutable segment
+  | Wait (IORef Builder) (IORef Builder)
+    -- ^ written by @addWait@ when the first term of an applicative is asynchronous, in the
+    -- branch that continues with @xparallel@. The first reference is the value of the
+    -- first term: it contains @w\/@ until the term is resolved. The second one is the
+    -- 'Next' hole of the @fparallel@ branch, filled by the second term with its value.
+  | Next (IORef Builder)
+    -- ^ written after the value of the first term of an applicative, in the @fparallel@
+    -- branch: the value of the second term. It is empty until the second term is resolved.
+
+-- | Log builder made of immutable and mutable segments.
+newtype LogB = LogB [LogSeg]
+
+instance Semigroup LogB where
+  LogB xs <> LogB ys = LogB $ merge xs ys
+    where
+    merge [] b = b
+    merge a [] = a
+    merge [Fixed a] (Fixed b : bs) = Fixed (a <> b) : bs
+    merge (a:as) b = a : merge as b
+
+instance Monoid LogB where
+  mempty = LogB []
+
+instance IsString LogB where
+  fromString = fixed . fromString
+
+instance Show LogB where
+  showsPrec d = showsPrec d . renderLog
+
+instance Read LogB where
+  readsPrec d s = [(fixed b, r) | (b, r) <- readsPrec d s]
+
+instance Loggable LogB where
+  serialize = renderLog
+  deserialize = fixed <$> deserialize
+
+-- | Immutable log segment.
+fixed :: Builder -> LogB
+fixed b = LogB [Fixed b]
+
+-- | 'Wait' segment: the value of the first term of an applicative (initially @w\/@)
+-- and the 'Next' hole of the @fparallel@ branch.
+waitSeg :: IORef Builder -> IORef Builder -> LogB
+waitSeg w x = LogB [Wait w x]
+
+-- | 'Next' segment: the value of the second term of an applicative (initially empty).
+nextSeg :: IORef Builder -> LogB
+nextSeg x = LogB [Next x]
+
+-- | Last segment of the log, used by 'logged' to know its position in an applicative.
+lastSeg :: LogB -> Maybe LogSeg
+lastSeg (LogB segs) = if null segs then Nothing else Just $ last segs
+
+-- | Convert to 'Builder'. Holes are read each time the builder is run,
+-- not when it is built, so the current content is always serialised.
+renderLog :: LogB -> Builder
+renderLog (LogB segs) = foldMap seg segs
+  where
+  seg (Fixed b)  = b
+  seg (Wait r _) = readRef r
+  seg (Next r)   = readRef r
+  readRef r = BI.builder $ \k br -> readIORef r >>= \b -> BI.runBuilderWith b k br
+
+-- | True if the log is empty.
+nullLog :: LogB -> Bool
+nullLog = BL.null . toLazyByteString . renderLog
+
 -- | The 'Log' data type represents the current log data, which includes information about whether recovery is enabled, the partial log builder, and the hash closure.
-data Log  = Log{ recover :: Bool , partLog :: Builder, restLog :: [FragmentType],  hashClosure :: Int} deriving (Show)
+data Log  = Log{ recover :: Bool , partLog :: LogB, restLog :: [FragmentType],  hashClosure :: Int} deriving (Show)
 
 -- [[Builder]] example:  [["e/f/x/w/u","b/l/ah/"],["single/branch"]... : 
 -- The first group correspond with a collectc of two branches.
@@ -271,7 +353,7 @@ type ClosureKey = String
 
 -- | A single element of the execution log.
 -- 'Fragment' is a serialised value; 'Collect' is a parallel branch set; 'Jump' is a cross-session link.
-data FragmentType= Fragment{unFragment :: Builder} | Collect [Builder] | Jump ClosureKey deriving (Read,Show)
+data FragmentType= Fragment{unFragment :: LogB} | Collect [LogB] | Jump ClosureKey deriving (Read,Show)
 
 instance Loggable FragmentType
 

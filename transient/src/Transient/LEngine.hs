@@ -312,16 +312,16 @@ instance Applicative TransIO where
   (<*>) :: TransIO (a -> b) -> TransIO a -> TransIO b
   mf <*> mx =  do
 
-    -- isapp <- gets isApplicative
-    -- modify $ \s ->s{isApplicative= True}
+    isapp <- gets isApplicative
+    modify $ \s ->s{isApplicative= True}
 
     r1 <- liftIO $ newIORef Nothing
     r2 <- liftIO $ newIORef Nothing
 
-    -- let restoreflag= do modify $ \s -> s{isApplicative= isapp} 
+    let restoreflag= modify $ \s -> s{isApplicative= isapp}
 
-    r <-  (fparallel r1 r2 <|> xparallel r1 r2) -- <|> (restoreflag >> empty)
-    -- restoreflag
+    r <-  (fparallel r1 r2 <|> xparallel r1 r2) <|> (restoreflag >> empty)
+    restoreflag
     return r
 
     where

@@ -1949,7 +1949,7 @@ listenNew port conn' = do
               --  let build= toPath log'
               setParseString $ toLazyByteString log'
               ttr "CLOSUREDATA"
-              return $ SMore $ ClosureData closureId0 sessionId0 closureId0 sessionId0 $ [Fragment log'] -- [[log']] 
+              return $ SMore $ ClosureData closureId0 sessionId0 closureId0 sessionId0 $ [Fragment $ fixed log'] -- [[log']] 
 
         ("relay", _) -> proxy sock method vers uri'
 
@@ -2021,7 +2021,7 @@ listenNew port conn' = do
                   -- integer
                   deserialize
                     -- a void message is sent to the application signaling the beginning of a connection
-                    <|> (return $ SMore (ClosureData closureId0 sessionId0 closureId0 sessionId0 [Fragment $ exec <> lazyByteString s]))
+                    <|> (return $ SMore (ClosureData closureId0 sessionId0 closureId0 sessionId0 [Fragment $ exec <> fixed (lazyByteString s)]))
             else do
               -- let uri'' = if not $ isNumber $ BS.head uri'
               --               then
@@ -2081,7 +2081,7 @@ listenNew port conn' = do
               ttr ("SENDING RESPONSE HEADERS to sock", sock, "idConn", idConn conn)
               liftIO $ SBSL.sendAll sock $ "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nTransfer-Encoding: chunked\r\n\r\n"
               ttr ("string to parse", requestString)
-              return $ SMore $ ClosureData (ClosureId remoteClosure)  (SessionId s1)  (ClosureId thisClosure)  (SessionId s2)  [Fragment $ lazyByteString requestString]
+              return $ SMore $ ClosureData (ClosureId remoteClosure)  (SessionId s1)  (ClosureId thisClosure)  (SessionId s2)  [Fragment $ fixed $ lazyByteString requestString]
   where
 
     noparams clos= do  -- example"http://localhost:8080/init"

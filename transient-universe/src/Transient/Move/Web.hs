@@ -381,7 +381,7 @@ getURL = do
 
   log <- getLog  -- get path
   n <- getMyNode
-  let logBytes = toLazyByteString (partLog log)
+  let logBytes = toLazyByteString (renderLog $ partLog log)
   return $ concat
     [ "http://"
     , nodeHost n
