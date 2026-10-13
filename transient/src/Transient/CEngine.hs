@@ -1,15 +1,14 @@
 {-# LANGUAGE CPP,RecordWildCards,UndecidableInstances,ScopedTypeVariables,FlexibleContexts,MultiParamTypeClasses,
 ExistentialQuantification,FlexibleInstances, InstanceSigs #-}
 
-------------------------------------------------------------------------------
--- FROM https://gist.github.com/agocorona/2c9149c4d2035f21952fc1d1691b7bde
--- file ccont.hs in tests. 
--- this engine does not compile well yet
--- The engine contains all the basic definitions and instances
--- Intended to experiment with different instances for performance improvements
--- This engine uses a modified but standard continuation in which the (usually called) t or r parameter has been type erased
--- By construction the bind operator assures that the types match without using the t type.
+{- |
+Continuation-passing engine for the Transient monad (experimental).
 
+Based on <https://gist.github.com/agocorona/2c9149c4d2035f21952fc1d1691b7bde>.
+Uses a single type-erased continuation @a -> TransIO b@ (the @t@\/@r@
+parameter is erased); the 'Monad' bind operator guarantees type safety by
+construction.
+-}
 module Transient.CEngine where
 
 import Control.Monad
