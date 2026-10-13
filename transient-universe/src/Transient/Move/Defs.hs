@@ -45,8 +45,9 @@ import Control.Monad.State
 import Control.Applicative
 
 
--- The cloud monad is a thin layer over Transient in order to make sure that the type system
--- forces the logging of intermediate results
+-- | The cloud monad: a thin layer over 'TransIO' that forces the type system to
+-- require 'Loggable' constraints on distributed results, ensuring every
+-- intermediate value can be checkpointed and replayed across restarts.
 newtype Cloud a = Cloud {unCloud :: TransIO a}
   deriving
     ( AdditionalOperators,
@@ -63,25 +64,6 @@ newtype Cloud a = Cloud {unCloud :: TransIO a}
     )
 
 
--- instance Monoid a => Monoid (Cloud a) where
---   mappend = (<>) 
---   mempty= return mempty
-
--- instance Semigroup a => Semigroup (Cloud a) where
---   a <> b= (<>) <$> a <*> b
-  
--- instance Applicative Cloud where
---   return :: a -> Cloud a
---   return x = Cloud $ return x
-  
---   (<*>) :: Cloud (a -> b) -> Cloud a -> Cloud b
---   Cloud f <*> Cloud g = Cloud $ sandboxData (ofType :: PrevClos) 
---                               $ sandboxData (ofType :: M.Map Int Closure) 
---                               $ do
---         tr "ISAPP"
---         -- modifyState' (\(PrevClos dbr _ _) -> PrevClos dbr False True) (PrevClos dbClos0 False True)
---         f <*> g
-
 instance ToJSON B.ByteString where
   toJSON = Data.Aeson.String . TE.decodeUtf8
 
@@ -95,7 +77,9 @@ instance ToJSON BL.ByteString where
 instance FromJSON BL.ByteString where
   parseJSON v = BL.fromStrict <$> parseJSON v
 
+-- | Identifies a specific checkpoint closure within a session.
 newtype ClosureId = ClosureId BC.ByteString deriving (Typeable,Read,Show,Eq,Ord,Generic,FromJSON,ToJSON)
+-- | Identifies a browser/client session.
 newtype SessionId = SessionId BC.ByteString deriving (Typeable,Read,Show,Eq,Ord,Generic,FromJSON,ToJSON)
 
 instance Loggable ClosureId where
@@ -121,6 +105,11 @@ newtype ClosToRespond= ClosToRespond (DBRef LocalClosure) -- {remSession :: Sess
 
 
 
+-- | Broadcast message: a node signals it is ready to resume unfinished jobs.
+newtype Ping = Ping Node
+
+-- | A cluster node identified by host and port, with an optional connection pool
+-- and the list of services it advertises.
 data Node = Node
   { nodeHost :: NS.HostName,
     nodePort :: Int,
@@ -168,6 +157,9 @@ data CloudException = CloudException Node SessionId ClosureId String deriving (T
 
 instance Exception CloudException
 
+-- | An open connection to another node.  Shared by concurrent wormhole\/teleport calls
+-- via the 'isBlocked' semaphore.  'connData' holds the transport-specific handle
+-- (TCP socket, TLS context, WebSocket, or 'Self').
 data Connection = Connection
   { idConn :: Int,
     myNode :: IORef Node,
@@ -175,37 +167,29 @@ data Connection = Connection
     connData :: IORef (Maybe ConnectionData),
     istream :: IORef ParseContext,
     bufferSize :: BuffSize,
-    -- multiple wormhole/teleport use the same connection concurrently
-    isBlocked :: Blocked,
+    isBlocked :: Blocked,           -- ^ serialises concurrent senders
     calling :: Bool,
     synchronous :: Bool,
-
-    -- for each remote closure that points to local closure 0,
-    -- a new container of child processMessagees
-    -- in order to treat them separately
-    -- so that 'killChilds' do not kill unrelated processMessagees
-    -- used by `single` and `unique`
-    closChildren :: IORef (M.Map Int TranShip)
+    closChildren :: IORef (M.Map Int TranShip)  -- ^ per-closure child states for 'single'\/'unique'
   }
   deriving (Typeable)
 
 instance Show Connection where
   show x= show $ lazy $ readIORef $ remoteNode x
 
-
 -- last usage+ blocking semantics for sending
 type Blocked = MVar (Maybe Integer)
 
 type BuffSize = Int
 
--- type PortID = Int
-
+-- | Parsed HTTP request line (version, status\/method, path) plus the raw header list.
 data HTTPHeaders = HTTPHeaders (BL.ByteString, B.ByteString, BL.ByteString) NWS.Headers deriving (Show)
 emptyHeaders= HTTPHeaders (mempty,mempty,mempty)[]
 
 instance Show WS.Connection where
   show _ = "WS"
 
+-- | The transport-specific handle stored inside a 'Connection'.
 data ConnectionData
 
 #ifndef ghcjs_HOST_OS
@@ -230,6 +214,9 @@ data ConnectionData
 #endif
    deriving (Show)
 
+-- | A TCache-persisted closure record.  Stored under key @\<closureId\>-\<sessionId\>@.
+-- 'localLog' is the serialised log fragment; 'localEvar' is the live EVar that
+-- 'receive1' writes to when a remote response arrives.
 data LocalClosure = LocalClosure
   { localClos     :: ClosureId,
     localSession  :: SessionId,
@@ -238,15 +225,9 @@ data LocalClosure = LocalClosure
     localMvar     :: MVar (),
     localEvar     :: Maybe (EVar (Either CloudException (StreamData [FragmentType], SessionId, ClosureId, PolyMap))),
     localCont     :: Maybe TranShip
-  } 
+  }
 
 instance Show LocalClosure where show lc= keyResource lc
-
--- instance Read LocalClosure where 
---   readsPrec _ s= 
---     let (key,rest): _ = readsPrec 0 s
---     in [(lazy $ getResource key `onNothing` error ("Read LocalClosure error in "<> s),rest)]
-
 
 -- | The 'Log' data type represents the current log data, which includes information about whether recovery is enabled, the partial log builder, and the hash closure.
 data Log  = Log{ recover :: Bool , partLog :: Builder, restLog :: [FragmentType],  hashClosure :: Int} deriving (Show)
@@ -259,6 +240,8 @@ data Log  = Log{ recover :: Bool , partLog :: Builder, restLog :: [FragmentType]
 
 type ClosureKey = String
 
+-- | A single element of the execution log.
+-- 'Fragment' is a serialised value; 'Collect' is a parallel branch set; 'Jump' is a cross-session link.
 data FragmentType= Fragment{unFragment :: Builder} | Collect [Builder] | Jump ClosureKey deriving (Read,Show)
 
 instance Loggable FragmentType
@@ -270,8 +253,10 @@ getLog= getData `onNothing` return emptyLog
 emptyLog= Log False  mempty []  0
 
 
+-- | Build the TCache key for a 'LocalClosure': @\<closureId\>-\<sessionId\>@.
 kLocalClos (SessionId idSess) (ClosureId clos) = BC.unpack clos <> "-" <> BC.unpack idSess
 
+-- | Extract the 'SessionId' and 'ClosureId' encoded in a 'LocalClosure' DBRef key.
 getSessClosure :: DBRef LocalClosure -> (SessionId, ClosureId)
 getSessClosure dbref= let (c,s)= span (/= '-') $ keyObjDBRef dbref
                       in  (SessionId $ BC.pack $ tail s, ClosureId $ BC.pack  c)
@@ -315,6 +300,8 @@ instance Default [Service] where
 instance Default TE.Text where
   def=mempty
 
+-- | Wire message between nodes: carries source and destination closure\/session IDs
+-- plus the log fragments that form the continuation payload.
 data NodeMSG = ClosureData ClosureId SessionId ClosureId SessionId [FragmentType] deriving (Read, Show)
 
 instance Loggable NodeMSG where
@@ -351,6 +338,7 @@ instance Loggable NodeMSG where
 type Closure = DBRef LocalClosure -- Closure SessionId ClosureId [Int] deriving (Read, Show, Typeable)
 
 
+-- | Thrown when a connection to a remote node fails.
 data ConnectionError = ConnectionError String Node deriving (Read)
 
 instance Show ConnectionError where
@@ -358,19 +346,24 @@ instance Show ConnectionError where
 
 instance Exception ConnectionError
 
+-- | HTTP request method used in 'HTTPReq'.
 data HTTPMethod = GET | POST deriving (Read, Show, Typeable, Eq,Generic)
 
 instance Loggable HTTPMethod
 
 instance ToJSON HTTPMethod
 
+-- | Map from endpoint name to its 'HTTPReq' descriptor; sent to the browser so it
+-- can discover and invoke available endpoints.
 newtype Endpoints= Endpoints (M.Map BL.ByteString HTTPReq) deriving Show
 
+-- | Describes a single HTTP endpoint: method, URL (possibly containing @\$type@
+-- placeholders), extra headers, and a default JSON body for POST requests.
 data HTTPReq = HTTPReq
   { reqtype :: HTTPMethod,
     requrl :: BL.ByteString,
     reqheaders :: BL.ByteString,
-    reqbody :: Value -- BL.ByteString
+    reqbody :: Value
   }
   deriving (Read, Show, Typeable, Generic)
 
@@ -390,13 +383,8 @@ type RemoteClosure = (Node, ClosureId)
 newtype JobGroup = JobGroup (M.Map BC.ByteString RemoteClosure) deriving (Typeable)
 
 
+-- | An endpoint registered via 'publish': its name, display message, and 'HTTPReq' descriptor.
 data InputData = InputData {idInput :: String, message :: BL.ByteString, hTTPReq :: HTTPReq} deriving (Show, Read, Typeable)
--- instance Loggable InputData
-
-{-# NOINLINE firstEndpointName #-}
-firstEndpointName :: IORef String
-firstEndpointName = unsafePerformIO $ newIORef ""
-
 
 newtype Cookies= Cookies  [(BL.ByteString,BL.ByteString)]
 
@@ -418,10 +406,12 @@ setCookie name valueandparams= do
   getCookies= getState <|> return (Cookies [])
 
 
+-- | Read a named cookie from the current HTTP request headers.
+-- Returns 'Nothing' if the cookie is absent or the header list is empty.
 getCookie :: BL.ByteString -> TransIO (Maybe BS.ByteString)
 getCookie name= do
   HTTPHeaders _ headers :: HTTPHeaders <- getState <|>  return (HTTPHeaders undefined [])
-  ttr ("getCookie HTTP HEADERS",headers)
+  tr ("getCookie HTTP HEADERS",headers)
   let receivedCookie= lookup "Cookie" headers
 
   liftIO $ print ("cookie", receivedCookie)
