@@ -336,18 +336,22 @@ rpublished= lazy $ newIORef (M.empty :: M.Map String [InputData])
 -- The first parameter is the key where many endpoints may be published. The second parameter is the endpoint (`minput`) itself
 publish k i= publishn [k] i
 
+-- | Like 'publish' but registers the endpoint under multiple keys simultaneously.
 publishn ::  [String] -> Cloud a -> Cloud a
 publishn keys inp= Cloud $ sandboxData (ofType :: Publishing) $ do
   setState $ Publishing keys
   unCloud inp
 
 
+-- | Send all endpoints registered under @key@ via 'publish' to the connected browser.
+-- Call this at the start of a session to surface pending interactions to the user.
 published ::  String -> TransIO ()
 published k=  do
     inputdatas <- ( liftIO (readIORef rpublished) >>= return . M.lookup k) `onNothing` return []
     ttr ("PUBLISHED", inputdatas)
     foldr ((<>) . (\(InputData id msg url ) ->  sendOption msg url)) mempty inputdatas
 
+-- | Retrieve the current 'Endpoints' map from recoverable state, or an empty map.
 getEndpoints= getRState <|> return (Endpoints M.empty)
 
 -- | show the URL that may be called to access that functionality within a program 
@@ -409,6 +413,7 @@ optionEndpoints = do
                       (if reqtype req== GET then mempty else ("-H 'content-type: application/json' -XPOST -d " <>
                         "\"" <> encode (reqbody req)) <> "\" ")) <> requrl req)
 
+-- | Flush any pending @Set-Cookie@ headers accumulated via 'setCookie' to the connection.
 sendCookies :: Connection -> TransIO ()
 sendCookies conn= do
       cookies <- getCookiesStr
@@ -449,6 +454,8 @@ intToPtr i = castPtrToStablePtr (intPtrToPtr (fromIntegral i))
 timeoutOk :: UTCTime -> UTCTime -> Bool
 timeoutOk now created = diffUTCTime now created < 3600  -- 1h timeout
 
+-- | Store the current computation state in memory keyed by the browser session ID.
+-- Used by 'sendOption' so that clicking a 'published' link restores the correct context.
 setSessionData ::  PolyMap -> TransIO ()
 setSessionData val = do
   SessionId sessionId <- (getState >>= return . fst . getSessClosure . prevDBRef) <|> return  sessionId0
@@ -467,6 +474,8 @@ setSessionData val = do
       return $ M.insert sessionId (Entry sp now)  v'
 
 
+-- | Retrieve and consume the stored state for the current session (see 'setSessionData').
+-- Returns 'Nothing' if no cross-session state exists or it has expired (1-hour timeout).
 getSessionData ::  TransIO (Maybe PolyMap)
 getSessionData = do
   now <- liftIO $ getCurrentTime
@@ -491,6 +500,8 @@ getSessionData = do
 --------------------------------------------------------
 
 
+-- | Send a single discoverable endpoint option to the browser.
+-- Saves the current computation state so it is restored when the link is clicked.
 sendOption :: BS.ByteString -> HTTPReq -> TransIO ()
 sendOption msg req = do
   -- to make computation state to pass across jumps after the option is clicked
@@ -545,7 +556,8 @@ output = sendFragment . encode
 moutput :: ToJSON a => a -> Cloud ()
 moutput = local . output
 
---  | Send a JSON fragment
+-- | Send a raw JSON fragment over the current chunked HTTP connection.
+-- Resolves the live browser connection via 'ensureWebConn' before sending.
 sendFragment :: BS.ByteString -> TransIO ()
 sendFragment tosend = do
   conn <- getState
@@ -557,6 +569,9 @@ sendFragment tosend = do
 
 
 
+-- | Convert a Haskell type into an 'HTTPReq' description for 'minput'.
+-- GET types append a @\/$type@ path segment; POST types ('POSTData') set the request body.
+-- The default implementation uses the lowercase type name as the URL variable.
 class  Typeable a => ToHTTPReq a where
   toHTTPReq :: a -> TransIO HTTPReq
   toHTTPReq x= do
@@ -705,6 +720,9 @@ instance  {-# OVERLAPPING #-} (Default a, ToJSON a, Typeable a) => ToHTTPReq (PO
 
 
 
+-- | Execute a raw HTTP request to @node@ using the given path/query string.
+-- Handles connection reuse, TLS detection, and chunked response parsing.
+-- The result type must be 'Loggable' so it can be checkpointed via 'logged'.
 rawHTTP :: (Typeable a, Loggable a) => Node -> String -> TransIO a
 rawHTTP node restmsg =res
  where
