@@ -1,5 +1,15 @@
 {-#LANGUAGE FlexibleContexts, ExistentialQuantification, ScopedTypeVariables, 
 OverloadedStrings, TypeSynonymInstances, FlexibleInstances, MonoLocalBinds #-}
+-- | Incremental byte-string parser for the Transient log format.
+--
+-- Parsing operates on a 'ParseContext' stored in the 'TranShip' state.
+-- The context holds a buffer ('BS.ByteString') and an optional stream of further
+-- chunks ('StreamData').  Primitive parsers consume from the buffer; when the
+-- buffer is empty they pull the next chunk from the stream transparently.
+--
+-- Typical use: set the input with 'setParseString' or 'setParseStream', then
+-- compose primitive parsers ('int', 'string', 'tChar', …) inside a 'TransIO'
+-- action.
 module Transient.Parse(
 -- * Setting the stream
 setParseStream, setParseString, withParseString, withParseStream,
@@ -34,9 +44,7 @@ import Control.Concurrent
 import Data.Maybe
 import Data.Typeable
 
--- {-#INLINE newDone#-}
--- newDone= unsafePerformIO $ newIORef False
--- | set a stream of strings to be parsed
+-- | Set a stream of 'StreamData' chunks as the parse input.
 
 setParseStream :: (TransMonad m,MonadIO m) =>  TransIO (StreamData BS.ByteString) -> m ()
 setParseStream iox=  do
@@ -50,7 +58,7 @@ setParseString x =  do
    done <- liftIO $ newIORef False
    modify $ \s -> s{execMode=Serial,parseContext= ParseContext (return SDone) x done} -- newDone} --  setState $ ParseContext (return SDone) x 
 
--- Set the ByteString environment for the parser parameter. At the end, it restores the original parse context.
+-- | Run a parser with a fixed 'BS.ByteString' input, restoring the previous parse context on exit.
 withParseString ::  BS.ByteString -> TransIO a -> TransIO a
 withParseString x parse= do
      p <- gets parseContext
@@ -59,6 +67,7 @@ withParseString x parse= do
 
 
 
+-- | Run a parser driven by a 'StreamData' stream, restoring the previous parse context on exit.
 withParseStream stream parse= do
      p <- gets parseContext -- getState <|> return(ParseContext (return SDone) mempty)
      setParseStream stream
@@ -66,12 +75,7 @@ withParseStream stream parse= do
      modify $ \s -> s{parseContext= p} --setState (ParseContext c (str :: BS.ByteString))
      return r
 
--- | The parse context contains either the string to be parsed or a computation that gives an stream of
--- strings or both. First, the string is parsed. If it is empty, the stream is pulled for more.
--- data ParseContext str = IsString str => ParseContext (IO  (StreamData str)) str deriving Typeable
-
-
--- | succeed if read the string given as parameter
+-- | Succeed if the next bytes match the given string exactly.
 string :: BS.ByteString -> TransIO BS.ByteString
 string s= withGetParseString $ \str -> do
     let len= BS.length s
@@ -94,6 +98,7 @@ tDropUntilToken token= withGetParseString $ \str ->
 
 
 
+-- | Accumulate input up to (but not including) @token@; the token is consumed and discarded.
 tTakeUntilToken :: BS.ByteString -> TransIO BS.ByteString
 tTakeUntilToken token= withGetParseString $ \str -> takeit mempty str
   where
@@ -134,19 +139,6 @@ hex = withGetParseString $ \s ->  parsehex (-1) s
               (-1,-1) -> empty
               (v, -1) -> return (v,s)
               (_, x) -> parsehex x t
-{-
-integer= do
-    s <- tTakeWhile isNumber
-    if BS.null  s  then empty else return $ stoi 0 s
-  :: TransIO Integer
-
-   where
-   stoi :: Integer -> BS.ByteString -> Integer
-   stoi x s| BS.null s = x
-           | otherwise=  stoi (x *10 + fromIntegral(ord (BS.head s) - ord '0')) (BS.tail s)
--}
-
-
 -- | read an Int
 int :: TransIO Int
 int= withGetParseString $ \str ->
@@ -155,16 +147,6 @@ int= withGetParseString $ \str ->
                               else  maybe empty return i
           --  maybe empty return (BS.readInt str)
 
-{-
-int= do 
-    s <- tTakeWhile isNumber
-    if BS.null s then empty else return $ stoi 0 s
-
-    where
-    stoi :: Int -> BS.ByteString -> Int
-    stoi x s| BS.null s = x
-            | otherwise=  stoi (x *10 + (ord (BS.head s) - ord '0')) (BS.tail s)
--}
 -- | read a double in floating point/scientific notation
 double :: TransIO Double
 double= do
@@ -203,21 +185,31 @@ chainManyTill op p end= scan
 
 
 
+-- | Run @p@ surrounded by the @open@ and @close@ parsers, returning @p@'s result.
 between open close p = do { open; x <- p; close; return x }
 
+-- | Alias for 'string'.
 symbol = string
 
-parens = between (symbol "(") (symbol ")")  -- !> "parens "
-braces = between (symbol "{") (symbol "}")  -- !> "braces "
-angles p        = between (symbol "<") (symbol ">") p  -- !> "angles "
-brackets p      = between (symbol "[") (symbol "]") p  -- !> "brackets "
+-- | Parse a value enclosed in @(@ … @)@.
+parens = between (symbol "(") (symbol ")")
+-- | Parse a value enclosed in @{@ … @}@.
+braces = between (symbol "{") (symbol "}")
+-- | Parse a value enclosed in @<@ … @>@.
+angles p        = between (symbol "<") (symbol ">") p
+-- | Parse a value enclosed in @[@ … @]@.
+brackets p      = between (symbol "[") (symbol "]") p
 
-semi            = symbol ";"  -- !> "semi"
-comma           = symbol ","  -- !> "comma"
-dot             = symbol "."  -- !> "dot"
-colon           = symbol ":"  -- !> "colon"
+-- | Consume a semicolon.
+semi            = symbol ";"
+-- | Consume a comma.
+comma           = symbol ","
+-- | Consume a dot.
+dot             = symbol "."
+-- | Consume a colon.
+colon           = symbol ":"
 
-
+-- | Zero or more @p@ values separated by @sep@.
 sepBy
   :: TransIO a
      -> TransIO x -> TransIO [a]
@@ -241,25 +233,22 @@ chainSepBy1 chain p sep= do
 
                         -- !> "chainSepBy "
 
-chainMany chain v=   {- (do tr "chainMany"; isDone >>= guard; return mempty) <|> -} (chain <$> v <*> chainMany chain v) <|> return mempty
--- chainMany chain v=  do
---                 --  t <- isDone
---                 --  tr ("isdone",t)
---                 --  if t then return mempty else 
---                   (do x <- v; xs <- chainMany chain v; return $ x `chain` xs) <|> 
---                    return mempty
+-- | Greedily apply @chain@ to accumulate zero or more occurrences of @v@.
+chainMany chain v= (chain <$> v <*> chainMany chain v) <|> return mempty
 
--- chainMany chain v=  (liftA2 chain v  (chainMany chain v)) <|> return mempty
-
+-- | Zero or more @p@ values separated by commas.
 commaSep p      = sepBy p comma
+-- | Zero or more @p@ values separated by semicolons.
 semiSep p       = sepBy p semi
 
 commaSep1 p     = sepBy1 p comma
 semiSep1 p      = sepBy1 p semi
 
+-- | Consume leading whitespace.
 dropSpaces= withGetParseString $ \str ->  return ( (),BS.dropWhile isSpace str)
 
-dropTillEndOfLine= withGetParseString $ \str -> return ((),BS.dropWhile ( /= '\n') str) -- !> "dropTillEndOfLine"
+-- | Consume all bytes up to (but not including) the next newline.
+dropTillEndOfLine= withGetParseString $ \str -> return ((),BS.dropWhile ( /= '\n') str)
 
 
 -- | drop spaces and return a String delimited by the next space
@@ -290,6 +279,7 @@ tTakeWhile' cond= withGetParseString $ \s -> do
    h `seq` return (h, if BS.null t then t else BS.tail t)
 
 
+-- | Wrap the first component of a split result in 'Just'.
 just1 f x= let (h,t)= f x in (Just h,t)
 
 -- | take n characters 
@@ -304,77 +294,6 @@ anyChar= withGetParseString $ \s -> if BS.null s then empty else  return (BS.hea
 -- | verify that the next character is the one expected
 tChar c= withGetParseString $ \s -> if BS.null s || BS.head s /= c then empty else return (BS.head s,BS.tail s)  -- !> ("tChar", BS.head s) 
    --  anyChar >>= \x -> if x == c then return c else empty !> ("tChar",x)
-
-{-
-withGetParseString2 :: (BS.ByteString -> TransIO (a,BS.ByteString)) -> TransIO a
-withGetParseString2 parser=  do
-
-  ParseContext readMore s done <- gets parseContext 
-
-  let str =  s <>  iter 
-      iter =  
-        let mr =  lazy  !> "READMORE"
-        in case mr of
-          SMore r ->  r <> iter  !> "SMORE"
-          SLast r -> writeIORef done True `seq` r
-          SDone   -> writeIORef done True `seq` mempty
-
-      lazy  = unsafePerformIO $ do
-        r <- readIORef done
-        if r then return SDone else do
-          (x,_) <- runTransient readMore 
-          tr x
-          return $ fromJust x
-
-  (v,str') <- parser str
-  modify $ \s -> s{parseContext= ParseContext readMore str' done}
-  return  v
-  where 
-  
-
--- >>> :set -XOverloadedStrings
--- >>> :m + Transient.Internals Transient.Parse Control.Monad.IO.Class Data.ByteString.Lazy 
--- >>> keep' $ do setParseStream (return  $ SMore "hello") ; r <- withGetParseString2 $ \s-> return(Data.ByteString.Lazy.take 13 s,Data.ByteString.Lazy.drop 13 s); liftIO $ print r
--- >>> keep' $ do setParseString "time-1.9.3/lib/Data/Time/Clock/Internal/SystemTime.hs:1:1: error:" ; r <- (,,) <$> tTakeWhile' (/=':') <*> int <* tChar ':' <*> int; liftIO $ print r
--- "hellohellohel"
--- Nothing
--- ("time-1.9.3/lib/Data/Time/Clock/Internal/SystemTime.hs",1,1)
--- Nothing
---
-
--}
-
-
---
-  --
-
-{-
-withGetParseString3 :: (BS.ByteString -> TransIO (a,BS.ByteString)) -> TransIO a
-withGetParseString3 parser=  do
-
-  ParseContext readMore s done <- gets parseContext 
-  
-  modify $ \st -> st{execMode= Serial}
-  str <-  return s <> iter readMore
-  (v,str') <- parser str
-  modify $ \s -> s{parseContext= ParseContext readMore str' done}
-  return  v
-  where
-  iter readMore= do
-    -- modify $ \s -> s{execMode= Remote}
-    mr <-   readMore !> "READMORE"
-    case mr of
-       SMore r ->  do liftIO $ print "SMORE";  return r <> iter readMore  
-       SLast r ->  return r
-       SDone   ->  return mempty
-       
-  
-  lazy mx= unsafePerformIO  $ do
-      (x,_) <- runTransient mx 
-      return $ fromJust x
--}
-
-
 
 -- | bring the lazy byteString state to a parser which return the rest of the stream together with the result
 -- and actualize the byteString state with it
@@ -416,18 +335,6 @@ withGetParseString parser=  transient $ do
                         liftIO $ writeIORef done False
                         modify $ \s-> s{parseContext= ParseContext readMore str' done}
                         return $ Just v
-
-
-
--- >>> keep' $ do x <- return "hello" <> lazy (liftIO $ print "world" >> return "world"); liftIO $ print $ take 3 x
-
-
--- >>> :set -XOverloadedStrings
--- >>> :m + Transient.Internals Transient.Parse Control.Monad.IO.Class
--- >>> keep' $ do x <- withParseStream (return $ SMore "hello world") $ tTake 2 ; liftIO $ print x
--- *** Exception: ghc: signal: 15
---
-
 
 
 
@@ -477,6 +384,7 @@ isDone=   do
     return $ d || BS.null str
 
 
+-- | Consume and discard bytes until the parse stream is marked as done.
 dropUntilDone= (withGetParseString $ \s -> do
     -- tr "dropUntilDone"
     ParseContext _ _ done <- gets parseContext
@@ -598,24 +506,3 @@ makeParseContextFromStream rec = liftIO $ do
   return $ ParseContext (return SDone) str done
 
 
-  -- let receive = liftIO $ do
-  --       -- tr "receive"
-  --       d <- readIORef done
-  --       -- tr ("receive done", d)
-  --       if d
-  --         then return SDone
-  --         else
-  --           ( do
-  --               r <- rec
-  --               -- tr ("receive, r=", r)
-  --               if BS.null r
-  --                 then liftIO $ do writeIORef done True; return SDone
-  --                 else return $ SMore r
-  --           )
-  --             `catch` \(SomeException e) -> do
-  --               liftIO $ writeIORef done True
-  --               putStr "Parse: "
-  --               print e
-  --               return SDone
-
-  -- return $ ParseContext receive mempty done
