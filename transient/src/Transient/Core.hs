@@ -92,12 +92,15 @@ ofType = error ": proxy data being evaluated"  -- used as   ofType :: TypeNeeded
 {-# NOINLINE idGen #-}
 idGen= unsafePerformIO $ newIORef (0 :: Int)
 
+-- | Generate a fresh globally unique integer identifier.
 genNewId :: MonadIO m => m Int
 genNewId= liftIO $ atomicModifyIORef idGen $ \n -> (n+1,n)
 
+-- | Add a listener id to a 'LifeCycle' node.
 listener :: IdCallback -> LifeCycle -> LifeCycle
 listener id (LF st ls)= LF st $ id:ls
 
+-- | Remove a listener id from a 'LifeCycle' node, setting the final status.
 delistener :: IdCallback -> LifeCycle -> Status -> LifeCycle
 delistener id (LF st ls) finst= LF finst $ delete id ls
 
@@ -256,14 +259,17 @@ labelState l =  do
   st <- get
   liftIO $ atomicModifyIORef (labelth st) $ \(status,prev) -> ((status,  prev <> BS.pack "," <> l), ())
 
+-- | Apply a function to the current thread's @(LifeCycle, label)@ pair.
 changeStatus :: (MonadState TranShip m, MonadIO m) => ((LifeCycle, BS.ByteString) -> (LifeCycle, BS.ByteString)) -> m ()
 changeStatus  f = do
   st <- get
   changeStatusCont st f
 
+-- | Apply a function to the @(LifeCycle, label)@ pair of an arbitrary state.
 changeStatusCont :: MonadIO m => TranShip -> ((LifeCycle, BS.ByteString) -> (LifeCycle, BS.ByteString)) -> m ()
 changeStatusCont st f = changeStatusContr st $ \pair -> (f pair,())
 
+-- | Like 'changeStatusCont' but returns a value produced by the update function.
 changeStatusContr :: (Show a, Show LifeCycle) => MonadIO m => TranShip -> ((LifeCycle, BS.ByteString) -> ((LifeCycle, BS.ByteString), a)) -> m a
 changeStatusContr st f =
    liftIO $ atomicModifyIORef (labelth st) $ \pair ->  let pair'= f pair in {-tracec (threadId st,"change from",pair, "to",pair')-}  pair'
@@ -294,6 +300,7 @@ removeState thid= do
 -- {-# NOINLINE printBlock #-}
 -- printBlock = unsafePerformIO $ newMVar ()
 
+-- | Print the full thread tree to the trace log (no-op unless compiled with @-DDEBUG@).
 traceAllThreads :: MonadIO m => m()
 #ifdef DEBUG
 traceAllThreads= liftIO $ readIORef rtopState >>= showThreads
@@ -301,6 +308,7 @@ traceAllThreads= liftIO $ readIORef rtopState >>= showThreads
 traceAllThreads= return()
 #endif
 
+-- | Print the full thread tree unconditionally (ignores @DEBUG@ flag).
 showAllThreads :: MonadIO m => m()
 showAllThreads= liftIO $ readIORef rtopState >>= showThreads
 
@@ -680,11 +688,13 @@ getIndexData n= do
   tr ("len indexdata", M.size clsmap)
   return $ M.lookup n clsmap
 
+-- | Look up a value at key @k@ in the mutable indexed map stored via 'setIndexRData'.
 getIndexRData :: (TransMonad m, MonadIO m, Typeable k, Typeable a, Ord k) => k -> m (Maybe a)
 getIndexRData n= do
-  map <- getRData `onNothing`  return M.empty 
+  map <- getRData `onNothing`  return M.empty
   return $ M.lookup n map
 
+-- | Insert or overwrite the value at key @k@ in the mutable indexed map for this type pair.
 setIndexRData :: (TransMonad m, MonadIO m, Typeable k, Typeable a, Ord k) => k -> a -> m ()
 setIndexRData n val=  do 
   map <- getRData `onNothing` do let m= M.empty `asTypeOf` mapka n val
@@ -697,6 +707,7 @@ setIndexRData n val=  do
   
 
 
+-- | Apply @f@ to the value at key @i@, inserting @n@ as default if the key is absent.
 withIndexRData :: (TransMonad m,MonadIO m,
       Typeable k,
       Typeable a, Ord k) =>
@@ -895,6 +906,7 @@ genId = do
   put st { mfSequence = n + 1 }
   return n
 
+-- | Return the current sequence counter without incrementing it (i.e. the id that was last generated).
 getPrevId :: TransMonad m => m Int
 getPrevId = gets mfSequence
 
@@ -1074,9 +1086,10 @@ abduce= transient $  do
 
 
 
--- are managed with the thread control primitives of transient. When proc finishes, the thread finishes
--- fork DOES NOT COMPOSE WELL algebraically
---
+-- | Run @proc@ in a detached thread and immediately return @()@ in the current thread.
+-- The spawned thread is registered in the thread tree and managed by the normal thread-control
+-- primitives. When @proc@ finishes the thread finishes.
+-- __Note__: @fork@ does not compose well algebraically; prefer 'abduce' for composable branching.
 fork :: TransIO () -> TransIO ()
 fork proc= (abduce >> proc >> empty) <|> return ()
 
@@ -1176,8 +1189,8 @@ setDead st= liftIO $ changeStatusCont st $ \(_,l) -> (LF Dead [],l)
   -- void $ atomicModifyIORef label $ \(LF _ ls,lab) -> (LF Dead ls,lab)
   --       -- ((case status of Alive -> Dead ; Parent -> DeadParent; _ -> status, lab),l)
 
+-- | Mark a thread as dead in the lifecycle label while preserving its listener list.
 setThreadDead :: MonadIO m => TranShip -> m ()
--- notify that the thread is dead, allthoug it may have listeners
 setThreadDead st= liftIO $ changeStatusCont st $ \(LF _ ls,l) -> (LF Dead ls,l)
 --- | is the thread dead?
 isDead st= lazy $ do
@@ -1199,8 +1212,9 @@ hasParent st= isJust $ lazy $ do
   r <- readIORef $ parent st
   assert (case r of Nothing -> False; _ -> True) return r-- $ tr (threadId st, "NO PARENT")
 
-noChilds st= null $ lazy $ readMVarChildren st
+-- | Return 'True' if the given state has no child threads registered.
 noChilds :: TranShip -> Bool
+noChilds st= null $ lazy $ readMVarChildren st
 
 hanged= BS.pack "hanged"
 -- isDeadOrHanged st= liftIO $ do
@@ -1259,6 +1273,7 @@ hanged= BS.pack "hanged"
 --           | otherwise= drop (ev:processed) th evts
 
 
+-- | Attach @child@ as a child of @parentProc@, returning the previous child list.
 hangState :: TranShip -> TranShip -> IO [TranShip]
 hangState parentProc child =  do
   let rchs= children parentProc
@@ -1292,23 +1307,26 @@ type IdCallback= String
 type Message= String
 data Callback= forall a.Callb a
 
+-- | Extract the raw callback function from a 'Callback', unsafely coercing to the expected type.
 getCb ::  Callback -> a -> IO b
-getCb callback= 
+getCb callback=
    case callback  of
      Callb cb -> unsafeCoerce cb
 
 type CallbackData= (IdCallback, TypeCallback, Message, TranShip, Callback)
 
 {-# NOINLINE rcallbacks#-}
+-- | Global registry of active callbacks (react/reactId handlers).
 rcallbacks :: MVar [CallbackData]
 rcallbacks = unsafePerformIO $ newMVar []
 consoleCallback (_,ConsoleCallback,_,_,_)= True
 consoleCallback _ = False
 
+-- | Return only the console-type callbacks from the global registry.
 consoleCallbacks :: MonadIO m => m[CallbackData]
 consoleCallbacks= liftIO $ filter consoleCallback <$> readMVar rcallbacks
 
-
+-- | Register a callback in the global registry, replacing any previous entry with the same id and scheduling cleanup of the old continuation.
 addInternalCallbackData :: IdCallback ->TypeCallback -> Message -> TranShip -> Callback -> IO ()
 addInternalCallbackData name t message cont cb = do 
   cbs <- takeMVar rcallbacks
@@ -1461,6 +1479,7 @@ reactId keepIt id t msg setHandler iob= transient $ do
 data HandlerReturn= forall a.HandlerReturn a deriving Typeable
 
 
+-- | Run the continuation stored in @cont@ with value @dat@, then call 'cleanupThreads' when it finishes.
 runContCleanup :: TranShip -> p -> IO ()
 runContCleanup cont dat= mask $ \unmask -> do
   th <- myThreadId
@@ -1521,14 +1540,17 @@ for xs= transient $ do
   return Nothing
  
 {-# NOINLINE cleanblock #-}
+-- | Mutex used to serialise thread cleanup sections (currently unused but kept for future use).
 cleanblock :: MVar ()
 cleanblock= unsafePerformIO $ newMVar ()
 
+-- | Read the list of child 'TranShip' states without removing them.
 readMVarChildren :: TranShip -> IO [TranShip]
 readMVarChildren st= do
   tr ("readMVar children",threadId st)
   readMVar $ children st
-  
+
+-- | Mark a state as dead, trigger 'Finish' backtracking if it has no remaining children, and call 'freelogic' to detach it from the tree.
 cleanupThreads :: Show b => b -> TranShip -> IO ()
 cleanupThreads n c= liftIO $ do -- exclusive cleanblock $ do
 
@@ -1574,6 +1596,7 @@ delListener id= liftIO $ do
   -- Glory to God
   mapM_ (\(id,_,_,c,_) -> cleanupThreads 6 c) prev
   
+-- | Partition @cbs@ into entries matching @name@ and the rest, demoting the matched entry's lifecycle.
 delc :: [CallbackData] -> IdCallback -> IO ([CallbackData],[CallbackData])
 delc cbs name= do
     let (prevhand,rest)= partition ((==) name . fst) cbs
@@ -2250,6 +2273,7 @@ onException' mx f= onAnyException mx $ \e -> do
 
 
 
+-- | Like 'onException'' but the handler receives a raw 'SomeException' (no type filtering).
 onAnyException :: TransIO a -> (SomeException ->TransIO a) -> TransIO a
 onAnyException mx exc=   ioexp   `onBack` exc
     where
@@ -2268,20 +2292,20 @@ onAnyException mx exc=   ioexp   `onBack` exc
       return mx
 
 
--- perform exception backtracking and recursively stablish itself as handler of exceptions
--- to be triggered in further exceptions in the IO monad
--- Alabado sea Dios
+-- | Run exception backtracking from an IO context, re-catching any further exceptions so that
+-- chained handlers are always invoked. Alabado sea Dios.
 backExceptIO ::  TranShip -> SomeException -> IO (Maybe a, TranShip)
 backExceptIO st e =   backIO st e `catch` \e' -> backExceptIO  st e'
 
--- perform general backtracking in the IO monad
+-- | Initiate general backtracking from pure IO, running 'back' inside the given state.
 backIO :: (Typeable e, Show e) => TranShip -> e -> IO (Maybe a, TranShip)
-backIO st e= runStateT ( runTrans $  back e ) st                 -- !> "EXCEPTBACK"
+backIO st e= runStateT ( runTrans $  back e ) st
 
 -- -- re execute the first argument as long as the exception is produced within the argument. 
 -- -- The second argument is executed before every re-execution
 -- -- if the second argument executes `empty` the execution is aborted.
 
+-- | Re-execute @mx@ each time it throws an exception of type @e@, calling @fixexc@ before each retry.
 whileException :: Exception e =>  TransIO b -> (e -> TransIO())  -> TransIO b
 whileException mx fixexc =  mx `catcht` \e -> do fixexc e; whileException mx fixexc
 
