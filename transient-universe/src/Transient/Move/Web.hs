@@ -359,7 +359,7 @@ published k=  local $ do
       inputdatas <- ( liftIO (readIORef rpublished) >>= return . M.lookup k) `onNothing` return []
       ttr ("PUBLISHED", inputdatas)
       foldr ((<>) . (\(InputData id msg url ) ->  sendOption msg url)) mempty inputdatas
-      empty
+    empty
 
 -- | Retrieve the current 'Endpoints' map from recoverable state, or an empty map.
 getEndpoints= getRState <|> return (Endpoints M.empty)

@@ -462,6 +462,10 @@ wormhole node (Cloud comp) =  local $  do
             (prevprevclos,idconn,r) <-
                  sandboxData (ofType :: ClosToRespond) $
                  sandboxData (ofType :: Connection)    $ do
+                  -- a new call to another node is not the response to the caller of this node: if this
+                  -- node is executing a request that has not been answered yet, its ClosToRespond must not
+                  -- be used as the destination closure of the first teleport (it is restored on exit)
+                  delState (ofType :: ClosToRespond)
                   -- newRemoteClosureEnv
 
                   ps <- gets parseContext
@@ -598,6 +602,12 @@ teleport =  do
   -- when (not app) $ 
     -- endpoint must be here even with applicative since it return the remote response of each remote app term
   onAll $ endpoint Nothing <|> guard (not $ recover log)
+  -- In the called side of a replay, the closure to respond to is the closure with the name of the endpoint just
+  -- created (the names of the endpoints are the same in all the nodes, since they depend on the position in the
+  -- program). It can not be the one of the last message processed, which may belong to an inner level.
+  when (recover log && not (calling conn)) $ onAll $ do
+    PrevClos dbr _ _ _ _ :: PrevClos <- getData `onNothing` noExState "teleport"
+    setState (ClosToRespond dbr)
   -- onAll $ stopAt 4
 
   -- let partlog= if app then [Fragment $ partLog log] else mempty
@@ -611,6 +621,9 @@ teleport =  do
     when ( (not $ recover log)) $ do
 
         -- executed in run mode only
+        -- In a called side recovered by a job, the connection of the state is not the one to the caller: it is
+        -- a Self connection. The caller is in the closure of the first teleport (see 'localCaller').
+        conn@Connection {idConn = idConn, connData = contype, synchronous = synchronous} <- calledConn conn
         ty <- liftIO $ readIORef contype
         case ty of
           -- when a node call itself, there is no need for socket communications
@@ -674,12 +687,33 @@ teleport =  do
             -- subsequent paquets sent to this remote closure will address this closure directly since it has been created
             -- updateLastClosureForConnection idConn prevClosDBRef
 
-            r <- abduce <|> do when (recover log) $ modify (\s -> s {execMode = Remote}); empty
+            -- In the called side, once the response has been sent nothing else must be executed here: the alternative
+            -- computations (for example, the second term of an applicative) belong to the caller
+            r <- abduce <|> do when (recover log || not (calling conn)) $ modify (\s -> s {execMode = Remote}); empty
             tr ("BEFORE EMPTY",r)
             empty
 
   
 
+
+-- | The connection to respond to. In a called side whose connection is a Self connection (the replay of a job
+-- after a restart, which has no connection to the caller), it is opened to the node of the caller, stored in the closure
+-- with the same key as the closure to respond to.
+calledConn :: Connection -> TransIO Connection
+calledConn c = do
+  ty <- liftIO $ readIORef (connData c)
+  mcr <- getData :: TransIO (Maybe ClosToRespond)
+  case (ty, mcr) of
+    (Just Self, Just (ClosToRespond ref)) | not (calling c) -> do
+        mclos <- liftIO $ atomically $ readDBRef ref
+        case mclos >>= localCaller of
+          Just node -> do
+            c' <- mconnect node
+            let c'' = c' {calling = False}
+            setData c''
+            return c''
+          Nothing -> return c
+    _ -> return c
 
 -- notify to the calling teleport when no remaining threads are running in the remote node
 setNotifyFinishToCallingNode :: Connection -> TransIO ()

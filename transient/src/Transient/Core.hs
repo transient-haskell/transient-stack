@@ -66,8 +66,8 @@ import           Data.Maybe
 import           Data.List
 import           Data.IORef
 import qualified Debug.Trace as Debug(trace,traceIO)
-import Data.Functor ( (<&>) )
-
+import           Data.Functor ( (<&>) )
+import           Data.Default
 
 import           Data.String
 import qualified Data.ByteString.Char8 as BS
@@ -106,10 +106,10 @@ delistener id (LF st ls) finst= LF finst $ delete id ls
 
 -- | executes both arguments and return both results. The execution depends on the threading
 -- . Unlike <|> , which only executes the second term when the first returns Nothing in the
--- original thread. `<||>` guarantees that the second argument is ever executed even
+-- original thread. `<->` guarantees that the second argument is ever executed even
 -- in single threaded programs.
-(<||>) :: TransIO a -> TransIO a -> TransIO a
-mx <||> my= transient $ do 
+(<->) :: TransIO a -> TransIO a -> TransIO a
+mx <-> my= transient $ do 
   mx <- runTrans mx
   c <- get
   liftIO $ maybe (return())(runContLoop c) mx
@@ -117,11 +117,9 @@ mx <||> my= transient $ do
   c <- get
   liftIO $ maybe (return())(runContLoop c) my
   return Nothing
-infixr 3 <||>
+infixr 3 <->
 
---             else do liftIO $ writeIORef ref True
---                     runTrans mb
---                     return $ Just x
+
 
 -- -- * Threads
 
@@ -143,7 +141,7 @@ threads n process = transient $ do
     n' <- if n==0
       then  do
         (LF _ ls,_) <- readIORef $ labelth  s
-        if null ls then return 0 else return 1
+        if null ls then return (-1) else return 1   -- -1: synchronous scope, no thread can be created (see 'abduce')
       else return n
     newMVar n'
 
@@ -604,8 +602,12 @@ getSData :: Typeable a => TransIO a
 getSData = transient getData
 
 -- | Same as `getSData`
-getState :: Typeable a => TransIO a
-getState = getSData
+tryState :: Typeable a => TransIO a
+tryState = getSData
+
+-- | return the default value if the state does not exist
+getState :: (Default a, Typeable a) => TransIO a
+getState = tryState <|> return def
 
 -- | 'setData' stores a data item in the monad state which can be retrieved
 -- later using 'getData' or 'getSData'. Stored data items are keyed by their
@@ -684,8 +686,8 @@ getIndexData :: (MonadState TranShip m, Typeable k, Typeable a, Ord k) =>
      k -> m (Maybe a)
 getIndexData n= do
   clsmap <- getData `onNothing` return M.empty
-  tr ("getIndexData",typeOf clsmap)
-  tr ("len indexdata", M.size clsmap)
+  ttr ("getIndexData",typeOf clsmap)
+  ttr ("len indexdata", M.size clsmap)
   return $ M.lookup n clsmap
 
 -- | Look up a value at key @k@ in the mutable indexed map stored via 'setIndexRData'.
@@ -805,7 +807,20 @@ delRState x = do
   typ ::  a -> Maybe (Ref a)
   typ= error "type level"
 
-
+modifyRState :: (MonadState TranShip m, MonadIO m, Typeable a) => (a ->a)  -> a -> m ()
+modifyRState f v= do
+  mref <- getData  
+  case mref `asTypeOf`  typ v of
+    Nothing -> return()
+    Just (Ref ref) -> do
+      mr <- liftIO (readIORef ref)
+      case mr of 
+        Nothing -> do liftIO $ writeIORef ref  $ Just v
+        Just x ->  liftIO $ writeIORef ref  $ Just  $ f x
+  where
+  typ ::  a -> Maybe (Ref a)
+  typ= error "type level"
+  
 -- that may have been caused by the action. This allows for aternative actions to run with the original state
 try :: TransIO a -> TransIO a
 try mx = do
@@ -833,7 +848,7 @@ sandbox mx = do
       let mf = mfData st
           def= backStateOf $ SomeException $ ErrorCall "err"
 
-      bs <- getState <|> return def
+      bs <- tryState <|> return def
       let  mf'= M.insert (typeOf def) (unsafeCoerce bs) mf
 
       modify $ \s ->s { mfData = mf', parseContext= parseContext st}
@@ -1058,7 +1073,8 @@ sample action interval = do
             if v /= v' then writeIORef prev v >> return v else loop'
 
 
--- | Runs the rest of the computation in a new thread. it looks like a 'empty' computation to the current thread
+-- | Runs the rest of the computation in a new thread. it looks like a 'empty' computation to the current thread,
+-- so alternative and applicative computations see them like empty. This allos for the multithreaded execution of expressions created with these operations
 abduce :: TransIO ()
 abduce= transient $  do
   c <- get
@@ -1067,22 +1083,35 @@ abduce= transient $  do
     let free= freeTh c
     if free then  void $ forkIO $ void $ runContIO () c{parent= lazy $ newIORef Nothing}
     else do
-      c' <- hangFrom c
-      sem <- waitFork c
-      void $ forkIO $ runContCleanup c' () `finally` when(isJust sem) (signalQSemB $ fromJust sem)
-  
+      sync <- scopeIsSynchronous c
+      if sync
+        then runContLoop c ()   -- 'threads 0': the task starts synchronously in the current thread, like 'branch'
+        else do
+          c' <- hangFrom c
+          sem <- waitFork c
+          void $ forkIO $ runContCleanup c' () `finally` when(isJust sem) (signalQSemB $ fromJust sem)
+
   return Nothing
   where
 
-  
-  -- dofork :: TranShip -> StateIO Bool
-  -- honor the limit of threads
+  -- the scope was created by `threads 0`: it has a negative semaphore, nobody would ever release a thread
+  scopeIsSynchronous c = case maxThread c of
+      Just sem -> (< 0) <$> readMVar sem
+      Nothing  -> return False
+
   waitFork c = liftIO $ do
         case maxThread c  of
           Nothing   -> return Nothing
           Just sem  ->waitQSemB sem >> return (Just sem)
 
-
+ 
+-- | branch semantically is like `abduce` but it does not create a new thread. it's like threads 0 abduce.
+-- it executes the continuation and then executes any alternative expression
+branch :: TransIO ()
+branch = transient $ do
+  c <- get
+  liftIO $ runContLoop c ()
+  return Nothing
 
 
 
@@ -1093,6 +1122,8 @@ abduce= transient $  do
 fork :: TransIO () -> TransIO ()
 fork proc= (abduce >> proc >> empty) <|> return ()
 
+
+  
 
 -- | Run an IO action one or more times to generate a stream of tasks. The IO
 -- action returns a 'StreamData'. When it returns an 'SMore' or 'SLast' a new
@@ -1538,7 +1569,8 @@ for xs= transient $ do
   c <- get
   liftIO $ mapM (runContLoop c) xs
   return Nothing
- 
+
+
 {-# NOINLINE cleanblock #-}
 -- | Mutex used to serialise thread cleanup sections (currently unused but kept for future use).
 cleanblock :: MVar ()
@@ -1664,6 +1696,13 @@ collectSignal saveOnSignal  number time proc'= localBack (Finish "") $ do
     -- rstates <- liftIO $ newIORef M.empty
     changeStatusCont cont  $ \(status, lab) -> (listener id status,lab)
 
+    -- RState handle that `endCollect` uses to terminate this collect on demand.
+    -- newRState shares a single Ref (by type) across the whole collect subtree, so
+    -- the collected action can flip it; nested collects shadow it, so `endCollect`
+    -- always ends the innermost one. We keep the underlying IORef to read it in
+    -- `check` without threading state through the backtrack handler. Glory to God
+    forceEnd <- newRState (EndCollect False)
+
     let proc= do
             anyThreads abduce
             -- labelState $ BS.pack  id
@@ -1707,7 +1746,10 @@ collectSignal saveOnSignal  number time proc'= localBack (Finish "") $ do
 
           tr ("collect check", threadId st,threadId cont)
 
-          hasnot <- hasNoAliveThreads st cont id 
+          -- `endCollect` sets this flag to force termination regardless of remaining
+          -- listeners/threads (e.g. event listeners that would never die by themselves).
+          forced <- liftIO $ (\m -> case m of Just (EndCollect b) -> b; _ -> False) <$> readIORef forceEnd
+          hasnot <- if forced then return True else hasNoAliveThreads st cont id
           tr ("in collect, no more threads left",threadId cont,hasnot)
           if not(hasnot || number > 0 && length rs >= number) then backtrack else do
           
@@ -1740,6 +1782,28 @@ collectSignal saveOnSignal  number time proc'= localBack (Finish "") $ do
     signal <|> timer <|> (proc `onBack` check)
 
 
+-- | Flag shared (as an RState) between a `collect`/`collect'` and its action, set by
+-- `endCollect` to force the collect to terminate.
+newtype EndCollect = EndCollect Bool deriving (Typeable, Show)
+
+-- | Terminate the innermost enclosing `collect`/`collect'` from inside its action.
+--
+-- It makes the collect return the results gathered so far, killing every thread and
+-- listener spawned within it (the cleanup runs from the collect's parent context via
+-- the normal `Finish` path, so it works even though `endCollect` is called from deep
+-- inside the collect's thread hierarchy).
+--
+-- This is the way to stop a @collect 0 0@ whose action installs event listeners
+-- (`option`, `react`, web endpoints, ...) that would otherwise keep it alive forever:
+-- those listeners are dead threads with a callback annotation, not active threads, so
+-- the collect never sees \"no alive threads\" by itself.
+endCollect :: TransIO ()
+endCollect = do
+  EndCollect _ <- getRState <|> error "endCollect: not inside a collect"
+  setRState $ EndCollect True
+  back $ Finish "endCollect"
+
+
 data Exit  = forall a. Exit TypeRep (MVar a) deriving Typeable
 
 
@@ -1747,7 +1811,7 @@ data Exit  = forall a. Exit TypeRep (MVar a) deriving Typeable
 -- application if there is no more code). The result should have the type expected. Otherwise an error will be produced at runtime.
 exit :: Typeable a => a -> TransIO ()
 exit x= do
-  ex@(Exit typeofIt rexit) <- getState <|> error " no Exit state: use keep or keep'"
+  ex@(Exit typeofIt rexit) <- tryState <|> error " no Exit state: use keep or keep'"
   when (typeOf x /= typeofIt) $ error $ " exit of type not expected. (expected, sent)= ("<> show typeofIt <> ", "<>  show (typeOf x)
   -- warn anyone interested
   putMailbox ex
@@ -1765,7 +1829,7 @@ exitLeft :: (Typeable a, Show a) => a -> TransIO ()
 exitLeft cause= do
   tr "exitLeft"
   liftIO $ putStrLn "exiting..."
-  exit@(Exit typeofIt rexit) <- getState <|> error " no Exit state: use keep or keep'"
+  exit@(Exit typeofIt rexit) <- tryState <|> error " no Exit state: use keep or keep'"
   
   -- warn anyone interested
   putMailbox exit
@@ -1843,8 +1907,7 @@ onBack1 x = return() `onBack` x
 {-# NOINLINE onBack #-}
 onBack :: (Typeable b, Show b) => TransIO a -> ( b -> TransIO a) -> TransIO a
 onBack ac bac = transient $ do
-  registerBack   $  \ reason -> do
-                        bac reason
+  registerBack  bac 
   runTrans ac
   where
   eventOf :: (b -> TransIO a) -> b
@@ -1865,8 +1928,7 @@ onBack ac bac = transient $ do
 
 
 
--- | to register  backtracking points of the type of the first parameter within the computation in the second parameter 
--- out of it, these handlers do not exist and are not triggered.
+-- | to register  backtracking points of the type of the first parameter within the computation in the second parameter. Out of it, these handlers do not exist and are not triggered.
 localBack w = sandboxData (backStateOf w)
 
 -- | 'back' for the default undo track; equivalent to @back ()@.
@@ -2344,7 +2406,7 @@ catcht mx exc= localExceptions $ onException' mx  $ \e  ->  continue >> exc e
 --          return r
 --    where
 --    sandbox  mx= do
---      exState <- getState <|> return (backStateOf (ofType :: SomeException))
+--      exState <- tryState <|> return (backStateOf (ofType :: SomeException))
 --      mx
 --        <*** setState exState
 
@@ -2354,7 +2416,7 @@ catcht mx exc= localExceptions $ onException' mx  $ \e  ->  continue >> exc e
 --
 -- > main= keep  $ do
 -- >      onException $ \(e:: SomeException) -> do
--- >                  v <- getState <|> return "hello"
+-- >                  v <- tryState <|> return "hello"
 -- >                  liftIO $ print v
 -- >      setState "world"
 -- >      throw $ ErrorCall "asdasd"
@@ -2464,7 +2526,7 @@ nameId id= show id <> " EVar"
 -- Must be invoked after executing readEVar.
 delReadEVar :: EVar a -> TransIO ()
 delReadEVar evar =  do
-       EVarId id <- getState <|> error "delReadEVar should be after a readEVar in the flow"
+       EVarId id <- tryState <|> error "delReadEVar should be after a readEVar in the flow"
        delReadEVarPoint evar id
        -- liftIO $ do
        --        rs <- readIORef ref
@@ -2489,7 +2551,7 @@ delReadEVarPoint (EVar ref) id =liftIO $ do
 writeEVar :: MonadIO m => EVar a -> a -> m ()
 writeEVar (EVar ref) x = do
        conts <- liftIO $ readIORef ref
-       ttr ("WRITE EVAR subscriptions",length conts)
+       ttr ("WRITE EVAR subscriptions",map fst conts)
        -- freThreads to detach the forked thread from the calling context tree. 
        -- it will be atached to the called context. Glory to God
       --  freeThreads $ fork $  <-- the threads should'nt be free and run in the same thread to allow synchronous execution if wanted
@@ -2626,7 +2688,7 @@ getEVarFromMailbox' mboxid= ev where
    let name= MailboxId mboxid $ typeOf $ typeOfEv ev
    mbs <- liftIO $ readIORef mailboxes
    let mev =  M.lookup name mbs
-   ttr("getEVarFromMailbox",length mbs, name, isJust mev)
+   tr("getEVarFromMailbox",length mbs, name, isJust mev)
    case mev of
      Nothing ->newMailbox name >> getEVarFromMailbox' mboxid
      Just ev ->return $ unsafeCoerce ev

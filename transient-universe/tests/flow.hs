@@ -1306,7 +1306,7 @@ testFinishInRemote= keep $ initNode $ inputNodes <|> do
 
   nodes <- local getNodes
   -- guard (length nodes > 1) <|> error msg 
-  r' <- concurrentCloud $ liftCloud (collect 5) $ do
+  r' <- liftCloud (collect 5) $ do
            runAt (nodes !! 1) $
             local $  for[1 ..10 :: Int]
 
@@ -2319,7 +2319,7 @@ checkApplicativeWithRemote= loggedc $ do
       (node0:node1:_) <- local getNodes
 
       ttr "------checking applicatives  with atRemote --------"
-      r <- concurrentCloud $ wormhole node1 $ do
+      r <- wormhole node1 $ do
                 let remoteReturn x= do
                             r <- atRemote $ do
                                     ttr "REMOTERETURN"

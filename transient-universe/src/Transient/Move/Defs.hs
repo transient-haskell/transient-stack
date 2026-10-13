@@ -58,7 +58,6 @@ newtype Cloud a = Cloud {unCloud :: TransIO a}
       Functor,
       Semigroup, Monoid,
       Alternative,
-      Applicative,
       MonadFail,
       Monad,
       Num,
@@ -255,7 +254,12 @@ data LocalClosure = LocalClosure
     localLog      :: FragmentType,
     localMvar     :: MVar (),
     localEvar     :: Maybe (EVar (Either CloudException (StreamData [FragmentType], SessionId, ClosureId, PolyMap,IsFromRemoteNode))),
-    localCont     :: Maybe TranShip
+    localCont     :: Maybe TranShip,
+    -- | The node that called this node when this closure was created by the arrival of a request (the first teleport
+    -- of a runAt, in the called side). It is persisted. When this node is recovered by a job after a restart, the
+    -- connection to the caller does not exist: the second teleport opens it with this node. The closure to respond to
+    -- ('ClosToRespond') has the same key as this closure, since the names of the endpoints are the same in all the nodes.
+    localCaller   :: Maybe Node
   }
 
 instance Show LocalClosure where show lc= keyResource lc
@@ -263,35 +267,30 @@ instance Show LocalClosure where show lc= keyResource lc
 -- | A log segment: either immutable or a mutable hole.
 --
 -- Mutable holes solve the problem of the logs of the applicative with asynchronous terms
--- (see the documentation of 'logged'). In @f \<*> x@, @fparallel@ executes @f@ and
--- @xparallel@ executes @x@ ('Transient.LEngine'). When the first term is asynchronous,
--- the two branches continue in different threads with different logs and the one that
--- completes the applicative takes the value of the other term from memory, not from the log.
+-- (see the documentation of 'logged' and 'applicativeNode'). In @f \<*> x@, @fparallel@
+-- executes @f@ and @xparallel@ executes @x@ ('Transient.LEngine'). When the first term is
+-- asynchronous, the two branches continue in different threads with different logs, and the one
+-- that completes the applicative takes the value of the other term from memory, not from the log.
 -- A remote node (or a restart) that replays that log could not resolve the applicative.
 -- The holes put the value of the other term in the log as soon as it is known, so any log
 -- serialised afterwards carries both values.
 data LogSeg
   = Fixed Builder
     -- ^ immutable segment
-  | Wait (IORef Builder) (IORef Builder)
-    -- ^ written by @addWait@ when the first term of an applicative is asynchronous, in the
-    -- branch that continues with @xparallel@. The first reference is the value of the
-    -- first term: it contains @w\/@ until the term is resolved. The second one is the
-    -- 'Next' hole of the @fparallel@ branch, filled by the second term with its value.
-  | Next (IORef Builder)
-    -- ^ written after the value of the first term of an applicative, in the @fparallel@
-    -- branch: the value of the second term. It is empty until the second term is resolved.
+  | Wait (IORef Builder)
+    -- ^ written by @addWait@ in an applicative term that is asynchronous, in the branch that
+    -- continues with the next term. It contains @w\/@ until the term is resolved; then,
+    -- 'logged' fills it with the value of the term.
+  | Next (IORef LogB)
+    -- ^ written by 'applicativeNode' at the end of the first term of an applicative in the thread
+    -- that completes it: what follows is the log that the second term writes. It is empty until the
+    -- second term is resolved.
 
 -- | Log builder made of immutable and mutable segments.
 newtype LogB = LogB [LogSeg]
 
 instance Semigroup LogB where
-  LogB xs <> LogB ys = LogB $ merge xs ys
-    where
-    merge [] b = b
-    merge a [] = a
-    merge [Fixed a] (Fixed b : bs) = Fixed (a <> b) : bs
-    merge (a:as) b = a : merge as b
+  LogB xs <> LogB ys = LogB (xs ++ ys)   -- segments are not merged: 'deltaLog' relies on prefixes
 
 instance Monoid LogB where
   mempty = LogB []
@@ -313,28 +312,32 @@ instance Loggable LogB where
 fixed :: Builder -> LogB
 fixed b = LogB [Fixed b]
 
--- | 'Wait' segment: the value of the first term of an applicative (initially @w\/@)
--- and the 'Next' hole of the @fparallel@ branch.
-waitSeg :: IORef Builder -> IORef Builder -> LogB
-waitSeg w x = LogB [Wait w x]
+-- | 'Wait' segment: the value of an applicative term (initially @w\/@).
+waitSeg :: IORef Builder -> LogB
+waitSeg w = LogB [Wait w]
 
--- | 'Next' segment: the value of the second term of an applicative (initially empty).
-nextSeg :: IORef Builder -> LogB
+-- | 'Next' segment: the log of the second term of an applicative (initially empty).
+nextSeg :: IORef LogB -> LogB
 nextSeg x = LogB [Next x]
 
--- | Last segment of the log, used by 'logged' to know its position in an applicative.
-lastSeg :: LogB -> Maybe LogSeg
-lastSeg (LogB segs) = if null segs then Nothing else Just $ last segs
+-- | Remove the last segment if it is that 'Next' hole.
+dropNext :: IORef LogB -> LogB -> LogB
+dropNext h (LogB segs) = case reverse segs of
+    Next h' : rest | h == h' -> LogB (reverse rest)
+    _                        -> LogB segs
+
+-- | The segments that the second log adds to the first one, which is a prefix of it.
+deltaLog :: LogB -> LogB -> LogB
+deltaLog (LogB initial) (LogB after) = LogB (drop (length initial) after)
 
 -- | Convert to 'Builder'. Holes are read each time the builder is run,
 -- not when it is built, so the current content is always serialised.
 renderLog :: LogB -> Builder
 renderLog (LogB segs) = foldMap seg segs
   where
-  seg (Fixed b)  = b
-  seg (Wait r _) = readRef r
-  seg (Next r)   = readRef r
-  readRef r = BI.builder $ \k br -> readIORef r >>= \b -> BI.runBuilderWith b k br
+  seg (Fixed b) = b
+  seg (Wait r)  = BI.builder $ \k br -> readIORef r >>= \b -> BI.runBuilderWith b k br
+  seg (Next r)  = BI.builder $ \k br -> readIORef r >>= \l -> BI.runBuilderWith (renderLog l) k br
 
 -- | True if the log is empty.
 nullLog :: LogB -> Bool
@@ -363,6 +366,80 @@ getLog= getData `onNothing` return emptyLog
 
 emptyLog= Log False  mempty []  0
 
+-- | The hash of the execution path ('hashClosure') names the endpoints by their position in the program,
+-- so that the same point has the same name in every node and in every replay. Each step of the path
+-- is combined with 'hashStep', which is not commutative: the name depends on the order of the steps,
+-- not only on how many there are of each kind. (An additive hash gave the same name to different points,
+-- e.g. an endpoint inside a previous remote call and an endpoint after it.)
+hashStep :: Int -> Int -> Int
+hashStep h c = (h * 31 + c) `mod` 2147483647
+
+-- | Steps of the path: entering a logged statement, finishing it, an alternative branch (@w\/@),
+-- and the end of an applicative.
+hashExec, hashDone, hashWait, hashApp :: Int
+hashExec= 1
+hashDone= 2
+hashWait= 3
+hashApp= 4
+
+-- | The applicative of 'Cloud'. Each @\<*>@ is a node with two sides: the left term L and the right term R.
+-- A side may be another applicative node, so the nodes compose and it works with any number of terms.
+--
+-- == Problem
+--
+-- @TransIO@'s @\<*>@ ('Transient.LEngine') executes L and R in parallel if L is asynchronous: the thread
+-- T0 that executes L gets no result and goes on with R, while the result of L arrives in another thread T1.
+-- The thread that completes the node (the one that receives the last result) takes the value of the other
+-- side from memory. Its log has only its own side, so a remote node that replays that log (or a restart)
+-- can not complete the applicative:
+--
+-- > T1 (completes by L):  ... v1/          -- v2 is missing
+-- > T0 (completes by R):  ... w/  v2/      -- v1 is missing (see the Wait segment of 'logged')
+--
+-- == Mechanism
+--
+-- 1. At the end of L, in whatever thread, a @Next H@ segment is left at the end of its log. @H@ is
+--    shared by the node and will contain the log of R.
+--
+-- 2. At the start of R, if the last segment of the log is that @Next H@, L has finished in the same thread
+--    and R continues in it with its own log: the segment is removed.
+--
+-- 3. At the end of R, in whatever thread, the segments that R has added to the log are saved in @H@.
+--    The thread that completes the node by L has always @H@ filled, since it only continues when R has
+--    a result. Its log is then @... v1\/ v2\/@, as in the replay.
+--
+-- 4. The hash of the path after the node is the same in every thread and in the replay: it depends on the
+--    end of L and not on the thread that completes the node (see 'hashStep'). It is set also in the thread
+--    that gets no result, since the next term of an enclosing node starts from it.
+instance Applicative Cloud where
+  pure = Cloud . pure
+  Cloud mf <*> Cloud mx = Cloud $ applicativeNode mf mx
+
+applicativeNode :: TransIO (a -> b) -> TransIO a -> TransIO b
+applicativeNode mf mx = do
+    h     <- liftIO $ newIORef mempty
+    hEndL <- liftIO $ newIORef Nothing
+    let -- the hash at the end of L, same in every thread: at the start of R in the thread that gets no
+        -- result from L (L asynchronous) and after L in the others
+        endL = do l <- getLog
+                  liftIO $ writeIORef hEndL $ Just $ hashClosure l
+        mf'  = do f <- mf
+                  endL
+                  void $ modifyState' (\l -> l{partLog= partLog l <> nextSeg h}) emptyLog
+                  return f
+        mx'  = do endL
+                  void $ modifyState' (\l -> l{partLog= dropNext h $ partLog l}) emptyLog
+                  initial <- partLog <$> getLog
+                  x <- mx
+                  after <- partLog <$> getLog
+                  liftIO $ writeIORef h $ deltaLog initial after
+                  return x
+        end  = do mh <- liftIO $ readIORef hEndL
+                  forM_ mh $ \hl -> void $ modifyState' (\l -> l{hashClosure= hashStep hl hashApp}) emptyLog
+    r <- (mf' <*> mx') <|> (end >> empty)
+    end
+    return r
+
 
 -- | Build the TCache key for a 'LocalClosure': @\<closureId\>-\<sessionId\>@.
 kLocalClos (SessionId idSess) (ClosureId clos) = BC.unpack clos <> "-" <> BC.unpack idSess
@@ -380,11 +457,11 @@ instance {-# OVERLAPPABLE #-}  (Show a, Read a) => TC.Serializable a where
   deserialize = read . BL.unpack
 
 instance TC.Serializable LocalClosure where
-  serialize LocalClosure {localClos=ClosureId c,localSession=SessionId s,..} = TC.serialize (c,s, prevClos, localLog)
+  serialize LocalClosure {localClos=ClosureId c,localSession=SessionId s,..} = TC.serialize (c,s, prevClos, localLog, localCaller)
   deserialize str =
-    let (localClos,localSession, prevClos, localLog) = TC.deserialize str
+    let (localClos,localSession, prevClos, localLog, localCaller) = TC.deserialize str
         block = unsafePerformIO $ newMVar ()
-     in LocalClosure (ClosureId localClos) (SessionId localSession)   prevClos  localLog  block Nothing Nothing
+     in LocalClosure (ClosureId localClos) (SessionId localSession)   prevClos  localLog  block Nothing Nothing localCaller
 
 dbClos0= getDBRef $ kLocalClos sessionId0 closureId0 :: DBRef LocalClosure
 
