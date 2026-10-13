@@ -75,24 +75,23 @@ instance TC.Indexable Job where key (Job dbr  _ _)= 'J':keyObjDBRef dbr
 --
 job= job' Nothing
 
-
-
-
 job' :: Maybe String -> Cloud ()
-job' mname  =  local $  do
+job' mname  =  local  $ sandboxData (ofType:: PrevClos) $ do
   -- the next job checkpoint eliminates the previous to reflect the advancement of the computation
   mprev :: Maybe Job <- getData
   when (isJust mprev) $ jobRemove $ fromJust mprev
 
   ttr "save"
   liftIO $ writeIORef save True
+  -- p@(PrevClos thisclos ms _ isapp isCollect) :: PrevClos <- getData `onNothing` error "no job state 2"
 
-  endpoint (fmap BC.pack mname) <|> return () -- void $ setCont Nothing idSession 
-  tr "AFTER ENDPOINT"
-  p@(PrevClos thisclos ms _ isapp isCollect) :: PrevClos <- getData `onNothing` error "no job state 2"
-  -- -- false to force the log Not to recreate this endpoint after replaying
-  ttr ("JOB PREVCLOS",p )
-  setState (PrevClos thisclos ms False isapp isCollect :: PrevClos)
+  endpoint (fmap BC.pack mname) <|> return ()  
+  ttr ("AFTER ENDPOINT job",mname)
+  PrevClos thisclos ms _ isapp isCollect :: PrevClos <- getData `onNothing` error "no job state 2"
+
+  -- -- false to force the log Not to reconstruct the computation with this endpoint after replaying
+  -- ttr ("JOB PREVCLOS",p )
+  -- setState (PrevClos { prevDBRef = thisclos, pnewSession = ms, preservePath = False, isApplicative = isapp, isCollect = isCollect } :: PrevClos)
 
 
   myNode <- getMyNode
@@ -106,7 +105,8 @@ job' mname  =  local $  do
     case fromException e of
       Just (ConnectionError _ node) -> liftIO $ atomically $ writeDBRef (getDBRef $ keyResource this)  this{jobNode=node, jobError= Just $ show e}
       Nothing ->                       liftIO $ atomically $ writeDBRef (getDBRef $ keyResource this)  this{jobError= Just $ show e}
-
+  ttr "END JOB"
+  return()
 
 -- | Remove a job from TCache and clear it from the current state.
 jobRemove :: Job -> TransIO ()
@@ -123,11 +123,27 @@ newtype AllJobsExecutedFor= AllJobsExecutedFor Node
 -- | Resume all pending 'job's on startup: replays each saved closure so the
 -- computation continues from where it was interrupted.  Also listens for 'Ping'
 -- messages from other nodes to resume jobs that were running there.
-runJobs= do
-  local $ fork $ do
-    liftIO $ index jobNode
-    startJobs <|> commJobs
+runJobs= local $ fork $ do
+  liftIO $ index jobNode
+  option "jobs" "manage jobs"
+  clearJobs <|> execJobs
   where
+  clearJobs= do
+    option1 "clear" "remove jobs in this node"
+    nodes <- getNodes
+    node <- for nodes
+    onException  $ \(SomeException e) -> do lockOut $ putStrLn $ "no jobs to send to node: " <> show node;  empty -- if the index o jobs does not exist, do nothing
+    dbrjobs <- liftIO $ atomically $  jobNode .==. node :: TransIO [DBRef Job] 
+    ttr dbrjobs
+    rjob <- for dbrjobs
+    liftIO $ atomically $ delDBRef  rjob
+    lockOut $ putStrLn "jobs removed"
+
+  execJobs = do
+    option1 "exec" "execute jobs for this node"
+    fork $ do
+      startJobs <|> commJobs -- <|> pingNodes
+  
   startJobs= do
     mynode <- getMyNode
     launchJobsForNode mynode
@@ -137,24 +153,29 @@ runJobs= do
     Ping node <- getMailbox
     launchJobsForNode node
 
+  -- must ping the other nodes 
+  -- pingNodes= do
+  --   nodes <- indexOf jobNode
+    -- ..
+
+
   launchJobsForNode :: Node -> TransIO ()
   launchJobsForNode node= do
     dbrjobs <- liftIO $ atomically $  jobNode .==. node :: TransIO [DBRef Job]
     ttr ("runJobs(commJobs): jobs found",  dbrjobs, node)
-    do -- collect 0 $ do
-      j <- for $ reverse dbrjobs
-      job@(Job dbr _ _) <- (liftIO $  atomically $ readDBRef j) `onNothing` error ("runJobs(commJobs): job not found " ++ show j)
+    j <- for $ reverse dbrjobs
+    job@(Job dbr _ _) <- (liftIO $  atomically $ readDBRef j) `onNothing` error ("runJobs(commJobs): job not found " ++ show j)
 
-      let (s,clos) = getSessClosure dbr ::  (SessionId, ClosureId)
+    let (s,clos) = getSessClosure dbr ::  (SessionId, ClosureId)
 
-      (logs,clos') <- getClosureLog s clos
-      -- conn :: Connection <- getData `onNothing` error "runJobs(commJobs): conn not found"
-      map <- gets mfData
-      setState job
-      ttr ("JOB LOG",logs,"send to closure",localClos clos',isJust $ localEvar clos',isJust $ localCont clos',TC.key clos',dbr)
+    (logs,clos') <- getClosureLog s clos
+    -- conn :: Connection <- getData `onNothing` error "runJobs(commJobs): conn not found"
+    map <- gets mfData
+    setState job
+    ttr ("JOB LOG",logs,"send to closure",localClos clos',isJust $ localEvar clos',isJust $ localCont clos',TC.key clos',dbr)
 
-      noTrans $ sendToClosure logs s closureId0 map False clos'
-
+    noTrans $ sendToClosure logs s closureId0 map False clos' False
+    empty
 
 
 -- | A config job is executed once and then his data is used for the rest of the
@@ -210,36 +231,38 @@ collectc n delta action= Cloud $ sandboxDataCond preserveCollectFlag $ unCloud $
   t <- onAll $ fromIntegral <$> getMicroSeconds
   let timeleft= let t'= tfin - t in max t' 0
   ttr ("TIMELEFT",timeleft)
-  initState <- gets mfData
+  initState <- gets withLog
   states <- onAll $ liftIO $ newIORef M.empty
   onAll $ newRState $ CollectJobs []
+
   r <- local $ collect' n timeleft $ unCloud $ do
           r <- action
 
-          modifyState' (\prevclos -> prevclos{preservePath=True}) $ error "no CollectJobs state"
+          modifyState' (\prevclos -> prevclos{preservePath=True}) $ error "no PrevClos state"
 
           job
 
           onAll $ do
 
-            j ::  Job <- getState <|> error "collectc: no Job stete"
+            j ::  Job <- tryState <|> error "collectc: no Job stete"
 
-            
             -- add to the list of collect jobs to delete at the end of collect
-            Ref ref  <- getState <|> error "collectc: no state Ref CollectJobs"
+            Ref ref  <- tryState <|> error "collectc: no state Ref CollectJobs"
             Just (CollectJobs jobs) <- liftIO $ readIORef ref
             liftIO $ writeIORef ref $ Just $ CollectJobs $ j:jobs
 
           -- merge all states for the result
           onAll $  do
-            s <- gets mfData
+            s <- gets withLog
             s' <-liftIO $ readIORef states
             liftIO $ writeIORef states $ merge  s' s
           return r
 
   s <- onAll $ liftIO $ readIORef states
-  modify $ \st -> st{mfData= merge initState s}
-  
+  let merged= merge initState s
+  modify $ \st -> st{mfData= M.delete (typeOf emptyLog) merged
+                    , mfLog= maybe (mfLog st) unsafeCoerce $ M.lookup (typeOf emptyLog) merged}
+
   -- remove all the jobs inside  collectc
   CollectJobs js <- onAll $ getRState <|> return (CollectJobs []) 
   ttr ("JOBS TO DELETE",js)
@@ -247,6 +270,10 @@ collectc n delta action= Cloud $ sandboxDataCond preserveCollectFlag $ unCloud $
 
   return r
   where
+  -- the log is a field of the state: it travels in the map while the states of the branches are merged
+  withLog :: TranShip -> PolyMap
+  withLog st= M.insert (typeOf emptyLog) (unsafeCoerce $ mfLog st) $ mfData st
+
   merge :: PolyMap -> PolyMap -> PolyMap
   merge = M.unionWithKey combine
 
@@ -293,6 +320,7 @@ endpointc mname= do
     in do jobRemove prev ; delData prev
   endpoint mname
 
-
-
+onBack :: (Typeable b, Show b) => Cloud a -> ( b -> Cloud a) -> Cloud a
+onBack action handler=  
+  onAll $  unCloud action `Transient.Internals.onBack` (\b -> unCloud $ handler b)
 

@@ -416,9 +416,9 @@ callService' node params =  loggedc $ do
       then  onAll $ do
           svs <- liftIO $ readIORef selfServices
 
-          modifyData' (\log -> log{recover=True}) $ error "No log????"
+          _ <- modifyLog (\log -> log{recover=True})
           withParseString (toLazyByteString $ serialize params <> byteString (BSS.pack "/")) $ unCloud svs
-          modifyData' (\log -> log{recover=True}) $ error "No log????"
+          _ <- modifyLog (\log -> log{recover=True})
           r <- logged empty
 
           return r
@@ -426,7 +426,7 @@ callService' node params =  loggedc $ do
       else do
 
           log <- Transient.Move.Logged.getLog    -- test
-          setData emptyLog
+          putLog emptyLog
           local $ return ()
 
           r <- wormhole node $  do
@@ -438,7 +438,7 @@ callService' node params =  loggedc $ do
              r <- local empty -- read the response
              onAll $ symbol $ BS.pack "e/"
              return r
-          setData log
+          putLog log
           return r
 
 
@@ -609,7 +609,7 @@ serve :: (Loggable a, Loggable b) => (a -> Cloud b) -> Cloud ()
 serve  serv= do
         modify $ \s -> s{execMode= Serial}
         p <-  onAll deserialize --  empty if the parameter does not match
-        modifyData' (\log -> log{recover=False}) $ error "serve: error"
+        _ <- modifyLog (\log -> log{recover=False})
         loggedc $ serv p
 
         tr ("SERVE")
@@ -676,7 +676,7 @@ controlNodeService node=  send <|> receive
          local $ do
             -- liftIO $ writeIORef lineprocessmode False
             liftIO $ putStrLn "end controlling remote node"
-            (oldprompt,cbs) <- getState
+            (oldprompt,cbs) <- tryState
             liftIO $ modifyMVar rcallbacks $ const $ return (cbs,()) -- restore local node options
             liftIO $ writeIORef rprompt  oldprompt
 
@@ -728,7 +728,7 @@ controlNode node= send <|> receive
          local $ do
             -- liftIO $ writeIORef lineprocessmode False
             liftIO $ putStrLn "end controlling remote node"
-            (oldprompt,cbs) <- getState
+            (oldprompt,cbs) <- tryState
             liftIO $ modifyMVar rcallbacks $ const $ return (cbs,()) -- restore local node options
             liftIO $ writeIORef rprompt  oldprompt
 
@@ -804,7 +804,7 @@ newVar  name val= noTrans $ do
 replaceVars :: String -> TransIO String
 replaceVars []= return []
 replaceVars ('$':str)= do
-   LocalVars localvars <- getState <|> return (LocalVars M.empty)
+   LocalVars localvars <- tryState <|> return (LocalVars M.empty)
    let (var,rest')= break (\c -> c=='-' || c==':' || c==' ' ||  c=='\r' || c == '\n' ) str
        (manifest, rest)= if null rest' || head rest'=='-'
             then  break (\c -> c=='\r' || c =='\n' || c==' ') $ tailSafe rest'

@@ -1788,7 +1788,7 @@ listen node@(Node _ port _ _) =  do
   -- fork connectionTimeouts
   --  fork loopClosures
 
-  setData emptyLog -- Log {recover = False, partLog = mempty, hashClosure = 0}
+  putLog emptyLog
 
   conn' <- tryState <|> defConnection
   chs <- liftIO $ newIORef M.empty

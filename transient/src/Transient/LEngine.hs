@@ -26,6 +26,7 @@ import Control.Exception
 import qualified Data.ByteString.Char8                  as BS
 import qualified Data.ByteString.Lazy.Char8             as BSL
 import Data.String
+import Data.ByteString.Builder (Builder)
 
 import System.IO.Unsafe
 import Data.Time.Clock
@@ -111,6 +112,44 @@ type Listener= String
 
 data LifeCycle =LF Status [Listener] deriving Show
 
+-- | A segment of the log of the execution of a distributed computation ('Log'). The instances, the renderer and the
+-- operations are in "Transient.Move.Defs": here are only the declarations that the state and the applicative need.
+data LogSeg
+  = Fixed Builder
+    -- ^ immutable segment
+  | Wait (IORef Builder)
+    -- ^ written by @addWait@ in an applicative term that is asynchronous; it contains @w\/@ until the term is resolved
+  | Next (IORef LogB)
+    -- ^ the log that the second term of an applicative writes (empty until it is resolved)
+  | Pending (IO LogB)
+    -- ^ the log of a term of an applicative that may not be resolved yet: it is read when the log is serialised
+
+-- | Log builder made of immutable and mutable segments.
+newtype LogB = LogB [LogSeg]
+
+type ClosureKey = String
+
+-- | A single element of the execution log: a serialised value, a set of parallel branches, or a cross-session link.
+data FragmentType= Fragment{unFragment :: LogB} | Collect [LogB] | Jump ClosureKey
+
+-- | The log of the execution: whether it is being recovered, the part written since the last closure, the
+-- segments that remain to be replayed and the hash of the path ('hashClosure').
+data Log  = Log{ recover :: Bool , partLog :: LogB, restLog :: [FragmentType],  hashClosure :: Int}
+
+emptyLog :: Log
+emptyLog= Log False (LogB []) []  0
+
+-- | Steps of the hash of the path, combined with 'hashStep': entering a logged statement, finishing it,
+-- an alternative branch (@w\/@), and the end of an applicative.
+hashStep :: Int -> Int -> Int
+hashStep h c = (h * 31 + c) `mod` 2147483647
+
+hashExec, hashDone, hashWait, hashApp :: Int
+hashExec= 1
+hashDone= 2
+hashWait= 3
+hashApp= 4
+
 -- | TranShip describes the context of a TransientIO computation:
 data TranShip = forall a b. TranShip
   {
@@ -139,6 +178,8 @@ data TranShip = forall a b. TranShip
   , parseContext :: ParseContext
   , execMode :: ExecMode
   , isApplicative :: Bool
+  , mfLog :: Log
+    -- ^ the log of the execution of a distributed computation. A field and not an entry of 'mfData': it is used in every step
   , onApplicative :: Maybe AppHook
     -- ^ hooks of the applicative: see 'AppHook'. A field and not a 'mfData' entry: it is read in every @<*>@
   } deriving Typeable
@@ -214,6 +255,7 @@ emptyTranShip th label par childs =
          , parseContext = ParseContext (return SDone) mempty (unsafePerformIO $ newIORef True)
          , execMode = Serial
          , isApplicative= False
+         , mfLog= emptyLog
          , onApplicative= Nothing}
 
 -- | Run a transient computation with a default initial state. This is for basic testing. This does NOT support effects

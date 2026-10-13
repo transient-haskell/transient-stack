@@ -1,11 +1,11 @@
 {-#Language RecordWildCards,DeriveGeneric,CPP, UndecidableInstances
 , OverlappingInstances,FlexibleInstances,GeneralizedNewtypeDeriving, OverloadedStrings #-}
-{-# LANGUAGE InstanceSigs,ScopedTypeVariables #-}
+{-# LANGUAGE InstanceSigs,ScopedTypeVariables,StandaloneDeriving #-}
 
 -- Dedicado a Jesucristo, mi salvador
 -- Y a mi hija
 
-module Transient.Move.Defs where
+module Transient.Move.Defs (module Transient.Move.Defs, Log(..), LogSeg(..), LogB(..), FragmentType(..), ClosureKey, emptyLog, hashStep, hashExec, hashDone, hashWait, hashApp) where
 
 import Transient.Internals
 import Transient.EVars
@@ -280,20 +280,7 @@ instance Show LocalClosure where show lc= keyResource lc
 -- A remote node (or a restart) that replays that log could not resolve the applicative.
 -- The holes put the value of the other term in the log as soon as it is known, so any log
 -- serialised afterwards carries both values.
-data LogSeg
-  = Fixed Builder
-    -- ^ immutable segment
-  | Wait (IORef Builder)
-    -- ^ written by @addWait@ in an applicative term that is asynchronous, in the branch that
-    -- continues with the next term. It contains @w\/@ until the term is resolved; then,
-    -- 'logged' fills it with the value of the term.
-  | Next (IORef LogB)
-    -- ^ written by 'appHook' at the end of the first term of an applicative in the thread
-    -- that completes it: what follows is the log that the second term writes. It is empty until the
-    -- second term is resolved.
-
--- | Log builder made of immutable and mutable segments.
-newtype LogB = LogB [LogSeg]
+-- (the declarations of 'LogSeg', 'LogB', 'FragmentType' and 'Log' are in Transient.LEngine)
 
 instance Semigroup LogB where
   LogB xs <> LogB ys = LogB (xs ++ ys)   -- segments are not merged: 'deltaLog' relies on prefixes
@@ -344,49 +331,39 @@ renderLog (LogB segs) = foldMap seg segs
   seg (Fixed b) = b
   seg (Wait r)  = BI.builder $ \k br -> readIORef r >>= \b -> BI.runBuilderWith b k br
   seg (Next r)  = BI.builder $ \k br -> readIORef r >>= \l -> BI.runBuilderWith (renderLog l) k br
+  seg (Pending io) = BI.builder $ \k br -> io >>= \l -> BI.runBuilderWith (renderLog l) k br
 
 -- | True if the log is empty.
 nullLog :: LogB -> Bool
 nullLog = BL.null . toLazyByteString . renderLog
 
--- | The 'Log' data type represents the current log data, which includes information about whether recovery is enabled, the partial log builder, and the hash closure.
-data Log  = Log{ recover :: Bool , partLog :: LogB, restLog :: [FragmentType],  hashClosure :: Int} deriving (Show)
-
--- [[Builder]] example:  [["e/f/x/w/u","b/l/ah/"],["single/branch"]... : 
--- The first group correspond with a collectc of two branches.
--- Normally thereis one branch 
-
--- Each restlog is a transition from a closure to another. closures are in sequence, except in the case of a jump
-
-type ClosureKey = String
-
--- | A single element of the execution log.
--- 'Fragment' is a serialised value; 'Collect' is a parallel branch set; 'Jump' is a cross-session link.
-data FragmentType= Fragment{unFragment :: LogB} | Collect [LogB] | Jump ClosureKey deriving (Read,Show)
+deriving instance Show Log
+deriving instance Show FragmentType
+deriving instance Read FragmentType
 
 instance Loggable FragmentType
 
 -- | Get the current log data.
 getLog :: TransMonad m => m Log
-getLog= getData `onNothing` return emptyLog
+getLog= gets mfLog
 
-emptyLog= Log False  mempty []  0
+-- | Set the log data.
+putLog :: TransMonad m => Log -> m ()
+putLog l= modify $ \st -> st{mfLog= l}
+
+-- | Modify the log data and return the new value.
+modifyLog :: TransMonad m => (Log -> Log) -> m Log
+modifyLog f= do
+  st <- get
+  let l= f (mfLog st)
+  put st{mfLog= l}
+  return l
 
 -- | The hash of the execution path ('hashClosure') names the endpoints by their position in the program,
 -- so that the same point has the same name in every node and in every replay. Each step of the path
 -- is combined with 'hashStep', which is not commutative: the name depends on the order of the steps,
 -- not only on how many there are of each kind. (An additive hash gave the same name to different points,
 -- e.g. an endpoint inside a previous remote call and an endpoint after it.)
-hashStep :: Int -> Int -> Int
-hashStep h c = (h * 31 + c) `mod` 2147483647
-
--- | Steps of the path: entering a logged statement, finishing it, an alternative branch (@w\/@),
--- and the end of an applicative.
-hashExec, hashDone, hashWait, hashApp :: Int
-hashExec= 1
-hashDone= 2
-hashWait= 3
-hashApp= 4
 
 -- | The hook of the applicative of 'TransIO' ('AppHook') that logs the result of both terms of a distributed
 -- applicative. It is installed in the state of the node by @initNode@, so it is the applicative of every
@@ -434,16 +411,16 @@ appHook = AppHook $ do
                   liftIO $ writeIORef hEndL $ Just $ hashClosure l
     return AppNode
       { appAfterL  = do endL
-                        void $ modifyState' (\l -> l{partLog= partLog l <> nextSeg h}) emptyLog
+                        void $ modifyLog (\l -> l{partLog= partLog l <> nextSeg h})
       , appBeforeR = do endL
-                        void $ modifyState' (\l -> l{partLog= dropNext h $ partLog l}) emptyLog
+                        void $ modifyLog (\l -> l{partLog= dropNext h $ partLog l})
                         getLog >>= liftIO . writeIORef initialR . partLog
       , appAfterR  = do after   <- partLog <$> getLog
                         initial <- liftIO $ readIORef initialR
                         liftIO $ writeIORef h $ deltaLog initial after
       , appEnd     = do mh <- liftIO $ readIORef hEndL
                         forM_ mh $ \hl ->
-                            void $ modifyState' (\l -> l{hashClosure= hashStep hl hashApp}) emptyLog
+                            void $ modifyLog (\l -> l{hashClosure= hashStep hl hashApp})
       }
 
 

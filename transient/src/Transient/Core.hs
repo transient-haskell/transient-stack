@@ -851,15 +851,15 @@ sandbox mx = do
       bs <- tryState <|> return def
       let  mf'= M.insert (typeOf def) (unsafeCoerce bs) mf
 
-      modify $ \s ->s { mfData = mf', parseContext= parseContext st}
+      modify $ \s ->s { mfData = mf', parseContext= parseContext st, mfLog= mfLog st}
 
-  mx <*** modify (\s ->s { mfData = mfData st, parseContext= parseContext st})
+  mx <*** modify (\s ->s { mfData = mfData st, parseContext= parseContext st, mfLog= mfLog st})
 
 -- Lighther version of `sandbox` with no exception guard
 sandbox' :: TransIO a -> TransIO a
 sandbox' mx = do
   st <- get
-  mx <*** modify (\s ->s { mfData = mfData st, parseContext= parseContext st})
+  mx <*** modify (\s ->s { mfData = mfData st, parseContext= parseContext st, mfLog= mfLog st})
 
 -- | Sandbox the data only to other terms of a formula made of binary operators,applicatives and alternatives.
 -- It is not sandboxed for the next term in the monad (the imperative sequence)
@@ -868,7 +868,7 @@ sandboxSide :: [TypeRep] -> TransIO a  -> TransIO a
 sandboxSide ts mx = do
   st <- get
 
-  mx <|> (modify (\s ->s { mfData = modif (mfData st) (mfData s), parseContext= parseContext st}) >> empty)
+  mx <|> (modify (\s ->s { mfData = modif (mfData st) (mfData s), parseContext= parseContext st, mfLog= mfLog st}) >> empty)
   where
   modif mapold m = M.union (M.fromList $ mapMaybe
         (\t ->case M.lookup t m of

@@ -206,7 +206,7 @@ setLogFromFile logs = do
   log <- firstFragment logs
   tr ("SENDING LOG",log)
   setParseString $ toLazyByteString log
-  modifyData' (\l -> l {recover = True, restLog= tail logs}) emptyLog{recover = True,restLog= tail logs}
+  void $ modifyLog (\l -> l {recover = True, restLog= tail logs})
   tr "setLog done"
   return ()
 
@@ -242,7 +242,7 @@ endpoint1  maybeName = do
 
   ttr("endpoint",closName, idSession,partLog,restLog,recover )
   let dblocalclos = getDBRef $ kLocalClos idSession (ClosureId closName) :: DBRef LocalClosure
-  setState  log{partLog= mempty}
+  putLog  log{partLog= mempty}
   cont <- get
 
 
@@ -338,7 +338,7 @@ endpoint1  maybeName = do
               -- substitute for sendToClosure
               writeEVar (fromJust $ localEvar closure) msg
               -- noTrans $ sendToClosure restLog idSession (ClosureId closName) mfdata False closure False
-              when(not $ null restLog) $ void $ modifyData' (\l -> l {partLog=mempty,restLog= tail restLog}) emptyLog
+              when(not $ null restLog) $ void $ modifyLog (\l -> l {partLog=mempty,restLog= tail restLog})
               -- modify $ \s -> s{execMode= Remote}
               empty
 
@@ -359,12 +359,12 @@ endpoint1  maybeName = do
                   -- in an applicative, the hash advances as the execution that wrote the "w/" did (see addWait in
                   -- logged): the statement that skipped is not replayed, so its step must be applied here
                   app <- gets isApplicative
-                  void $ modifyData' (\l -> l {recover = True, partLog=mempty,restLog= tail restLog
-                                              ,hashClosure= if app then hashStep hash hashDone else hashClosure l}) emptyLog
+                  void $ modifyLog (\l -> l {recover = True, partLog=mempty,restLog= tail restLog
+                                              ,hashClosure= if app then hashStep hash hashDone else hashClosure l})
                   
                 else do
                   tr "set the log for alternative computation"
-                  setState log{partLog= "w/",restLog= if not $ null restLog then tail restLog else restLog,hashClosure= hashStep hash hashWait}
+                  putLog log{partLog= "w/",restLog= if not $ null restLog then tail restLog else restLog,hashClosure= hashStep hash hashWait}
               -- log <-getLog
               -- ttr ("setting wait",log)
               empty
@@ -481,7 +481,7 @@ logged mx =  sandboxDataCond handle $ do
 
           ttr ("LOGGED:", hashClosure initialLog,rest,if recover initialLog then "recovering" else "executing" <> " logged stmt of type",typeOf logit,"parseString", rest,"PARTLOG",partLog initialLog)
 
-          setData initialLog{partLog=  initialSegment <> exec, hashClosure= hashStep (hashClosure initialLog) hashExec}
+          putLog initialLog{partLog=  initialSegment <> exec, hashClosure= hashStep (hashClosure initialLog) hashExec}
 
           -- in an applicative term, the Wait segment that addWait writes is a mutable hole (initially "w/")
           -- that is filled below with the value of the term
@@ -520,10 +520,10 @@ logged mx =  sandboxDataCond handle $ do
             then do
               -- the internal path is kept in the log, so a replay goes through mx again and adds the same hashes.
               -- Continue from the final hash so that later endpoints do not collide with the internal ones (e.g. runAt)
-              modifyState'  (\finalLog -> finalLog{recover=recov, hashClosure= hashStep (hashClosure finalLog) hashDone }) emptyLog
+              modifyLog  (\finalLog -> finalLog{recover=recov, hashClosure= hashStep (hashClosure finalLog) hashDone })
 
             else
-              modifyState'  (\finalLog -> finalLog{recover=recov, partLog= parlog, hashClosure= compactHash }) emptyLog
+              modifyLog  (\finalLog -> finalLog{recover=recov, partLog= parlog, hashClosure= compactHash })
 
           return r
 
@@ -556,15 +556,15 @@ logged mx =  sandboxDataCond handle $ do
           if preservePath prevc
             then do
               ttr "PRESERVEPATH  addWait"
-              modifyState'  (\finalLog -> finalLog{recover=recov
+              modifyLog  (\finalLog -> finalLog{recover=recov
                     ,partLog=partLog finalLog <> waitMark
-                    ,hashClosure= waitHash finalLog }) emptyLog
+                    ,hashClosure= waitHash finalLog })
 
             else do
               ttr "NORMAL addWait"
-              modifyState'  (\finalLog -> finalLog{recover=recov
+              modifyLog  (\finalLog -> finalLog{recover=recov
                   , partLog= initialSegment <> waitMark
-                  , hashClosure= waitHash finalLog }) emptyLog
+                  , hashClosure= waitHash finalLog })
 
           empty
 

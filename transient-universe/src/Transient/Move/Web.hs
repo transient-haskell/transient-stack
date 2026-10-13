@@ -309,7 +309,6 @@ minput (ident :: String) msg' = onAll $ sandboxData (ofType :: ClosToRespond) $ 
                            let pc= unsafeCoerce y
                            in unsafeCoerce  $ pc{pnewSession= Just $ fst . getSessClosure $ prevDBRef $ unsafeCoerce x} 
                     -- | t == typeOf (ofType :: PrevClos) = y
-                    | t == typeOf (ofType :: Log) = y
                     | otherwise= x
 
     (</>) x y = x <> str "/" <> y
