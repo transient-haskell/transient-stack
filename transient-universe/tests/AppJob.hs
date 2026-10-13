@@ -2,6 +2,7 @@
 -- AJ_CASE:
 --   jobterm   the two terms of an applicative have a job inside the remote body; n2 dies during its wait
 --   nested    runAt n1 (runAt n2 body): the inner node n2 dies during its wait
+--   task      jobTask (applicative of two remote terms without job): it is closed only when the task is completed
 --   caller    job; applicative of two slow remote terms; the caller dies during the applicative
 --             (the job of the caller stays inside the applicative, so the call is repeated and the result arrives twice)
 --   both      job; runAt n1 (job inside); the caller and n1 die together during the wait, restart in either order
@@ -22,7 +23,7 @@ module Main where
 
 import Transient.Base
 import Transient.Move
-import Transient.Move.Job (job, runJobs)
+import Transient.Move.Job (job, jobTask, runJobs)
 import Transient.Move.Utils (initNode, inputNodes)
 import Control.Applicative
 import Control.Monad (void)
@@ -60,6 +61,9 @@ main = void $ keep $ initNode $ inputNodes <|> do
                     localIO $ putStrLn "CALLER AFTER JOB"
                     a <- runAt n1 (body 1 slow)
                     return (a, 0)
+    "task"    -> jobTask $ do
+                    localIO $ putStrLn "CALLER AFTER JOB"
+                    (,) <$> runAt n1 (plain 1 slow) <*> runAt n2 (plain 2 slow)
     "caller"  -> do job
                     localIO $ putStrLn "CALLER AFTER JOB"
                     (,) <$> runAt n1 (plain 1 500000) <*> runAt n2 (body 2 slow)

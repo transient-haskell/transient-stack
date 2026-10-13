@@ -12,7 +12,7 @@
 -- Author: Alabado sea Dios que inspira todo lo bueno que hago. Porque Él es el que obra en mi
 --
 {-# LANGUAGE ScopedTypeVariables #-}
-module Transient.Move.Job(job, config, runJobs,collectc,getMicroSeconds, Ping(..)) where
+module Transient.Move.Job(job, jobTask, config, runJobs,collectc,getMicroSeconds, Ping(..)) where
 import Transient.Internals
 import Transient.Move.Internals
 import Transient.Move.Defs
@@ -70,8 +70,38 @@ import Control.Concurrent(threadDelay)
 --
 job= job' Nothing
 
+-- | When is a job closed?
+--
+--  * by the next 'job': the computation has advanced, and the previous one is not needed.
+--
+--  * when a call to another node ('Transient.Move.Cloud.runAt' etc.) is sent without error: the rest of the computation is
+--    in the other node, with its own jobs. If the sending fails the job stays, and it is launched again when the node
+--    recovers (see 'runJobs').
+--
+-- The second rule closes the job when the first call of a computation is sent, even if the computation has more calls
+-- still to be sent, as in @job; t1 <*> t2@: the job is closed when @t1@ is sent. The execution of @t2@ is not the
+-- responsibility of the job, but of the computation that has to be protected as a whole. For that, 'jobTask'.
 job' :: Maybe String -> Cloud ()
-job' mname  =  local  $ sandboxData (ofType:: PrevClos) $ do
+job' mname = jobWith False mname
+
+-- | A job that protects a whole computation: it is closed only when @x@ is completed, not when a call that @x@ sends to
+-- another node is sent. If the program is interrupted before, @x@ is executed again from the start when it is
+-- restarted (the calls that @x@ did are done again: it is "at least once").
+--
+-- > r <- jobTask $ (,) <$> runAt node1 t1 <*> runAt node2 t2
+--
+-- The content of the task has to be coherent with that: if it has jobs of its own, or the called nodes respond to the
+-- node that was interrupted, the results can arrive more than once when the task is executed again.
+jobTask :: Cloud a -> Cloud a
+jobTask x= do
+  jobWith True Nothing
+  r <- x
+  onAll $ do mjob <- getData
+             forM_ mjob jobRemove
+  return r
+
+jobWith :: Bool -> Maybe String -> Cloud ()
+jobWith scoped mname  =  local  $ sandboxData (ofType:: PrevClos) $ do
   -- the next job checkpoint eliminates the previous to reflect the advancement of the computation
   mprev :: Maybe Job <- getData
   when (isJust mprev) $ jobRemove $ fromJust mprev
@@ -90,7 +120,7 @@ job' mname  =  local  $ sandboxData (ofType:: PrevClos) $ do
 
 
   myNode <- getMyNode
-  let this= Job thisclos myNode Nothing
+  let this= Job thisclos myNode Nothing scoped
   liftIO $ atomically $ newDBRef this
 
   setData  this
@@ -169,7 +199,7 @@ runJobs= forkCloud $ do
     dbrjobs <- liftIO $ atomically $  jobNode .==. node :: TransIO [DBRef Job]
     ttr ("runJobs(commJobs): jobs found",  dbrjobs, node)
     j <- for $ reverse dbrjobs
-    job@(Job dbr _ _) <- (liftIO $  atomically $ readDBRef j) `onNothing` error ("runJobs(commJobs): job not found " ++ show j)
+    job@(Job dbr _ _ _) <- (liftIO $  atomically $ readDBRef j) `onNothing` error ("runJobs(commJobs): job not found " ++ show j)
 
     let (s,clos) = getSessClosure dbr ::  (SessionId, ClosureId)
 

@@ -712,19 +712,17 @@ teleport =  do
 
 -- | A job is finished when a later job is executed ('Transient.Move.Job.job'). When the later job is in another node,
 -- the job is finished when the call to that node has been sent without error: if this node is restarted, the
--- call is not repeated. (If sending fails, the job stays, to be retried.) Inside an applicative the job stays: the
--- other terms have not been sent yet.
+-- call is not repeated. If sending fails, the handler of 'Transient.Move.Job.job' writes the job again, to be retried
+-- when the node recovers; so in an applicative the failure of any of its terms keeps the job.
+--
+-- The jobs of a 'Transient.Move.Job.jobTask' are not finished by a sending: they are finished when the task is completed.
 finishJob :: TransIO ()
 finishJob = do
-  -- 'isApplicative' is cleared inside the logged statements; the term of the applicative is marked in 'PrevClos'
-  app  <- maybe False isApplicativ <$> (getData :: TransIO (Maybe PrevClos))
   mjob <- getData :: TransIO (Maybe Job)
-  case mjob of
-    Just j | not app -> do
-      ttr ("finishJob", j)
-      liftIO $ atomically $ delDBRef (getDBRef $ keyResource j :: DBRef Job)
-      delState j
-    _ -> return ()
+  forM_ mjob $ \j -> unless (jobScoped j) $ do
+    ttr ("finishJob", j)
+    liftIO $ atomically $ delDBRef (getDBRef $ keyResource j :: DBRef Job)
+    delState j
 
 -- | The connection to respond to. In a called side whose connection is a Self connection (the replay of a job
 -- after a restart, which has no connection to the caller), it is opened to the node of the caller, stored in the closure
