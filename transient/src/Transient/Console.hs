@@ -9,6 +9,11 @@
 
 
 
+-- | Console interaction primitives for the Transient monad.
+--
+-- Provides non-blocking, multi-threaded @stdin@ reading with option matching,
+-- typed input, navigation history, and the 'keep'\/'keep'' entry points that
+-- drive the Transient runtime loop with an interactive console.
 module Transient.Console(keep, keep', exit,exitLeft,keepCollect,option, option1, input, input', inputf, inputNav,Navigation(..),
 inputfm, inputParse, processLine,delListener,rprompt,thereIsArgPath,lockOut) where
 
@@ -53,9 +58,11 @@ import System.Signal
 import Transient.Mailboxes (putMailbox)
 
 {-# NOINLINE outputlock #-}
+-- | Mutex protecting concurrent writes to stdout (currently a no-op; see 'lockOut').
 outputlock :: MVar ()
 outputlock  = unsafePerformIO $ newMVar ()
-lockOut = id -- withMVar outputlock . const
+-- | Wrap an IO action to serialise stdout output. Currently identity (no locking).
+lockOut = id
 
 -- * Non-blocking keyboard input for multiple threads
 
@@ -77,7 +84,7 @@ option ::
   TransIO b
 option = optionf False
 
--- Implements the same functionality than `option` but waits only once for a single input 
+-- | Like 'option' but the listener is removed after the first match (one-shot).
 option1 ::
   (Typeable b, Show b, Read b, Eq b) =>
   b ->
@@ -100,9 +107,9 @@ optionf remove ret message =  do
       liftIO $ putStrLn message -- "\noption: " >> putStrLn sret
       return ret
 
--- a new option/input has been added. should be applied to the line if none has parsed the last fragment
-newInput= unsafePerformIO $ newIORef False
 {-# NOINLINE newInput #-}
+-- | Set to 'True' when a new option\/input handler has been registered, so 'processLine' retries with the updated handler list.
+newInput= unsafePerformIO $ newIORef False
 
 -- | General asynchronous console input.
 --
@@ -239,9 +246,6 @@ input cond prompt = inputf True "input" prompt Nothing cond
 input' :: (Typeable a, Loggable a) =>  a -> (a -> Bool) -> String -> TransIO a
 input' v cond prompt = inputf True "input" prompt (Just v) cond
 
--- -- input removed after use either if it validades or not
--- input1 cond prompt = inputf False "input" prompt Nothing cond
-
 newtype NavBack= NavBack Bool
 
 newtype NavResps  =  NavResps  (M.Map String String) deriving (Read,Show, Typeable) --(Generic,ToJSON,FromJSON,Typeable)
@@ -305,6 +309,7 @@ inputNav mv cond prompt= do
 
 
 {-# NOINLINE rprompt #-}
+-- | The prompt string printed before each line of input (default @"tr > "@).
 rprompt = unsafePerformIO $ newIORef "tr > "
 
 inputLoop =
@@ -323,8 +328,10 @@ inputLoop =
 
 
 {-# NOINLINE rdefault #-}
+-- | Pre-filled default text shown in the input line (consumed by 'getLineNoBuffering').
 rdefault= unsafePerformIO $ newIORef ""
 
+-- | Read a line from @stdin@ in raw (no-buffering) mode, supporting cursor movement and delete keys.
 getLineNoBuffering= do
   hSetBuffering stdin NoBuffering
   hSetBuffering stdout NoBuffering
@@ -416,8 +423,8 @@ getLineNoBuffering= do
   loop
 
 {-# NOINLINE rconsumed #-}
-
--- Remaining line not parsed yet. Nothing -> no parser has consumed any fragment yet. Just -> a parser has consumed a fragment
+-- | Remaining input fragment after the last successful parse.
+-- 'Nothing' = no parser has consumed anything yet; 'Just rest' = consumed up to @rest@.
 rconsumed :: IORef (Maybe String)
 rconsumed = unsafePerformIO $ newIORef Nothing
 
@@ -539,13 +546,14 @@ keep mx = do
               
           setData $ Exit (typeOf $ typevar rexit ) rexit
 
-          readFromFile 
-          -- <|> do
+          -- readFromFile 
           do
+          
               option "alloptions" "show all options"
               mbs <- consoleCallbacks
               let filteryn x = x == "y" || x == "n" || x == "Y" || x  == "N"
               prefix <- input' "" (not . filteryn) "command prefix? (default none) "
+              ttr ("PREFIX",prefix)
               liftIO $ mapM_ ((\c -> when (prefix `isPrefixOf` c) $ do putStr c; putStr "|") . (\(fst, _, _,_,_) -> fst)) mbs
 
               d <- input' "n" filteryn "\nDetails? N/y "
@@ -587,9 +595,6 @@ keep mx = do
                   empty
           <|> do
 
-                  -- let installHand sig callback= installHandler sig (Catch $ callback ()) Nothing
-                  -- sig <-  react (installHand keyboardSignal) (return ())  -- <|> react (System.Signal.installHandler sigTERM) (return ())
-                  -- sig <- react (System.Signal.installHandler sigINT) (return ())  <|> react (System.Signal.installHandler sigTERM) (return ())
                   let react' h= react h (return ())
                   sig <- foldl' (<|>) empty $ map  (react' . installHandler) [sigINT, sigTERM,sigABRT,sigFPE,sigILL,sigINT,sigSEGV]
                   let sigmsg= "signal: "<> show sig <> " received"
@@ -612,27 +617,12 @@ keep mx = do
                      syncCache
                      putStrLn "\nSaved!!"
                   empty
-                {-
-                <|> do
-                      option "log" "inspect the log of a thread"
-                      th <- input (const True)  "thread number>"
-                      ml <- liftIO $ getStateFromThread th st
-                      liftIO $ print $ fmap (\(Log _ _ log _) -> reverse log) ml
-                      empty
-                      -}
 
           <|> do
                   option "end" "exit"
                   -- liftIO $ putStrLn "exiting..."
                   abduce
 
-                  -- st <- threadState $ fromString "input"
-                  -- liftIO $ killThread $ threadId st
-                  --  killChilds
-                  -- top <- topState
-                  -- liftIO $ killChildren  top
-                  -- liftIO $ killThread $ threadId top
-                  -- liftIO $ putMVar rexit $ Left "end"
                   exitLeft "end"
                   empty
             <|> do
@@ -760,10 +750,11 @@ execCommandLine :: IO ()
 execCommandLine = do
       writeIORef commandLine True
       path <- thereIsArgPath
-      putStr "Executing: " >> print  path
-      ttr ("path",path)
-      threadDelay 10000
-      processLine    path
+      when(not$ null path) $ do
+        putStr "Executing: " >> print  path
+        ttr ("path",path)
+        threadDelay 10000
+        processLine    path
 
 -- substitute one of more separators by a single '/'
 subst = subst1
