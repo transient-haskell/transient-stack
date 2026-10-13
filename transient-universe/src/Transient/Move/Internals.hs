@@ -1959,6 +1959,9 @@ listenNew port conn' = do
         else do
           tr "sending OK"
           sendRaw conn "OK" --    !> "CLOS detected"
+          -- a node has connected (maybe it has recovered): the jobs that were waiting for it are launched
+          -- ('Transient.Move.Job.runJobs')
+          putMailbox (Ping remNode)
           tr ("listenNew REMOTE NODE", unsafePerformIO $ readIORef $ remoteNode conn, idConn conn )
 
           -- when the other node closes the connection (it fell), the reader finishes: the connection is marked as
