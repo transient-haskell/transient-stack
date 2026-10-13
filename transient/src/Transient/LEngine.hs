@@ -139,6 +139,8 @@ data TranShip = forall a b. TranShip
   , parseContext :: ParseContext
   , execMode :: ExecMode
   , isApplicative :: Bool
+  , onApplicative :: Maybe AppHook
+    -- ^ hooks of the applicative: see 'AppHook'. A field and not a 'mfData' entry: it is read in every @<*>@
   } deriving Typeable
 
 -- data IsApplicative= NoApp | AppFirst | AppSecond deriving Eq
@@ -211,7 +213,8 @@ emptyTranShip th label par childs =
          , labelth    = label
          , parseContext = ParseContext (return SDone) mempty (unsafePerformIO $ newIORef True)
          , execMode = Serial
-         , isApplicative= False}
+         , isApplicative= False
+         , onApplicative= Nothing}
 
 -- | Run a transient computation with a default initial state. This is for basic testing. This does NOT support effects
 runTransient :: TransIO a -> IO (Maybe a, TranShip)
@@ -312,13 +315,21 @@ instance Applicative TransIO where
   (<*>) :: TransIO (a -> b) -> TransIO a -> TransIO b
   mf <*> mx = hookedAp mf mx
 
--- | Hooks of the applicative. (It is a @data@ and not a @newtype@: the values of the state are shown as @()@ in the traces, which forces them, and a bare function can not be forced as @()@.) A program can install an 'AppHook' in the state (with 'setData') so that something is
--- done around the two terms of every @<*>@ of 'TransIO' in the computations that run with that state, and in
--- all the types that are derived from 'TransIO' (the instances of a newtype over 'TransIO' do not have to be
--- defined again). 'Transient.Move.Defs' installs the hook that logs the result of both terms of a distributed
--- applicative, see @appHook@.
+-- | Hooks of the applicative. A computation can set the field 'onApplicative' of its state so that something is
+-- done around the two terms of every @<*>@ of 'TransIO' that runs with that state, and in all the types that are
+-- derived from 'TransIO' (the instances of a newtype over 'TransIO' do not have to be defined again).
+-- 'Transient.Move.Defs' defines the hook that logs the result of both terms of a distributed applicative, see
+-- @appHook@.
 --
--- Without a hook, the applicative is the one described in 'apTransIO'.
+-- The field is ambient: the @\<*>@ of a 'TransIO' computation inside a @local@ also finds it. That is harmless: the
+-- hook leaves no trace when the first term finishes in the same thread, and the log of what runs inside a logged
+-- statement is replaced by its value when the statement ends. (Clearing the field while @local@ runs does not
+-- work: the threads that are forked inside it never see the restoring of the field.)
+--
+-- Without a hook the applicative is the one described in 'apTransIO'.
+--
+-- (It is a @data@ and not a @newtype@: the values of the state are shown as @()@ in the traces, which forces
+-- them, and a bare function can not be forced as @()@.)
 data AppHook = AppHook { newAppNode :: IO AppNode }
 
 -- | The hooks of a node of the applicative (one @<*>@): L is the left term, R the right one. They are executed
@@ -332,7 +343,7 @@ data AppNode = AppNode
 
 hookedAp :: TransIO (a -> b) -> TransIO a -> TransIO b
 hookedAp mf mx = do
-    mhook <- gets $ \s -> (fmap unsafeCoerce $ M.lookup (typeOf (undefined :: AppHook)) (mfData s) :: Maybe AppHook)
+    mhook <- gets onApplicative
     case mhook of
       Nothing                -> apTransIO mf mx
       Just (AppHook newNode) -> do

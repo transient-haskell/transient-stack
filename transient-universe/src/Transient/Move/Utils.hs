@@ -239,7 +239,7 @@ initWebApp node app=  do
     liftIO $ writeIORef (myNode conn)  node
     setNodes  [node]
     setState conn
-    setData appHook  -- logs both terms of an applicative: see 'appHook' in Defs
+    modify $ \s -> s{onApplicative= Just appHook}  -- logs both terms of an applicative: see 'appHook' in Defs
     serverNode <- getWebServerNode  :: TransIO Node
     mynode     <- if isBrowserInstance
                     then  do
