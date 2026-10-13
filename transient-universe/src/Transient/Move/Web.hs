@@ -2,15 +2,12 @@
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
--- {-# LANGUAGE OverlappingInstances #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE UndecidableInstances #-}
 {-# LANGUAGE InstanceSigs #-}
 {-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
 {-# HLINT ignore "Use typeRep" #-}
-
--- All of this for the glory of God and His mother Mary
 
 #ifndef ghcjs_HOST_OS
 
@@ -85,6 +82,8 @@ import Text.Read (readMaybe)
 import Control.Exception hiding(try,onException)
 
 data InitSendSequence = InitSendSequence
+
+newtype Publishing = Publishing [String]
 
 data IsCommand = IsCommand deriving (Show)
 
@@ -165,6 +164,27 @@ instance Semigroup HTTPReq where
 -- same code base, prefer 'runAt' and other distributed primitives over
 -- @minput@. @minput@ is the primary way to interact with external clients that
 -- do not share the application code.
+
+-- | Initialize the session from the browser's 'state' cookie, or create a new
+-- one if absent.  Returns the (possibly updated) session ID and 'PrevClos' DBRef.
+initSession :: BC.ByteString -> TransIO ()
+initSession idSession = when (idSession == "0") $ do
+  ttr "INITSESSION"
+  session <-  getSessionFromCookieAndLog 
+  setSession session
+ <|> return()
+  where
+  getSessionFromCookieAndLog= logged $ do
+      HTTPHeaders _ headers <- getState <|> return (HTTPHeaders undefined [])
+      when (null headers) $
+          error "initSession: no Headers"  -- sin contexto HTTP (Self/cross-call/replay): no generar sesión
+      mc <- getCookie "state"
+      case mc of
+        Just c | not (BC.null c) -> return c
+        _ -> do s <- genSessionId
+                setCookie "state" $ BS.fromStrict s <> "; Path=/"
+                return s
+
 minput
   :: (ToJSON p, Loggable a, ToHTTPReq a, Typeable p) =>
      String -> p -> Cloud a
@@ -201,10 +221,12 @@ minput (ident :: String) msg' = onAll $ sandboxData (ofType :: ClosToRespond) $ 
               | typeOf msg' == typeOf (ofType :: String) = BS.pack  $ unsafeCoerce  msg'
               | typeOf msg' == typeOf (ofType :: BS.ByteString) = unsafeCoerce msg'
               | otherwise = msg
-        setState $ InputData ident msgdat httpreqsess
-        first <- liftIO $ atomicModifyIORef firstEndpointName $ \x -> if null x then (ident, True) else (x, False)
-        when first $ liftIO $ print urlbase
-
+              
+        -- publish immediately if we're inside a publish block
+        Publishing keys <- getState  <|> return (Publishing [])
+        let idata = InputData ident msgdat httpreqsess
+        liftIO $ mapM_ (\k -> atomicModifyIORef rpublished $ \map ->
+            (let idatas = idata : fromMaybe [] (M.lookup k map) in M.insert k idatas map, ())) keys
         connected log  idSession conn closLocal  httpreq -- <|> commandLine conn log httpreq
 
 
@@ -212,17 +234,6 @@ minput (ident :: String) msg' = onAll $ sandboxData (ofType :: ClosToRespond) $ 
 
       cdata <- liftIO $ readIORef $ connData conn
 
-      -- onException $ \( e :: SomeException) -> do -- 
-      --                   let tosend = {- header404Chunked <> -} str "{\"error\"," <> str (show $ show e) <> str "}"
-      --                   output tosend
-      --                   msend conn $ str "1\r\n]\r\n0\r\n\r\n"
-      --                   let l= fromIntegral $ BS.length tosend
-      --                   msend conn $ toHex l <> str "\r\n" <> tosend <> "\r\n0\r\n\r\n"
-      --                   empty
-
-      -- onException $ \(e :: SomeException) -> do liftIO $ print "THROWT"; throwt e; empty
-
-      -- liftIO $ atomically $ writeDBRef (getDBRef $ show idSession) ctx -- store the state, the id will be in the URL
       Endpoints endpts <- getEndpoints
       ttr ("insert endpoint",ident)
       setRState $ Endpoints  $ M.insert (str ident) httpreq endpts
@@ -238,19 +249,22 @@ minput (ident :: String) msg' = onAll $ sandboxData (ofType :: ClosToRespond) $ 
                 endpointEtc
                 tr "SELF XXX"
                 (string "e/" >> string "e/") <|> return "e/"
-                readResponse
+                r <- readResponse
+                initSession idSession
+                return r
+
+                
               _ -> do
-                checkComposeJSON conn
+                sendCookies conn
 
                 let tosend = str "{ \"msg\":" <>  msg <> str ", \"req\":" <> encode httpreq <> str "}"
                 let l = fromIntegral $ BS.length tosend
-                -- for HTTP 1.0 no chunked encoding:
-                -- msend conn $ str "HTTP/1.0 200 OK\r\nContent-Length: " <> str(show l) <> str "\r\n\r\n" <> tosend
-                -- mclose conn
-                msend conn $ toHex l <> str "\r\n" <> tosend <> "\r\n" -- <>  "\r\n0\r\n\r\n"
+                msend conn $ toHex l <> str "\r\n" <> tosend <> "\r\n"
                 tr "after msend"
                 endpointEtc
-                readResponse
+                r <- readResponse
+                initSession idSession
+                return r
 
           else do
             -- the program has just restarted and recovered and this endpoint is active waiting for requests.
@@ -258,10 +272,12 @@ minput (ident :: String) msg' = onAll $ sandboxData (ofType :: ClosToRespond) $ 
 
             endpointEtc
             -- logged will deserialize the request parameters
-            readResponse
+            r <- readResponse
+            initSession idSession
+            return r
 
             
-      tr ("MINPUT RESULT",result)
+      ttr ("MINPUT RESULT",result)
       delRState InitSendSequence
       delState IsCommand
       return result `asTypeOf` return (type1 response)
@@ -275,7 +291,8 @@ minput (ident :: String) msg' = onAll $ sandboxData (ofType :: ClosToRespond) $ 
 
 
         endpoint (Just $ BC.pack ident)
-
+        -- for cross-sessions where there is a jump
+        -- in which one user/session invokes a link/endpoint of another
         mmfdata <- getSessionData
       
         when (isJust mmfdata) $ do
@@ -287,9 +304,10 @@ minput (ident :: String) msg' = onAll $ sandboxData (ofType :: ClosToRespond) $ 
             -- endpoint (Just $ BC.pack ident) <|> return()
 
       merge = M.unionWithKey combine
-      combine t x y=  if t == typeOf (ofType :: Connection) 
-                           || t == typeOf(ofType :: PrevClos) 
-                           || t == typeOf(ofType :: Log) then y else x
+      combine t x y=  if    t == typeOf (ofType :: Connection) ||
+                            t == typeOf (ofType :: PrevClos)  ||
+                            t == typeOf (ofType :: Log) 
+                      then y else x
 
     (</>) x y = x <> str "/" <> y
     str = BS.pack
@@ -319,19 +337,9 @@ rpublished= lazy $ newIORef (M.empty :: M.Map String [InputData])
 publish k i= publishn [k] i
 
 publishn ::  [String] -> Cloud a -> Cloud a
-publishn keys inp= inp  <|> onAllNodes (do
-  ttr ("PUBLISH",keys)
-  idata :: InputData  <-  getState  <|> error "publish: no inputdata"
-  mapM_ (add idata) keys
-  ttr ("publish",idata,keys)
-  empty)
-  where
-  add idata k= liftIO $ do
-    atomicModifyIORef rpublished $ \map -> 
-        ( let idatas= fromMaybe [idata] (M.lookup k map) in M.insert k idatas map,())
-    -- inputdatas <- ( liftIO (readIORef rpublished) >>= return . M.lookup k) `onNothing` return []
-    -- ttr ("PUBLISHED",inputdatas)
-
+publishn keys inp= Cloud $ sandboxData (ofType :: Publishing) $ do
+  setState $ Publishing keys
+  unCloud inp
 
 
 published ::  String -> TransIO ()
@@ -340,63 +348,7 @@ published k=  do
     ttr ("PUBLISHED", inputdatas)
     foldr ((<>) . (\(InputData id msg url ) ->  sendOption msg url)) mempty inputdatas
 
--- | set a pending endpoint for a key. if the endpoint is executed, it dissapears from the list for this key. 
--- For example an userid or a wallet may be the key. 
---
--- An use case:  in the middle of a some smart contract or in 
--- general, in any workflow the user/wallet does not complete the transaction but the endpoint is marked as pending . 
--- When the user return to the application, 'published key' has this endpoint and may be made visible in the first interaction of this
--- new session. 
--- pending key inp= do
---   idata <- local getState
---   r <- publish key inp
---   local $ liftIO $ withResource(InputDatas key undefined) $ \case 
---               Nothing                  -> InputDatas key []
---               Just(InputDatas k lcks) -> InputDatas k $ delete  idata lcks
---   return r
-
-
-
--- | send to the cllient all the endpoints published by `publish` with the given key
--- published1 :: Loggable a => String -> TransIO a
--- published1 k=  do
---     InputDatas _ inputdatas <- getIndexRData k `onNothing` return (InputDatas k [])--  liftIO $ getResource (InputDatas k undefined)  `onNothing` return (InputDatas k []) -- getRState
---     tr ("PUBLISHED", inputdatas)
-
---     mcommand <- getData :: TransIO (Maybe IsCommand)
---     if isNothing mcommand
---       then do foldr ((<|>) . (\(InputData id msg url) ->  sendOption msg url)) empty inputdatas; empty
---       else do foldr ((<|>) . (\(InputData id msg url) ->  optionl id  (BS.unpack msg <> "\t\"endpt " <> id <> "\" for endpoint details")  url)) empty inputdatas
---     empty
---     where
---     -- for console interaction
---     optionl id msg url = do
---       Endpoints endpts <- getEndpoints
---       setRState $ Endpoints $ M.insert (str id) url endpts -- ((str id, url): endpts)
-
---       option id msg
---       pars' <- input (const True) "enter the parameters > "
---       tr ("PARS'",pars')
---       -- substitute spaces by '/'
---       pars <- withParseString (BS.pack pars') $ chainMany mappend (tTakeWhile' (/= ' ') <> ((tChar ' ' >>tTakeWhile' (==' ') >> "/") <|> mempty))
---       tr ("PARS",pars)
---       let p = requrl url
---       (cl,s,cl',s',ids) <- withParseString p $  do
---            string "http://" ; tTakeWhile' (/='/')
---           --  (,,,,) <$> deserialize <*> deserialize <*> deserialize <*> deserialize <*> deserialize 
---            (,,,,) <$> tTakeWhile' (/='/') <*> tTakeWhile' (/='/')  <*> tTakeWhile' (/='/') <*> tTakeWhile' (/='/') <*> tTakeWhile' (/='/')
---       tr ("CL S",cl,s,cl',s',ids)
---       Transient $ processMessage (SessionId $ BS.toStrict s) 
---                                  (ClosureId $ BS.toStrict cl)  
---                                  (SessionId $ BS.toStrict s') 
---                                  (ClosureId $ BS.toStrict cl') 
---                                  (Right $ [[lazyByteString $ ids <> "/" <> pars]]) False
---       return ()
-
-
-
-
-getEndpoints= getRState <|> return (Endpoints M.empty) -- |error "NO ENDPOINT state: use optionEndpoints" -- return (Endpoints M.empty)
+getEndpoints= getRState <|> return (Endpoints M.empty)
 
 -- | show the URL that may be called to access that functionality within a program 
 showURL= getURL >>= liftIO . print
@@ -429,16 +381,6 @@ getURL = do
     , BC.unpack (BL.toStrict logBytes)
     ]
 
- -- | extract the URL of a data object within the computation.
- -- if the log has been saved and the computation completed, the computation will be restored to give his value
--- cloudRef x= do
---   prevsession <- local getSession
---   r <- onAll getURL
---   local $ return x
---   session <- local getSession
---   guard $ session== prevsession
---   return r
-
 
 
 
@@ -448,8 +390,6 @@ getURL = do
 -- | menu to show info about the endpoints available
 optionEndpoints :: Loggable a => Cloud a
 optionEndpoints = do
-  -- Endpoints endpts <- getEndpoints
-  -- guard(not $ null endpts)
     ttr ("optionEndpoints")
     onAllNodes $ newRState $ Endpoints M.empty
     local $ do
@@ -469,30 +409,12 @@ optionEndpoints = do
                       (if reqtype req== GET then mempty else ("-H 'content-type: application/json' -XPOST -d " <>
                         "\"" <> encode (reqbody req)) <> "\" ")) <> requrl req)
 
--- | add the chunked fragments of the beguinning '[', the comma separator and the end ']' of the JSON packet for a set of `minput` statements
--- that are sent in parallel (for example, with the alterenative operator)
-checkComposeJSON :: Connection -> TransIO ()
-checkComposeJSON conn = do
-  ms <- getRData -- avoid more than one onWaitthread, add "{" at the beguinning of the response
-  -- and send the final chunk when no thread is active.
-  case ms of
-    Nothing -> do
-      onWaitThreads $ const $ msend conn $ str "1\r\n]\r\n0\r\n\r\n"
-      setRState InitSendSequence
-
-      sendCookies conn
-      msend conn  {- header200Chunked <> -} "\r\n1\r\n[\r\n"
-      delState $ Cookies []
-
-    Just InitSendSequence -> msend conn $ str "2\r\n\n,\r\n"
-  -- to protect the state  upto now  if an exception arrives in order to incorporate exception data to the JSON message sent
-  where
-  sendCookies :: Connection -> TransIO ()
-  sendCookies conn= do
+sendCookies :: Connection -> TransIO ()
+sendCookies conn= do
       cookies <- getCookiesStr
       ttr ("COOKIES",cookies)
       when (not $ BS.null cookies) $ msend conn cookies
-
+  where
   getCookies= getState <|> return (Cookies [])
 
 
@@ -508,49 +430,6 @@ str = BS.pack
 
 
 
--- -- | set a cookie in the browser.
--- -- Example
-
--- -- > setCookie "<cookie-name>" "<cookie-value>; Domain=<domain-value>; Secure; HttpOnly"
--- -- 
--- -- See https://developer.mozilla.org/es/docs/Web/HTTP/Headers/Set-Cookie for cookie options
--- setCookie :: BS.ByteString -> BS.ByteString -> TransIO ()
--- setCookie name valueandparams= do
---   Cookies cs <- getCookies
---   setState $ Cookies $ (name,valueandparams):cs
---   where
---   getCookies :: TransIO Cookies
---   getCookies= getState <|> return (Cookies [])
-
-
--- getCookie :: BS.ByteString -> TransIO (Maybe BC.ByteString)
--- getCookie name= do
---   HTTPHeaders _ headers :: HTTPHeaders <- getState <|>  return (HTTPHeaders undefined [])
---   ttr ("getCookie HTTP HEADERS",headers)
---   let receivedCookie= lookup "Cookie" headers
-
---   liftIO $ print ("cookie", receivedCookie)
---   case receivedCookie of
---     Just str->  (withParseString (BS.fromStrict str) search) <|> return Nothing
---     Nothing -> return Nothing
---     where
---     search= do
---        tr "search cookie"
---        d <- isDone
---        if d then return Nothing else do
---                 dropSpaces
---                 name' <- tTakeWhile' (/='=')
---                 val <- tTakeWhile' (/=';')
---                 liftIO $ print (name',val)
---                 if name'== name then return $ Just $ BS.toStrict val else search
-
---  cookies for pointers to state data with timeouts. Used to persist the state of the current computation
--- when jump to  publish/published endpoints using HTTP(s). Mainly the state variables
-
-{-
-sessionid  stableptr  
-  
--}
 data SessionEntry = Entry { entryData :: StablePtr PolyMap, created :: UTCTime } deriving Show
 
 instance Show (StablePtr a) where
@@ -669,20 +548,12 @@ moutput = local . output
 --  | Send a JSON fragment
 sendFragment :: BS.ByteString -> TransIO ()
 sendFragment tosend = do
-  let l = fromIntegral $ BS.length tosend
-  tr ("SENDFRAGMENT000",tosend)
   conn <- getState
-  -- let tosend = tostr "{ \"msg\":" <>  toSend <> str "}"
+  ttr ("sendFragment conn", idConn conn, "remoteNode", unsafePerformIO $ readIORef $ remoteNode conn)
   let l = fromIntegral $ BS.length tosend
   ttr ("TOSEND",tosend,l)
-
-                -- for HTTP 1.0 no chunked encoding:
-                -- msend conn $ str "HTTP/1.0 200 OK\r\nContent-Length: " <> str(show l) <> str "\r\n\r\n" <> tosend
-                -- mclose conn
-
-
-  checkComposeJSON conn
-  msend conn $ toHex l <> "\r\n" <> tosend <> "\r\n"
+  conn' <- ensureWebConn conn
+  msend conn' $ toHex l <> "\r\n" <> tosend <> "\r\n"
 
 
 
@@ -726,44 +597,6 @@ instance ToHTTPReq a => ToHTTPReq [a] where
     f= undefined
 
 
--- instance  {-# OVERLAPPING #-} 
---           (Default a, ToJSON a, Typeable a
---           ,Default b, ToJSON b, Typeable b) => ToHTTPReq (POSTData(a,b)) where
---     toHTTPReq (POSTData x)=  addbody "["   <> toHTTPReq (POSTData (fst x)) <>
---                               addbody ", " <> toHTTPReq (POSTData (snd x)) <>
---                               addbody "]"
---       where
---       addbody s= return mempty{reqbody=s}
-
--- instance  (Default a, ToJSON a, Typeable a
---           ,Default b, ToJSON b, Typeable b
---           ,Default c, ToJSON c, Typeable c) => ToHTTPReq (POSTData(a,b,c)) where
---     toHTTPReq (POSTData x)=  addbody "["   <> toHTTPReq (POSTData (fst x)) <>
---                               addbody ", " <> toHTTPReq (POSTData (snd x)) <>
---                               addbody ", " <> toHTTPReq (POSTData (trd x)) <>
---                               addbody "]"
---       where
---       fst (x,_,_)= x
---       snd (_,x,_)= x
---       trd (_,_,x)= x
---       addbody s= return mempty{reqbody=s}
-
--- instance  (Default a, ToJSON a, Typeable a
---           ,Default b, ToJSON b, Typeable b
---           ,Default c, ToJSON c, Typeable c
---           ,Default d, ToJSON d, Typeable d) => ToHTTPReq (POSTData(a,b,c,d)) where
---     toHTTPReq (POSTData x)=  addbody "["   <> toHTTPReq (POSTData (fst x)) <>
---                               addbody ", " <> toHTTPReq (POSTData (snd x)) <>
---                               addbody ", " <> toHTTPReq (POSTData (trd x)) <>
---                               addbody ", " <> toHTTPReq (POSTData (frt x)) <>
---                               addbody "]"
---       where
---       fst (x,_,_,_)= x
---       snd (_,x,_,_)= x
---       trd (_,_,x,_)= x
---       frt (_,_,_,x)= x
---       addbody s= return mempty{reqbody=s}
-
 instance (ToHTTPReq a, ToHTTPReq b) => ToHTTPReq (a, b) where
    toHTTPReq x = toHTTPReq (fst x) <> toHTTPReq (snd x)
 
@@ -775,7 +608,6 @@ instance (ToHTTPReq a, ToHTTPReq b,ToHTTPReq c) => ToHTTPReq(a,b,c) where
       trd (_,_,x)= x
 
 instance (ToHTTPReq a, ToHTTPReq b,ToHTTPReq c,ToHTTPReq d) => ToHTTPReq(a,b,c,d) where
-    -- toHTTPReq (a,b,c,d)= toHTTPReq a <>  toHTTPReq b <>  toHTTPReq c <> toHTTPReq  d
     toHTTPReq x=  toHTTPReq (fst x) <>   toHTTPReq (snd x)<>  toHTTPReq (trd x) <> toHTTPReq (fr x)
       where
       fst (x,_,_,_)= x
@@ -788,19 +620,6 @@ newtype POSTData a = POSTData a deriving (ToJSON, FromJSON, Typeable, Show, Read
 instance (Loggable a, ToJSON a, FromJSON a) => Loggable (POSTData a)  where
   serialize (POSTData x)=  serializeToJSON x
   deserialize =   POSTData <$> deserializeJSON
-
-
--- instance ToHTTPReq (POSTData String) where
---   toHTTPReq (POSTData s) = return mempty {reqbody = "$string"}
-
--- instance ToHTTPReq (POSTData BS.ByteString) where
---   toHTTPReq (POSTData s) = return mempty {reqbody = "$string"}
-
--- instance ToHTTPReq (POSTData Int) where
---   toHTTPReq x = return mempty {reqbody = lowertype x}
-
--- instance ToHTTPReq (POSTData Integer) where
---   toHTTPReq x = return mempty {reqbody = lowertype x}
 
 
 data Vars= Vars[BS.ByteString]
