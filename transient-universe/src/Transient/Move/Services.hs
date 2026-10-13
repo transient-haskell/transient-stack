@@ -16,21 +16,6 @@
    , FlexibleContexts, UndecidableInstances, RecordWildCards
    , MultiParamTypeClasses, ExistentialQuantification #-}
 
-{-
-TODO:
- service=[("runsource", "this")]
- 
-    send the execution arguments, the source code to all monitors
-    compile it using the command arguments
-    find the host:port and set up them for each node
-
-generate a web interface for each service:
-   get the type of the argument
-   parse the type and generate axiom source code.
--}
-
-
-
 module Transient.Move.Services (
 runService,callService, callService',callServiceFail,serve,ping
 , monitorNode, monitorService, setRemoteJob,killRemoteJob
@@ -113,21 +98,8 @@ monitorService = Service $ M.fromList $
 
 monitorPort= 3000
 
-
--- monitorHeader req body= [("service","monitor"), ("type","HTTP")
---         ,("nodehost","localhost")
---         ,("nodeport","5001")
---         ,("HTTPstr",req <> " HTTP/1.1\r\nHost: $hostnode" <> 
---             -- (if take 4 req/="POST" then "" else 
---             "\r\nContent-Length: "<> 
---             show (Prelude.length body) <>"\r\n\r\n" <> body)]
-
--- requestInstances = monitorHeader "GET /api/v0/cat?arg=$1" ""
-
--- callService  p= unCloud $ Services.callService monitorHeader p
-
-
-
+-- | Re-initialise a service node: returns a cached node if already known,
+-- otherwise requests a fresh instance from the monitor.
 reInitService ::  Node -> Cloud Node
 reInitService   node= loggedc $ cached <|> installIt
     where
@@ -191,6 +163,7 @@ requestInstance service num=  loggedc $ do
        local $ addNodes nodes                                                       -- !> ("ADDNODES",service)
        return nodes
 
+-- | Like 'requestInstance' but directs the request to the monitor on a specific @hostname@.
 requestInstanceHost :: String -> Service -> Cloud Node
 requestInstanceHost hostname service= do
     monitorHost <- localIO $ createNodeServ hostname
@@ -202,6 +175,8 @@ requestInstanceHost hostname service= do
     local $ addNodes nodes
     return node
 
+-- | Like 'requestInstance' but first removes @node@ from the known-nodes list,
+-- signalling that it failed, then asks the monitor for a replacement.
 requestInstanceFail :: Node -> Int -> Cloud [Node]
 requestInstanceFail node num=  loggedc $ do
       --  return ()  !> "REQUEST INSTANCEFAIL"
@@ -217,7 +192,11 @@ requestInstanceFail node num=  loggedc $ do
        return nodes
 
 
+{-# NOINLINE rmonitor #-}
 rmonitor= unsafePerformIO $ newMVar ()  -- to avoid races starting the monitor
+
+-- | Start the @monitorService@ process if not already running.
+-- Uses 'rmonitor' as a mutex to avoid duplicate launches.
 startMonitor :: TransIO ()
 startMonitor = liftIO $ do
     -- return () !> "START MONITOR"
@@ -239,12 +218,14 @@ startMonitor = liftIO $ do
 
 monitorHandle= unsafePerformIO $ newIORef Nothing
 
+-- | Kill the monitor process started by 'startMonitor', if any.
 endMonitor= do
     mm <- readIORef monitorHandle
     case mm of
         Nothing -> return ()
         Just h  -> interruptProcessGroupOf h
 
+-- | Return all nodes in the cluster that advertise the given 'Service'.
 findInNodes :: Service -> TransIO [Node]
 findInNodes service =  do
       nodes <-  getNodes
@@ -255,15 +236,6 @@ findInNodes service =  do
       head1 []= (mempty,mempty)
       head1 x= head x
       hasService  service node= not $ null $ filter (\s -> lookupService "service" s== lookupService "service" service) $ nodeServices node
-
--- >>> :t  head $ nodeServices(ofType :: Node) 
--- head $ nodeServices(ofType :: Node) :: (Package, Program)
---
-
--- nodeServices :: Node -> Service
---
-
-
 
 
 
@@ -318,11 +290,14 @@ inputAuthorizations=  onServer $ Cloud $ do
 rfreePort :: MVar Int
 rfreePort = unsafePerformIO $ newMVar  (monitorPort +2) -- executor use 3001 by default
 
+-- | Allocate the next free port number from 'rfreePort'.
 freePort :: MonadIO m => m Int
 freePort=   liftIO $ modifyMVar rfreePort $ \ n -> return (n+1,n)
 
 
 
+-- | Return 'True' if @ident@ is permitted to use @service@ according to
+-- the allow/ban lists managed by 'inputAuthorizations'.
 authorizeService :: MonadIO m =>  String -> Service -> m Bool
 authorizeService ident service=   do
 
@@ -382,6 +357,7 @@ callService service params = loggedc $ do
 
 
 
+-- | Register a remote job ID so it can be killed later with 'killRemoteJob'.
 setRemoteJob :: BSS.ByteString -> Node -> TransIO ()
 setRemoteJob thid node= do
       JobGroup map  <- getRState <|> return (JobGroup M.empty)
@@ -390,6 +366,7 @@ setRemoteJob thid node= do
 data KillRemoteJob = KillRemoteJob BSS.ByteString deriving (Read,Show, Typeable)
 instance Loggable KillRemoteJob
 
+-- | Send a kill request for job @thid@ to @node@.
 killRemoteJob :: Node -> BSS.ByteString -> Cloud ()
 killRemoteJob node thid= callService' node (KillRemoteJob thid)
 
@@ -442,8 +419,6 @@ callService' node params =  loggedc $ do
           modifyData' (\log -> log{recover=True}) $ error "No log????"
           withParseString (toLazyByteString $ serialize params <> byteString (BSS.pack "/")) $ unCloud svs
           modifyData' (\log -> log{recover=True}) $ error "No log????"
-          -- log <- getState
-          -- setParseString $ toLazyByteString $ buildLog log -- ??? to test
           r <- logged empty
 
           return r
@@ -474,20 +449,6 @@ callService' node params =  loggedc $ do
 
 
 
-    -- on exception, callService is called to reclaim a new node to the monitor if necessary
-
- ---- `catchc` \(e :: SomeException ) -> do onAll $ delNodes [node] ; callServiceFail   node params
-
- {-   
- typea :: a -> Cloud a
- typea = undefined
- restoreLog (Log _ _ logw hash)= onAll $ do
-       Log _ _ logw' hash' <- getSData <|> return emptyLog
-
-       let newlog= reverse logw' ++ logw
---       return ()                 !> ("newlog", logw,logw')
-       setData $ Log False newlog newlog (hash + hash')
--}
 
 
 
@@ -543,8 +504,7 @@ runService servDesc defPort servs proc= unCloud $
    ping :: () -> Cloud ()
    ping = const $ return () -- !> "PING"
 
-   serveerror  = empty -- :: Raw  ->   Cloud()
-   -- serveerror (Raw  p)= error $  "parameter mismatch calling service  (parameter,service): "++ show (p,servDesc)
+   serveerror  = empty
 
 
 
@@ -563,29 +523,12 @@ runService' servDesc defPort servAll proc=  do
        onAll $ liftIO $ writeIORef selfServices servAll
        serverNode <- initNodeServ servDesc
        wormhole serverNode $ inputNodes <|> proc >> empty >> return ()
-      --  return () !> "ENTER SERVALL"
        onAll $ symbol $ BS.pack "e/"
        servAll
        tr "before  teleport"
        teleport
 
        where
-
-       servAll' = servAll
-
-              `catchc` \(e:: SomeException ) -> do
-                   setState emptyLog
-                  --  return () !> ("ERRORRRRRR:",e)
-                   node <- local getMyNode
-                   sendStatusToMonitor  $ show e
-
-                   local $ do
-                      conn <- getState
-                      (sess, closRemote) <- getSessClosure <$> getIndexData (idConn conn) `onNothing` error "teleport: no closRemote"
-                      conn <- getData `onNothing` error "reportBack: No connection defined: use wormhole"
-                      msend conn  $ toLazyByteString $ serialize (SError $ toException $ ErrorCall $ show $ show $ CloudException node sess closRemote $ show e :: StreamData NodeMSG)
-                      empty -- return $ toIDyn ()
-
 
        initNodeServ servs=do
           (mynode,serverNode) <- onAll $ do
@@ -608,12 +551,10 @@ runService' servDesc defPort servAll proc=  do
           inputAuthorizations <|> return ()
 
           onAll $ listen mynode <|> firstEndpoint
-          -- onAll $ liftIO $ print "LISTEN"
           return serverNode
 
           where
 
-          -- getNode :: TransIO Node
           getNode host port servs= def <|> getNodeParams <|> getCookie
               where
               def= do
@@ -679,7 +620,6 @@ serve  serv= do
 
 
 
--- callHTTPService :: (Subst1 a String, fromJSON b) =>  Node -> String -> a -> Cloud ( BS.ByteString)
 callHTTPService node service vars=  onAll $ do
   newVar "hostnode"  $ nodeHost node
   newVar "hostport"  $ nodePort node
@@ -708,37 +648,10 @@ callHTTPService node service vars=  onAll $ do
           | null str = (prev,str)
           | isPrefixOf sub str = (prev,drop (length sub) str)
           | otherwise = findSubstring sub (prev ++ [head str]) (tail str)
-  {-
-  where
 
-  getProxyNode nod t= do
-    let var= t ++ "_proxy"
-
-    p<- liftIO $ lookupEnv var
-    tr ("proxy",p)
-    case p of
-      Nothing -> return nod
-      Just hp -> do 
-        (upass,h,p )<- withParseString (BS.pack hp) $ do
-                tDropUntilToken (BS.pack "//") <|> return ()
-                (,,) <$> tTakeWhile' (/= '@') <*> tTakeWhile' (/=':') <*> int
-        nod<- liftIO $ createNodeServ (BS.unpack h) p [[("type","HTTP")]] 
-        tr upass
-        when (t == "https") $ do 
-              connect <- replaceVars$ subst
-                ("CONNECT $hostnode:$hostport  HTTP/1.1\r\n"
-                <> "Host: $hostnode:$hostport\r\n" 
-                <> "Proxy-Authorization: Basic "++ BS.unpack(encode upass)++"\r\n"
-                <> "\r\n" :: String) vars
-              con <- mconnect' nod
-              sendRaw con $ BS.pack connect
-              resp <- tTakeUntilToken (BS.pack "\r\n")
-              tr resp
-
-
-        return nod
--}
-
+-- | Interactive console for controlling a remote node via the monitor:
+-- streams its stdout and forwards local input to its stdin.
+-- Uses 'sendToNodeStandardInput' / 'receiveFromNodeStandardOutput' internally.
 controlNodeService node=  send <|> receive
       where
       send= do
@@ -788,6 +701,8 @@ controlNodeService node=  send <|> receive
          empty
 
 
+-- | Like 'controlNodeService' but communicates directly with the target node
+-- instead of routing through its monitor.
 controlNode node= send <|> receive
       where
       send= do
@@ -798,7 +713,6 @@ controlNode node= send <|> receive
             liftIO $ putStr "Controlling node " >> print nname
 
             oldprompt <- liftIO $ atomicModifyIORef rprompt $ \oldp -> ( nname++ "> ",oldp)
-            -- TODO FIX
             liftIO $ modifyMVar rcallbacks $ \all -> return (filter consoleCallback all,())
 
             cbs <- liftIO $ modifyMVar rcallbacks $ \cbs -> return ([],cbs) -- remove local node options
@@ -927,10 +841,11 @@ replaceVars (x:xs) = (:) <$> return x <*> replaceVars xs
 
 ---------------- substitution ---------------------------------------------
 
+-- | Replace @$1@, @$2@, … placeholders in @expr@ with the values from @a@.
 subst :: Subst1 a r => String -> a -> r
 subst expr= subst1 expr 1
 
-
+-- | Typeclass for variadic substitution of @$N@ variables into a string template.
 class Subst1 a r where
     subst1 :: String -> Int -> a -> r
 
@@ -1001,6 +916,8 @@ replace a b s@(x:xs) =
 
 
 
+-- | Like 'show' but returns the raw string for 'String' and 'ByteString' values
+-- without extra quotes.
 show1 :: (Show a, Typeable a) => a -> String
 show1 x | typeOf x == typeOf (""::String)= unsafeCoerce x
         | typeOf x == typeOf (ofType ::BS.ByteString)= BS.unpack $ unsafeCoerce x
