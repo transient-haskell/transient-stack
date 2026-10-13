@@ -3,7 +3,7 @@
 --   jobterm   the two terms of an applicative have a job inside the remote body; n2 dies during its wait
 --   nested    runAt n1 (runAt n2 body): the inner node n2 dies during its wait
 --   caller    job; applicative of two slow remote terms; the caller dies during the applicative
---   injob     job inside the first term of the applicative (KNOWN TO FAIL: no result, n2 re-executes the job and the body of the first term)
+--   injob     job inside the first term of the applicative: the job is ignored (see job' in Job.hs), the result arrives
 -- The result must arrive once at the caller: "RESULT <value>".
 --
 --   ajob -p start/127.0.0.1/<port>/saveonexit                       (a node that is killed)

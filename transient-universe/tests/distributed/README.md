@@ -32,7 +32,7 @@ counted, not read by eye.
 | `RunAtRestart` | `runrr.sh <tag> <binary> <port>` | the called node restarts in the middle of a `runAt` and responds to the caller afterwards |
 | `MultiUser` | `mu.sh`, `mu2.sh`, `mur.sh` | endpoints created by one session and invoked by another (`publish` / `published`), with and without restart |
 | `CollectTest` | `runcol.sh <tag> <binary> <port>` | `collectc` with `minput` across a restart |
-| `AppJob` | `runajob.sh <tag> <case> <n2\|n0\|none> <binary> <port>` | runAt + job with a node killed and restarted (`jobterm`, `nested`, `caller`; `injob` fails today). `AJ_SLOW` sets the slow term (µs) |
+| `AppJob` | `runajob.sh <tag> <case> <n2\|n0\|none> <binary> <port>` | runAt + job with a node killed and restarted (`jobterm`, `nested`, `caller`; `injob`: the job is ignored). `AJ_SLOW` sets the slow term (µs) |
 | `AppMinput` | `runminput.sh` | applicative of REST inputs (`minput`) |
 | `AssertTests` | `runassert.sh <tag> <binary> <port>`, `assertone.sh <index> <binary> <port>` | the assertion suite (four nodes). `assertone.sh` runs one test (`ASSERT_ONLY`) and reads `RESULT.txt` |
 
