@@ -1,13 +1,16 @@
 {-# LANGUAGE CPP,RecordWildCards,UndecidableInstances,ScopedTypeVariables,FlexibleContexts,MultiParamTypeClasses,
 ExistentialQuantification,FlexibleInstances,InstanceSigs #-}
 
-------------------------------------------------------------------------------
--- The engine contains all the basic definitions and instances
--- Intended to experiment with different instances for performance improvements
--- A computaiton in Haskell is in the form: (x >>= f) >>= f' .... .
--- The LEngine includes the "f" fragments of continuations stored in a list [f,f'] in the fcomp field of the TranShip state
--- It was the first solution and seems to be way faster to my surprise than the FEngine. Although I figured out what was the cause
+{- |
+The continuation-list engine for the Transient monad.
 
+Each @>>=@ step stores its @f@ fragment in the 'fcomp' list of the 'TranShip'
+state (@(x >>= f) >>= f'@ becomes @[f, f']@). When a new thread is forked the
+full list is copied, giving each thread its own continuation chain.
+
+This was the first engine implementation and benchmarks faster than the
+function-composition engine ('FEngine') for typical workloads.
+-}
 module Transient.LEngine where
 
 import Control.Monad
@@ -43,14 +46,20 @@ trace1= Debug.trace
 #endif
 
 
-indent, outdent :: MonadIO m => m ()
+-- | Increase the trace indentation level by 2.
+indent :: MonadIO m => m ()
+-- | Decrease the trace indentation level by 2.
+outdent :: MonadIO m => m ()
 
 indent =  liftIO $ modifyIORef rindent $ \n -> n+2
 outdent=  liftIO $ modifyIORef rindent $ \n -> n-2
 
 
 {-# NOINLINE rindent #-}
+-- | Global indentation counter used by the trace helpers.
 rindent= unsafePerformIO $ newIORef 0
+
+-- | Format a value for coloured terminal trace output, prefixed with timestamp and thread id.
 color :: Show a => a -> String
 color x= unsafePerformIO $ do
     t <- getCurrentTime
@@ -70,6 +79,7 @@ tttr :: (MonadIO m, Show a) => a -> m ()
 tttr x = liftIO $ putStrLn $ "\x1b[34mINFO\x1b[0m " <> color x
 
 
+-- | Always-on coloured trace (same as 'Debug.trace' but with 'color' formatting).
 tracec x f= Debug.trace (color x) f
 
 type StateIO = StateT TranShip IO
@@ -137,8 +147,6 @@ lazy= unsafePerformIO
 
 threadId s= lazy $ readIORef $ rThreadId s
 
--- {-# NOINLINE threadId #-}
--- threadId x= unsafePerformIO $ readIORef $ pthreadId x
 
 instance Read SomeException where
   readsPrec n str  = [(SomeException $ ErrorCall str,"")] -- $ "attempting to deserialize  error: <"<> str <> ">"
@@ -214,7 +222,7 @@ runTransient t = do
   let topState = emptyTranShip th label par childs
   runStateT (runTrans t) topState
 
--- | only used by keep* primitives
+-- | Like 'runTransient' but also writes the top state to 'rtopState'. Used by the @keep*@ primitives.
 runTransient1 :: TransIO a -> IO (Maybe a, TranShip)
 runTransient1 t = do
   th     <- myThreadId
@@ -226,6 +234,7 @@ runTransient1 t = do
   runStateT (runTrans t) topState
 
 {-#NOINLINE rtopState#-}
+-- | Global reference to the root 'TranShip' state. Initialised by 'runTransient1'.
 rtopState= unsafePerformIO $ newIORef $ error "no top state defined"
 
 -- | Run a transient computation with a given initial state. This is for basic testing. This does NOT support effects
@@ -234,6 +243,7 @@ runTransState st x = runStateT (runTrans x) st
 
 
 
+-- | Lift a 'Maybe' into 'TransIO': 'Just' succeeds, 'Nothing' stops with 'empty'.
 emptyIfNothing :: Maybe a -> TransIO a
 emptyIfNothing =  Transient  . return
 
@@ -250,18 +260,9 @@ runCont x TranShip { fcomp = fs } = runTrans $
   compose fs $ unsafeCoerce x
 
 
--- runContHang :: p -> TranShip -> StateT TranShip IO (Maybe a)
--- runContHang x TranShip{ fcomp = fs } =do
---    let   fs'=  \r -> do hang; fs r
---    runTrans $ unsafeCoerce fs'  x
-
-
 -- | Run the continuation included in the state. The result in the IO monad.
 runContIO :: p -> TranShip -> IO (Maybe a, TranShip)
 runContIO x cont = runStateT (runCont x cont) cont
-
--- runContHang' :: p -> TranShip -> IO (Maybe a, TranShip)
--- runContHang' x cont = runStateT (runContHang x cont) cont
 
 -- | Warning: Radically untyped stuff. handle with care
 getContinuations :: StateIO [a -> TransIO b]
@@ -269,15 +270,7 @@ getContinuations = do
   TranShip { fcomp = fs } <- get
   return $ unsafeCoerce  fs
 
-{-
-runCont cont = do
-  mr <- runClosure cont
-  case mr of
-    Nothing -> return Nothing
-    Just r -> runContinuation cont r
--}
-
--- | Compose a list of continuations. substitutes : for  >=> 
+-- | Compose a list of continuations. substitutes : for  >=>
 {-# INLINE compose #-}
 compose :: [a -> TransIO a] -> (a -> TransIO b)
 compose = foldr (>=>) (const empty)
@@ -388,20 +381,20 @@ instance Monad TransIO where
 
 
 {-# INLINABLE setEventCont #-}
+-- | Push the continuation @f@ of @x >>= f@ onto the 'fcomp' stack before executing @x@.
 setEventCont :: TransIO a -> (a -> TransIO b) -> StateIO ()
 setEventCont x f  = modify $ \TranShip { fcomp = fs, .. }
                            -> TranShip {fcomp = unsafeCoerce f :  fs
                                         , .. }
 
-
 {-# INLINABLE resetEventCont #-}
+-- | Pop the topmost continuation off the 'fcomp' stack after @x@ in @x >>= f@ has run.
 resetEventCont   =
    modify $ \TranShip { fcomp = fs, .. }
           -> TranShip { fcomp = tailsafe fs, .. }
--- resetEventCont k= modify $ \TranShip { .. } -> TranShip {fcomp = k, .. }
-
 
 {-# INLINE tailsafe #-}
+-- | 'tail' that returns @[]@ on an empty list instead of throwing.
 tailsafe :: [a] -> [a]
 tailsafe []     = []
 tailsafe (_:xs) = xs
@@ -424,6 +417,7 @@ instance (Monoid a) => Semigroup (TransIO a) where
 instance (Monoid a,Monad m) => Semigroup (StateT s m a) where
   (<>)=  mappendt
 
+-- | Lift 'mappend' through the applicative, combining two monoidal computations.
 mappendt x y = mappend <$> x <*> y
 
 
@@ -457,13 +451,12 @@ instance Show ParseError where
 
 instance Exception ParseError
 
+-- | Total 'read': throws 'ParseError' instead of raising an impure error on parse failure.
 read' s= case readsPrec' 0 s of
     [(x,"")] -> x
-
     _  -> throw $ ParseError $ "reading " ++ s
 
-
-
+-- | 'readsPrec' lifted to IO so that parse errors can be caught and re-thrown as 'ParseError'.
 readsPrec' n = unsafePerformIO . readWithErr n
 
   where
