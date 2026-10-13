@@ -11,7 +11,7 @@ mkdir -p /tmp/dtests && cp transient-stack/transient-universe/tests/distributed/
 cd /tmp/dtests
 for t in AppWait:appwait SeqFail:seqfail AppRestart:apprestart AppThree:appthree AppMore:appmore \
          MultiUser:multiuser CollectTest:collecttest RunAtRestart:runatrestart AppMinput:appminput \
-         AssertTests:asserttests; do
+         AssertTests:asserttests ParseSerial:parseserial AppJob:ajob; do
   src=${t%%:*}; bin=${t##*:}
   cabal exec -- ghc -package transient -package transient-universe -threaded -w -O0 \
       -outputdir build-$bin -o $bin transient-stack/transient-universe/tests/$src.hs
@@ -33,6 +33,7 @@ counted, not read by eye.
 | `MultiUser` | `mu.sh`, `mu2.sh`, `mur.sh` | endpoints created by one session and invoked by another (`publish` / `published`), with and without restart |
 | `CollectTest` | `runcol.sh <tag> <binary> <port>` | `collectc` with `minput` across a restart |
 | `AppJob` | `runajob.sh <tag> <case> <n2\|n0\|none> <binary> <port>` | runAt + job with a node killed and restarted (`jobterm`, `nested`, `caller`; `injob` and `seqterm`: a job and a sequence inside the first term). `AJ_SLOW` sets the slow term (µs) |
+| `ParseSerial` | `runparse.sh` | the applicative in Serial mode: parsers over a string and over streams (chunks cutting the numbers, one byte per chunk). The asynchronous-chunks cases give NO RESULT with the old applicative too |
 | `AppMinput` | `runminput.sh` | applicative of REST inputs (`minput`) |
 | `AssertTests` | `runassert.sh <tag> <binary> <port>`, `assertone.sh <index> <binary> <port>` | the assertion suite (four nodes). `assertone.sh` runs one test (`ASSERT_ONLY`) and reads `RESULT.txt` |
 
