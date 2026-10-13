@@ -24,15 +24,15 @@ import Control.Monad.State
 import Control.Applicative
 import Data.Typeable
 
-import Data.Typeable
-
+-- | Encode a value to JSON and wrap it in a lazy 'Builder'.
 serializeToJSON :: ToJSON a => a -> Builder
 serializeToJSON = lazyByteString . encode
 
+-- | Parse the next JSON element from the parse stream and decode it.
+-- Fails with 'empty' if decoding produces a 'Left'.
 deserializeJSON :: FromJSON a => TransIO a
 deserializeJSON = do
   modify $ \s -> s{execMode=Serial}
-  -- tr ("BEFOFE DECODE")
   s <- jsElem
   tr ("decode", s)
 
@@ -40,7 +40,9 @@ deserializeJSON = do
     Right x -> return x
     Left err -> empty
   
-jsElem :: TransIO BS.ByteString -- just delimites the json string, do not parse it
+-- | Consume one top-level JSON value from the stream and return it as a raw bytestring
+-- (object, array, or atom).  Does not fully parse — just delimits the extent.
+jsElem :: TransIO BS.ByteString
 jsElem = dropSpaces >> ( jsonObject <|> array <|> atom)
     where
     atom = elemString
@@ -66,28 +68,19 @@ instance {-# OVERLAPPING #-} Loggable Value where
   serialize = serializeToJSON
   deserialize = deserializeJSON
 
--- instance ToJSON SessionId where
---   toJSON(SessionId x)= toJSON x
-
--- instance FromJSON
-
-
 instance {-# OVERLAPPABLE #-} ToJSON a => Show a where
   show = BS.unpack . toLazyByteString . serializeToJSON . toJSON
 
 instance (Typeable a,FromJSON a) => Read a where
   readsPrec _ ss =  error $ "Read FromJSON: not implemented:' " <> show (typeOf (undefined :: a)) <>"'"
 
-
---     --  let (s,rest)= fragment $ BS.pack ss
---     --      mr = decode s
---     --  in if isJust mr then [(fromJust mr, BS.unpack rest)] else []
-
 instance {-# OVERLAPPABLE #-} (Show a, Read a,Typeable a, ToJSON a, FromJSON a) => Loggable (AsJSON a) where
   serialize (AsJSON a)= serializeToJSON a
   deserialize = AsJSON <$> deserializeJSON
 
-newtype AsJSON a= AsJSON a 
+-- | Newtype wrapper that gives any 'ToJSON'\/'FromJSON' type a 'Loggable' instance
+-- using JSON serialization instead of the default @Show@\/@Read@.
+newtype AsJSON a= AsJSON a
 
 instance ToJSON a => Show (AsJSON a) where 
    show (AsJSON x)= BS.unpack . toLazyByteString . serializeToJSON . toJSON $ x
