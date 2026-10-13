@@ -37,6 +37,8 @@ import System.Time
 import System.IO
 import Unsafe.Coerce 
 
+import Control.Concurrent(threadDelay)
+
 -- | A persistent job record: tracks the closure to resume, the node it runs on,
 -- and any error string from the last failed attempt.
 data Job= Job {jobClosure :: DBRef LocalClosure,jobNode :: Node, jobError :: Maybe String}  deriving (Typeable,Read,Show)
@@ -124,7 +126,6 @@ newtype AllJobsExecutedFor= AllJobsExecutedFor Node
 runJobs= do
   local $ fork $ do
     liftIO $ index jobNode
-
     startJobs <|> commJobs
   where
   startJobs= do
