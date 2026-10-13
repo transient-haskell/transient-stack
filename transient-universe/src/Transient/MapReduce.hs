@@ -85,12 +85,6 @@ data PartRef a= Ref Node Path Save deriving (Typeable, Read, Show)
 data Partition a=  Part Node Path Save a deriving (Typeable,Read,Show)
 type Save= Bool
 
--- instance Loggable Text.Text where
---    serialize t= byteString (encodeUtf8 t)
---    deserialize = tTakeWhile (/= '/') >>= return . decodeUtf8 . toStrict
-
-
-
 instance  Loggable a => Loggable (PartRef a) where
    serialize :: Typeable a => PartRef a -> Builder
    serialize(Ref node path save)= serialize node <> "/" <> serialize path <> "/" <> serialize save  -- <> "/" 
@@ -125,6 +119,7 @@ instance {-# OVERLAPPING #-} Loggable a => IResource (Partition a) where
           when save $ defaultWrite (defPath s ++ key s) (pack $ show s)
 
 
+-- | Evaluate a 'DDS', running the distributed computation and returning the stream of 'PartRef's.
 eval :: DDS a -> Cloud (PartRef a)
 eval (DDS mx) =  mx
 
@@ -144,18 +139,6 @@ instance F.Foldable DVU.Vector where
 
   {-# INLINE foldl1 #-}
   foldl1 = foldl1
-
---foldlIt' :: V.Unbox a => (b -> a -> b) -> b -> V.Vector a -> b
---foldlIt' f z0 xs= V.foldr f' id xs z0
---      where f' x k z = k $! f z x
---
---foldlIt1 :: V.Unbox a => (a -> a -> a) -> V.Vector a -> a
---foldlIt1 f xs = fromMaybe (error "foldl1: empty structure")
---                    (V.foldl mf Nothing xs)
---      where
---        mf m y = Just (case m of
---                         Nothing -> y
---                         Just x  -> f x y)
 
 class (F.Foldable c, Monoid (c a), Loggable (c a),Typeable c, Typeable a) => Distributable c a where
    singleton :: a -> c a
@@ -228,36 +211,15 @@ mapKey f (DDS mx)= DDS $ loggedc $  do
      f1 map x=
            let (k,r) = f x
            in M.insertWith (<>) k (Transient.MapReduce.singleton r) map
-{-
-map :: (Distributable container a,Distributable container b, Loggable k,Ord k)
-     => (a -> b)
-     -> DDS  (container a)
-     -> DDS (container b)
-map f (DDS mx)= DDS $ loggedc $  do
-        refs <-  mx
-        process refs                            -- !> ("process",refs)
-
-  where
---  process ::  Partition a -> Cloud [Partition b]
-  process  (ref@(Ref node path sav))= runAt node $ local $ do
-              xs <- getPartitionData ref         -- !> ("CMAP", ref,node)
-              (generateRef  $ map1 f xs) // xxx
-          !> "MAP"
-          
-  map1 :: (Ord k, F.Foldable container) => (a -> b) -> container a -> container b
-  map1 f v=  F.foldl' f1  M.empty v
-     where
-     f1 map x=
-           let r = f x
-           in M.insertWith (<>) k (Transient.MapReduce.singleton r) map
--}
-
+-- | Internal message type used to stream map results to reducer mailboxes.
 data ReduceChunk a= EndReduce | Reduce a deriving (Typeable, Read, Show)
 
 {-# NOINLINE boxids #-}
 boxids= unsafePerformIO $ newIORef (0 :: Int)
 
 
+-- | Distributed reduce: shuffle map output by key across the cluster and fold each key's
+-- values with the given binary function.
 reduce ::  (Hashable k,Ord k, Distributable container a, Typeable k, Loggable k, Typeable a, Loggable a)
              => (a -> a -> a) -> DDS (M.Map k (container a)) ->Cloud (M.Map k a)
 
@@ -399,12 +361,14 @@ reduce red  dds@(DDS mx)= loggedc $ do
 
 
 
--- parallelize :: Loggable b => (a -> Cloud b) -> [a] -> Cloud b
+-- | Run @f@ on each element of the list in parallel via @('<|>')@.
 parallelize f xs =  foldr (<|>) empty $ map f xs
 
+-- | Like 'parallelize' but collects results with @('<>')@ inside a logged context.
 mparallelize f xs =  loggedc $ foldr (<>) mempty $ map f xs
 
 
+-- | Load partition data from TCache by key; errors if the key is not present.
 getPartitionData :: (Typeable a, Loggable a) => PartRef a   -> TransIO  a
 getPartitionData (Ref node path save)  = transient $ do
     mp <- liftIO (atomically
@@ -415,6 +379,7 @@ getPartitionData (Ref node path save)  = transient $ do
     case mp of
        (Part _ _ _ xs) -> return $ Just xs
 
+-- | Like 'getPartitionData' but returns 'Nothing' instead of failing when the key is absent.
 getPartitionData1 :: (Typeable a, Loggable a) => PartRef a   -> TransIO  a
 getPartitionData1 (Ref node path save)  = transient $ do
     mp <- liftIO $ atomically
@@ -426,19 +391,7 @@ getPartitionData1 (Ref node path save)  = transient $ do
       Just (Part _ _ _ xs) -> return $ Just xs
       Nothing -> return Nothing
 
--- getPartitionData2 :: (Typeable a,Loggable a) => PartRef a   -> IO  a
--- getPartitionData2 (Ref node path save)  =  do
---     mp <- ( atomically
---                        $ readDBRef
---                        $ getDBRef
---                        $ keyp path save)
---                   `onNothing` error ("not found DDS data: "++ keyp path save)
---     case mp of
---        (Part _ _ _ xs) -> return  xs
-
--- en caso de fallo de Node, se lanza un clustered en busca del path
---   si solo uno lo tiene, se copia a otro
---   se pone ese nodo de referencia en Part
+-- | Run @f uuid@ at @node@, failing over to another node if the operation throws.
 runAtP :: Loggable a => Node  -> (Path -> IO a) -> Path -> Cloud a
 runAtP node f uuid= do
    r <- runAt node $ onAll . liftIO $ (SLast <$> f uuid) `catch` sendAnyError
@@ -564,6 +517,7 @@ getFile partitioner file= DDS $ do
                    !> "GETFILE"
 
 
+-- | Persist @x@ as a new TCache 'Partition' on the current node and return a 'PartRef' pointing to it.
 generateRef :: (Typeable a, Loggable a) =>  a -> TransIO (PartRef a)
 generateRef  x=  do
     node <- getMyNode
@@ -571,7 +525,6 @@ generateRef  x=  do
        temp <- getTempName
        let reg=  Part node temp True  x   --  False to not save
        atomically $ newDBRef reg
---       syncCache
        return $ getRef reg     -- !> ("generateRef",reg,node)
 
 getRef (Part n t s x)= Ref n t s
