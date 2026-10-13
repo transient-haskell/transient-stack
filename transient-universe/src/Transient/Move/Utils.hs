@@ -16,7 +16,6 @@ module Transient.Move.Utils (initNode,initNodes, initWebApp,initNodeDef, initNod
 , onServer, onBrowser, atServer, atBrowser, showURL, getURL)
  where
 
---import Transient.Base
 import Transient.Internals
 import Transient.Move.Logged
 import Transient.Console
@@ -38,6 +37,7 @@ import System.IO.Unsafe
 import System.Directory.Internal.Prelude (exitFailure)
 
 {-# NOINLINE rretry #-}
+-- | Flag set when the user chose "retry" at startup; makes 'initNode' try the next port on EADDRINUSE.
 rretry :: IORef Bool
 rretry= unsafePerformIO $ newIORef False
 
@@ -89,6 +89,8 @@ initNode app= do
 
 
 
+-- | Read node parameters from the console (or command line): hostname, port, optional retry flag.
+-- In browser instances returns a new web node directly.
 getNodeParams  :: TransIO Node
 getNodeParams  =
       if isBrowserInstance then  liftIO createWebNode else
@@ -96,7 +98,6 @@ getNodeParams  =
               empty
 #else
         do
-         --  oneThread $ 
           option "start" "re/start node"
 
           host  <-input' "localhost" (const True) "hostname of this node. (Must be reachable, default:localhost)? "
@@ -117,6 +118,7 @@ getNodeParams  =
       empty
 #endif
 
+-- | Like 'initNode' but uses @host@:@port@ as the default when no command-line args are given.
 initNodeDef :: Loggable a => String -> Int -> Cloud a -> TransIO a
 initNodeDef host port app= do
    node <- def <|> getNodeParams
@@ -126,7 +128,7 @@ initNodeDef host port app= do
         args <- liftIO  getArgs
         if null args then liftIO $ createNode host port else empty
 
--- Add a service
+-- | Append a 'Service' to the local node's service list and update the global node registry.
 addService :: Service -> Cloud ()
 addService s= local $ do
    node <- getMyNode
@@ -139,6 +141,7 @@ addService s= local $ do
 
 
 
+-- | Like 'initNodeDef' but registers the node with a specific 'Service' descriptor.
 initNodeServ :: Loggable a => Service -> String -> Int -> Cloud a -> TransIO a
 initNodeServ services host port app= do
    node <- def <|> getNodeParams
@@ -164,7 +167,6 @@ inputNodes :: Loggable empty => Cloud empty
 inputNodes= onServer $ do
   r <- onAll genNewId
   tr ("inputNodes",r)
---   local $ abduce >> labelState (BS.pack "inputNodes")
   listNodes <|> addNew
 
   where
@@ -258,21 +260,5 @@ initWebApp node app=  do
 #endif
               app
 
+-- | Reset the published-endpoint map at the start of each request so stale entries don't accumulate.
 initPublishMinput =  onAll $ newRState (M.empty :: M.Map String [InputData])
-
-{-
--- | run N nodes (N ports to listen) in the same program. For testing purposes.
-runTestNodes ports= do
-    nodes <- onAll $ mapM (\p -> liftIO $ createNode "localhost" p) ports
-    onAll $ addNodes nodes
-    foldl (<|>) empty (map listen1 nodes) <|> return ()
-    where
-    listen1 n= do
-      listen n
-      onAll $ do
-        ns <- getNodes
-        addNodes $ n: (ns \\[n])
-        conn <- getState <|> error "runTestNodes error"
-        liftIO $ writeIORef (myNode conn)  n
-
--}
