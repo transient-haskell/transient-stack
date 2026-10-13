@@ -356,7 +356,7 @@ ahora es necesario generalizarla EVar
 
 como evitar
 -}
--- (<||>) x y= (abduce >> x) <|> y
+-- (<->) x y= (abduce >> x) <|> y
 
 
 data HI=HI deriving (Read,Show,Typeable,Eq)
@@ -686,7 +686,7 @@ maincont= runTransient $ do
 --    liftIO  mx
 
 -- choose1 :: [a] -> TransIO a
--- choose1 =  foldr ((<||>) . return) empty
+-- choose1 =  foldr ((<->) . return) empty
 
 -- main= keep $ do
 --   option "g" "go"
@@ -809,7 +809,7 @@ mainabduceteleport= keep $ initNodes $ do
 -- testcvar= keep $ do
 --   -- onException $ \(e::SomeException) -> tr e
 --   c <- newCVar
---   x <- read c  <||> write c --  <||> do liftIO $ return "world2"
+--   x <- read c  <-> write c --  <-> do liftIO $ return "world2"
 --   ttr x
 --   traceAllThreads
 --   where
@@ -917,7 +917,7 @@ combine :: SDatam -> SDatam -> SDatam
 combine (SDatam x) (SDatam y) = SDatam (unsafeCoerce x `mix` y)
 -}
 setPreservePath =   void $ modifyState' (\prevclos -> prevclos{preservePath=True}) $ noExState "setCloudState"
-isPreservePath = onAll $ preservePath <$> getState 
+isPreservePath = onAll $ preservePath <$> tryState 
 -- main= testPreservePath
 testPreservePath= keep $ initNode $ do
   runJobs
@@ -974,13 +974,13 @@ onBackc a ac= do
 --   s <- minput "p1" "p1" :: Cloud String
 --   ttr s  
 --   local $ do
---      PrevClos a b c d <- getState <|> error "no state" 
+--      PrevClos a b c d <- tryState <|> error "no state" 
 --      ttr (a,b,c,d)
 
 --   minput "p2" "p2" :: Cloud ()
 --   moutput "ok"
 
---   r <- local $ getState <|> error "no state"
+--   r <- local $ tryState <|> error "no state"
 --   localIO $ print ("STATE",r :: String)
 
 {-
@@ -1009,11 +1009,11 @@ testCollectJob= keep $ initNode $ do
     option "g" "go"
     input (const True) "session name? >" 
   onAll $ setSession s
-  onAllNodes $ onException $ \(e:: SomeException) -> ttr ("EX2",e)
+  onAllDeep $ onException $ \(e:: SomeException) -> ttr ("EX2",e)
 
 
   r <- collectc 2 0 $ do
-          onAllNodes $ onException $ \(e:: SomeException) -> ttr ("EX1",e)
+          onAllDeep $ onException $ \(e:: SomeException) -> ttr ("EX1",e)
           r <- minput "test" "enter string" 
           moutput "ok"  `onBackc` \Navigation -> do ttr ("IN HANDLER",r)
           return r
@@ -1043,13 +1043,13 @@ testInit= keep $ initNode $ do
 testcollectc= keep $ initNode $ do
   runJobs
   return() `onBackc` \Navigation -> ttr ("Navigation", "INIT")
-  minput "g" "go" <|> local (published "res") :: Cloud ()
+  minput "g" "go" <|>  (published "res") :: Cloud ()
   r <- collectc 2 0 $ do
             r <- minput "inp" "inp" `onBackc` \Navigation -> do ttr ("Navigation");  onAll $ forward Navigation; return "cccc" :: Cloud String
             moutput "ok" 
             return r 
   ttr ("*************RESULT",r) 
-  publish "res" $ minput "results" "results" ::Cloud ()
+  publish True "res" $ minput "results" "results" ::Cloud ()
   moutput r
   local $ back Navigation :: Cloud ()
 
@@ -1120,13 +1120,13 @@ hacer sandbox de todos los datos
 --   runAt (nodes !! 1) $ loggedc $ do
 --      setCloudState ("HELLO" :: String)
 --      local $ do
---         str ::String <- getState
+--         str ::String <- tryState
 --         ttr ("IN STATEMENT",str)
   
 --   runAt (nodes !! 1) $ local $ do
---       str <- getState
+--       str <- tryState
 --       ttr ("STATE",str :: String )
---   str' <- local getState
+--   str' <- local tryState
 --   ttr ("AT HOME",str' :: String)
 
 -- main= keep $ initNode $inputNodes <|> do
@@ -1306,8 +1306,8 @@ testFinishInRemote= keep $ initNode $ inputNodes <|> do
 
   nodes <- local getNodes
   -- guard (length nodes > 1) <|> error msg 
-  r' <- liftConcurrent (collect 5) $ do
-           runAt (nodes !! 1) $ 
+  r' <- concurrentCloud $ liftCloud (collect 5) $ do
+           runAt (nodes !! 1) $
             local $  for[1 ..10 :: Int]
 
           
@@ -1343,57 +1343,6 @@ testCollectApplicativecut= keep $ do
 --  r <-  keep testFinish
 --  ttr r
 
-testFinish= do
-  checkAssert
-  option "g" "go"
-  setRState ([] :: [(Int,Int,Int)])
-  let n= 2; m= 2
-  r <- collect 0 $ do
-          i <- for [1..n]
-          j <- for [0..m]
-          -- (i,j) <- [(i,j)| i <- for [1..n],j <- for [0..m]]
-          checkfinish i j 
-  
-  ttr ("RESULTS", length r,r)
-  traceAllThreads
-  let reshould= sort $ concat $ take (m+1) $ repeat  [[1..i] | i <- [1..n]]
-  let r'= sort $ map sort r
-  ttr ("sort r",r')
-  ttr ("reshould", reshould)
-  assert( r' == reshould) $ return()
-
-  -- rss contains all the onFinish triggered
-  rss <- getRState <|> error "no state" :: TransIO [(Int,Int,Int)]
-  ttr ("RSS", length rss,sort rss)
-  let should = sort[(i,j,k)| i<- [1..n],j <- [0..m],k <- [0..i]]
-  ttr ("SHOULD",should)
-  assert (sort rss ==  should) $ return()
-  -- the (i,j,0) corresponding to the first onFinish should be before the (i,j,rest)
-  ttr ("RSS",rss)
-
-  
-  let   ls = [(i,j)| i <-[1..n],j <- [0..m]]
-  ttr ls
-  let fil (i,j)= filter(\(k,l,_) -> i==k && j==l) rss
-  ttr $ map fil ls
-  let ijmatch (s,t)= let f=fil(s,t)in sort f == [(s,t,x)| x <- [0..s]] --  length f == s+1 -- && head f==(s,t,0) 
-  ttr $ map ijmatch ls
-  assert (and $ map ijmatch ls) $  ttr "SUCCESS"
-  where
-  checkfinish i j= do
-    r <- collect  0 $ do
-      onFinish $ const $ do addRState (i,j,0 ::Int)
-      r <-    threads j $ choose[1..i]
-      onFinish $ const $ do addRState  (i,j,r)
-      return r
-    ttr ("RS",r,i,j)
-    assert (length r== i) $ return () -- >= i `div` t) $ return ()
-    return r
-
-
-  addRState x= do
-      Ref (ref ::IORef [(Int,Int,Int)])<- getState <|> error "no state"
-      liftIO $ atomicModifyIORef ref (\rs-> (x:rs,())) 
 
 
 
@@ -1468,7 +1417,7 @@ mainlll= keep  $ do
   runAt' node proc= wormhole node $ do
     teleport
     local $ onFinish $ const $ do
-                  -- c <- getState
+                  -- c <- tryState
                   ttr "ONFINISH"
                   -- msend c $ toLazyByteString $ serialize $ SMore $ ClosureData closRemote sessRemote clos idSession tosend
     r <- proc
@@ -1814,7 +1763,7 @@ str :: IsString a => String -> a
 str= fromString
 
 mainremote= keep $ do
-   (do d <- getState <|> return 0 :: TransIO Int
+   (do d <- tryState <|> return 0 :: TransIO Int
        tr ("-------",d)
        ((unCloud $ local $ gets execMode >>= tr)  <***  setState  d ))  <** modify (\s -> s {execMode = Remote})
    tr "END"
@@ -1913,7 +1862,7 @@ maincond= do
              setState (3 :: Int)
              setState "world"
 
-          (,) <$> (getState :: TransIO Int) <*> (getState :: TransIO String)
+          (,) <$> (tryState :: TransIO Int) <*> (tryState :: TransIO String)
   print r
 
 
@@ -1937,7 +1886,7 @@ maincond= do
 
 --             r <- loggedc $ wormhole1 node1 $ do
 --                       let remoteReturn x= do
---                                   -- PrevClos dbr _ _ <- onAll getState
+--                                   -- PrevClos dbr _ _ <- onAll tryState
 --                                   -- log <-  onAll $ noTrans $ getClosureLogFrom dbr dbClos0
 --                                   -- ttr ("LOG",log)
 --                                   r <- atRemote $ do
@@ -2006,7 +1955,7 @@ tests=
   ]
 
 
--- mx <||> my= Transient $ do 
+-- mx <-> my= Transient $ do 
 --   c <- get
 --   x <- mx
 --   liftIO $ runContLoop c x
@@ -2040,7 +1989,7 @@ tests=
 
 -- main= keep $ do
 
---       x <- collect 0 $ async(return "hello") <||>  async(return "world")
+--       x <- collect 0 $ async(return "hello") <->  async(return "world")
 --       ttr ("RS",x :: [String])
 
 -- main=  do
@@ -2370,7 +2319,7 @@ checkApplicativeWithRemote= loggedc $ do
       (node0:node1:_) <- local getNodes
 
       ttr "------checking applicatives  with atRemote --------"
-      r <- concurrent $ wormhole node1 $ do
+      r <- concurrentCloud $ wormhole node1 $ do
                 let remoteReturn x= do
                             r <- atRemote $ do
                                     ttr "REMOTERETURN"
@@ -2651,7 +2600,7 @@ en disco necesita limpiar?
 --    onAll $ liftIO $ print "RECEIVEDDDDD llll"
 --    localIO $ print (r ::String)
 
---   --  conn <- Cloud getState
+--   --  conn <- Cloud tryState
 --   --  path "msgs1"
 --    r2 <- minput "enter msg21"  <|> minput "enter msg22" :: Cloud String -- <|>  Cloud( do liftIO $ threadDelay 1000000; msend conn ( BS.pack "0\r\n\r\n"))
 --    localIO $ liftIO $ print (r,r2)
@@ -2885,7 +2834,7 @@ sandbox1 mx = do
     let mf = mfData st
         def= backStateOf $ SomeException $ ErrorCall "err"
 
-    bs <- getState <|> return def
+    bs <- tryState <|> return def
 
     let  mf'= M.insert (typeOf def) (unsafeCoerce bs) mf
     modify (\s ->s { mfData = mf', parseContext= parseContext st})
@@ -2897,7 +2846,7 @@ mainsandb= keep $ do
    setState False
    sandbox $ liftIO $ print "hello"
    ac  `catcht` \(e :: SomeException) -> return ()
-   i <- getState
+   i <- tryState
    liftIO $ print (i :: Bool)
    where
    ac=  sandbox $ do
@@ -2935,10 +2884,10 @@ mainauction = keep $ initNode $ do
     where
     guessgame name wallet= do
 
-       minput "guessgame" "play guessgame"  <|> local (published "lock") :: Cloud ()
+       minput "guessgame" "play guessgame"  <|> published "lock" :: Cloud ()
        lock  :: Int <- minput "enterlock" $ name <> ": lock a number to guess it"
-       guessn:: Int <- publish "lock" $ minput "enterguess" $ "guess the number entered by: " <>  name
-       wallet' :: Integer <- local getState
+       guessn:: Int <- publish True "lock" $ minput "enterguess" $ "guess the number entered by: " <>  name
+       wallet' :: Integer <- local tryState
        minput "entered"  [("entered number", show guessn)
                          ,("wallet lock", show wallet)
                          ,("wallet guess",show wallet')
@@ -2980,7 +2929,7 @@ maintest = keep $ initNode $ test -- <|>  restore1
 --       modify $ \s -> s {execMode = if execMode s == Remote then Remote else Parallel}
 --       local $ do
 --         log <- getLog
---         conn <- getState -- if connection not available, execute alternative computation
+--         conn <- tryState -- if connection not available, execute alternative computation
 --         let closLocal = hashClosure log
 --         mynode <- getMyNode
 
@@ -3309,7 +3258,7 @@ instance MonadFail STM where
 --             -- tr ("teleport remote call", idConn)
 --             (sessRemote, closRemote) <-
 --                   do
---                   ClosToRespond s c <- getState
+--                   ClosToRespond s c <- tryState
 --                   tr ("after ClosToRespond",s,c)
 --                   delState $ ClosToRespond s c
 --                   return (s,c)
