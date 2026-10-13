@@ -3,6 +3,8 @@
 --   four   t1 <*> t2 <*> t3 <*> t4      four terms (t4 in n1)
 --   twice  two applicatives in sequence
 --   mono   t1 <> t2 <> t3               Semigroup of Cloud (derived, does not use the applicative node)
+--   num    t1 + t2 * t3                 Num of Cloud (derived)
+--   newop  t1 <+> t2 <+> t3            an operator defined once for any Applicative
 --   monoA  liftA2 (<>) ...              the same with (<>) defined by the applicative of Cloud
 -- APPWAIT_D="d1,d2,d3,d4" are the delays of the terms in microseconds: the order of termination.
 -- After the applicative, there is a call to each node.
@@ -15,6 +17,10 @@ import Control.Applicative
 import Control.Monad (void)
 import Control.Concurrent (threadDelay)
 import System.Environment (lookupEnv)
+
+-- | A new binary operator, written once for any 'Applicative': 'Cloud' inherits it from 'TransIO'.
+(<+>) :: (Applicative f, Semigroup a) => f a -> f a -> f a
+(<+>) = liftA2 (<>)
 
 main :: IO ()
 main = void $ keep $ initNode $ inputNodes <|> do
@@ -33,6 +39,8 @@ main = void $ keep $ initNode $ inputNodes <|> do
                   y <- (\a b -> [a, b]) <$> term n3 3 <*> term n1 4
                   return (x ++ y)
     "monoA" -> liftA2 (<>) (liftA2 (<>) (termL n1 1) (termL n2 2)) (termL n3 3)   -- (<>) defined with the applicative of Cloud
+    "num"   -> fmap (: []) (term n1 1 + term n2 2 * term n3 3)                    -- derived Num: 1 + 2*3 = 7
+    "newop" -> (termL n1 1 <+> termL n2 2) <+> termL n3 3                          -- a new operator, defined once for any Applicative
     _       -> termL n1 1 <> termL n2 2 <> termL n3 3
 
   localIO $ putStrLn $ "RESOLVED " <> show r
