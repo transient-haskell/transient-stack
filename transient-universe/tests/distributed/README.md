@@ -1,5 +1,17 @@
 # Distributed tests of the applicative, reentrancy and restarts
 
+## Where each test is
+
+* `AssertTests.hs` (in `tests/`): everything that does not need to kill or restart a process. The distributed `check*`
+  tests run on four connected nodes and verify their result with `assert`: the applicative with two, three or four terms,
+  nested and in sequence, the operators that `Cloud` derives from the applicative (`<>`, `+`, a new operator written once
+  for any `Applicative`) and the applicative in Serial mode (parsers over a string and over a stream). Run one with
+  `assertone.sh <index> <binary> <port>`.
+* `runall.sh`: the scenarios that need several processes (a node that falls and restarts, nodes that start in a given
+  order). It checks the result of each one and prints `PASS` or `FAIL`; the exit code is the number of failures.
+  `runall.sh <part of a name>` runs only the scenarios whose name contains it.
+* The tables below describe each program and script. The summary lines that they print are the ones that `runall.sh` checks.
+
 Each test is a program that runs in several nodes of the same machine (ports 9000-9970) and a script that
 starts the nodes, drives the test and prints a summary. Nothing here is listed in the `.cabal`: the programs are
 compiled against the libraries already built, and the scripts look for the binaries **next to themselves**.
@@ -36,6 +48,7 @@ counted, not read by eye.
 | `ParseSerial` | `runparse.sh` | the applicative in Serial mode: parsers over a string and over streams (chunks cutting the numbers, one byte per chunk). The asynchronous-chunks cases give NO RESULT with the old applicative too |
 | `AppJob both` (and `seqjob`: the caller restarts while the remote stays up) | `runboth.sh <tag> <n1\|n0> <binary> <port>` | the caller and the remote node die together while the remote waits, and restart in either order. Works restarting either node first. With an applicative (`caller`, `injob`) and the caller dead, the result arrives twice: the job stays inside the applicative |
 | `AppJob both` + `runping.sh <tag> <binary> <port>` | the caller sends to a node that is down; the job waits for it; when the node starts with its jobs it greets the known nodes and the caller launches the job again |
+| `AppJob task` | `runajob.sh <tag> task n0 <binary> <port>` | `jobTask`: closed only when the task is completed. If the caller falls before, the task is executed again (at least once) |
 | `AppMinput` | `runminput.sh` | applicative of REST inputs (`minput`) |
 | `AssertTests` | `runassert.sh <tag> <binary> <port>`, `assertone.sh <index> <binary> <port>` | the assertion suite (four nodes). `assertone.sh` runs one test (`ASSERT_ONLY`) and reads `RESULT.txt` |
 
