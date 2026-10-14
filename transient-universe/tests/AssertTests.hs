@@ -48,6 +48,7 @@ import           Data.String (fromString)
 import           Data.Typeable
 import qualified Data.Map as M
 import           System.Environment (lookupEnv)
+import           System.IO.Unsafe (unsafePerformIO)
 import qualified Transient.Parse as P
 import qualified Data.ByteString.Lazy.Char8 as BL
 
@@ -96,6 +97,9 @@ tests =
   , checkNumDerived
   , checkNewOperator
   , checkParseSerial
+  , checkKeyedMailbox
+  , checkRunAtSelfInCalledNode
+  , checkOnNodesFromCalledNode
   ]
 
 -- | The tests to run: all of them, or only those whose indices (positions in 'tests', starting at 0, separated
@@ -339,6 +343,55 @@ checkParseSerial = onAll $ do
       r2 <- sandbox $ do P.setParseStream next; numbers
       liftIO $ assert (r2 == (12, 34, 56)) $ ttr ("OK: parser over a stream with the numbers cut", r2)
       return "checkParseSerial"
+
+-- | A mailbox with a key: only the subscriptions to that key receive what is published with it. (getMailbox' used to
+-- ignore the key and always subscribe to the mailbox 0, so nothing published with a key reached any subscriber.)
+checkKeyedMailbox = onAll $ do
+      ttr "-------- mailboxes with a key --------"
+      received <- liftIO $ newIORef ([] :: [(Int, Int)])
+      let subscribe k = do v <- getMailbox' k
+                           liftIO $ modifyIORef received ((k, v) :)
+                           empty
+      subscribe 1 <|> subscribe 2 <|> do
+        liftIO $ threadDelay 200000
+        putMailbox' (2 :: Int) (7 :: Int)
+        liftIO $ threadDelay 200000
+        got <- liftIO $ readIORef received
+        liftIO $ assert (got == [(2, 7)]) $ ttr ("OK: mailboxes with a key", got)
+        return "checkKeyedMailbox"
+
+-- | A node that is executing a call from another node calls itself with runAt. The body has to be executed and the value
+-- has to arrive, and the answer of the outer call still goes to its caller. (The connection of the state was replaced by a
+-- Self connection and not restored.)
+checkRunAtSelfInCalledNode = loggedc $ do
+      (_:n1:_) <- local getNodes
+      ttr "-------- runAt to the own node, inside a called node --------"
+      r <- runAt n1 $ do
+              me <- local getMyNode
+              a <- runAt me $ local $ return (5 :: Int)
+              b <- runAt me $ local $ return (6 :: Int)
+              return (a, b)
+      onAll $ liftIO $ assert (r == (5, 6)) $ ttr ("OK: runAt to the own node, inside a called node", r)
+      return "checkRunAtSelfInCalledNode"
+
+{-# NOINLINE marks #-}
+marks :: IORef Int
+marks = unsafePerformIO $ newIORef 0
+
+-- | What 'reduce' does to tell the end to every node: a called node calls all the nodes, itself included, with a chain of
+-- '<|>' and does not answer. Every node has to execute its call once. (The call to itself was sent to the node that had
+-- called it: the closure to respond to of the request was taken as the one of a restarted job, see 'calledConn'.)
+checkOnNodesFromCalledNode = loggedc $ do
+      nodes@(_:n1:_) <- local getNodes
+      ttr "-------- a called node calls every node with <|> --------"
+      forM_ nodes $ \n -> runAt n $ localIO $ writeIORef marks 0
+      (runAt n1 $ do
+            foldr (<|>) empty $ map (\n -> runAt n $ localIO $ atomicModifyIORef' marks (\c -> (c + 1, ()))) nodes
+            empty) <|> return ()
+      localIO $ threadDelay 1500000
+      cs <- mapM (\n -> runAt n $ localIO $ readIORef marks) nodes
+      onAll $ liftIO $ assert (cs == [1, 1, 1, 1]) $ ttr ("OK: a called node calls every node with <|>", cs)
+      return "checkOnNodesFromCalledNode"
 
 --------------------------------------------------------------------------------
 -- Local (non-distributed) assert tests
