@@ -212,7 +212,21 @@ mapKey f (DDS mx)= DDS $ loggedc $  do
            let (k,r) = f x
            in M.insertWith (<>) k (Transient.MapReduce.singleton r) map
 -- | Internal message type used to stream map results to reducer mailboxes.
-data ReduceChunk a= EndReduce | Reduce a deriving (Typeable, Read, Show)
+data ReduceChunk a= InitReduce | EndReduce | Reduce a deriving (Typeable, Read, Show)
+
+-- | What a call to the reducer of a node returns. The first value, 'Installed', is sent when the reducer has
+-- subscribed to its mailbox; the second one, 'Reduced', is the result of that node when it has received the end of all
+-- the nodes. The applicative of the calls to all the nodes (@<>@) gives its first value when all the nodes have
+-- returned theirs: that is, when all the reducers are installed. Then the map can start. Every later combination
+-- is 'Partial', until all the nodes have given their result.
+data Reduced b= Installed | Partial | Reduced b deriving (Typeable, Read, Show)
+
+instance Semigroup b => Semigroup (Reduced b) where
+  Installed <> Installed = Installed
+  Reduced x <> Reduced y = Reduced (x <> y)
+  _         <> _         = Partial
+
+instance (Show b, Read b, Typeable b) => Loggable (Reduced b)
 
 {-# NOINLINE boxids #-}
 boxids= unsafePerformIO $ newIORef (0 :: Int)
@@ -298,9 +312,8 @@ reduce red  dds@(DDS mx)= loggedc $ do
 
        onNodes nodes f = foldr (<|>) empty $ map (\n ->  runAt n f ) nodes
 
-       sumNodes nodes f= foldr (<>) mempty $ map (\n -> runAt n  f ) nodes
-
-       reducer nodes= sumNodes nodes reduce1    -- a reduce1 process in each node, get the results and mappend them
+       -- a reduce1 process in each node. The first value of the combination is given when all of them are installed
+       reducer nodes= foldr1 (liftA2 (<>)) $ map (\n -> runAt n reduce1) nodes
 
 --     reduce1 :: (Ord k)  => Cloud (M.Map k v)
 
@@ -308,46 +321,58 @@ reduce red  dds@(DDS mx)= loggedc $ do
 
            reduceResults <- liftIO $ newMVar M.empty
            numberSent    <- liftIO $ newMVar 0
-           return () !> "GETMAILBOX"
-           minput <-   getMailbox' mboxid  -- get the chunk once it arrives to the mailbox
+           ( do
+             return () !> "GETMAILBOX"
+             minput <-   getMailbox' mboxid  -- get the chunk once it arrives to the mailbox
 
-           case minput  of
+             case minput  of
 
-             EndReduce -> do
-                tr "ENDREDUCE"
-                n <- liftIO $ modifyMVar numberSent $ \r -> let r'= r+1 in return (r', r')
+              -- the mailbox is installed: the first value of the call
+              InitReduce -> return Installed
 
-                tr ("END REDUCE RECEIVEDDDD",n, lengthNodes)
-                -- end reduce received from a node. If all the nodes have sent the end reduce, then return the result
-                if n == lengthNodes
+              EndReduce -> do
+                 tr "ENDREDUCE"
+                 n <- liftIO $ modifyMVar numberSent $ \r -> let r'= r+1 in return (r', r')
 
-                 then do
-                    deleteMailbox' mboxid (EndReduce `asTypeOf` paramOf dds)
-                    r <- liftIO $ readMVar reduceResults
+                 tr ("END REDUCE RECEIVEDDDD",n, lengthNodes)
+                 -- end reduce received from a node. If all the nodes have sent the end reduce, then return the result
+                 if n == lengthNodes
 
-                    tr ("RETURNING",r)
-                    return r
+                  then do
+                     deleteMailbox' mboxid (EndReduce `asTypeOf` paramOf dds)
+                     r <- liftIO $ readMVar reduceResults
 
-                 else stop
+                     tr ("RETURNING",r)
+                     return (Reduced r)
 
-             Reduce kvs ->  do
-                tr "REDUCE RECEIVEDDDDDDDDDDDD"
-                let addIt (k,inp) = do
-                        let input= inp `asTypeOf` atype dds
-                        liftIO $ modifyMVar_ reduceResults
-                               $ \map -> do
-                                  let maccum =  M.lookup k map
-                                  return $ M.insert k (case maccum of
-                                    Just accum ->  red input accum
-                                    Nothing    ->  input) map
+                  else stop
 
-                tr ("RECEIVED REDUCEEEEEEEEEEEEE",kvs)
-                mapM_ addIt  (kvs `asTypeOf` paramOf' dds)
+              Reduce kvs ->  do
+                 tr "REDUCE RECEIVEDDDDDDDDDDDD"
+                 let addIt (k,inp) = do
+                         let input= inp `asTypeOf` atype dds
+                         liftIO $ modifyMVar_ reduceResults
+                                $ \map -> do
+                                   let maccum =  M.lookup k map
+                                   return $ M.insert k (case maccum of
+                                     Just accum ->  red input accum
+                                     Nothing    ->  input) map
 
-                stop
+                 tr ("RECEIVED REDUCEEEEEEEEEEEEE",kvs)
+                 mapM_ addIt  (kvs `asTypeOf` paramOf' dds)
+
+                 stop
+            )
+            -- once the left alternative has subscribed to the mailbox, this node tells it to itself: the subscription
+            -- receives it and returns it as the first value of the call
+            <|> (putMailbox' mboxid (InitReduce `asTypeOf` paramOf dds) >> stop)
 
 
-   reducer  nodes  <|>  shuffler nodes
+   -- the reducers are installed first. When all of them have said so, the map and the shuffle start
+   reducer nodes >>= \res -> case res of
+        Installed -> shuffler nodes
+        Reduced m -> return m
+        Partial   -> empty
    
    where
      atype ::DDS(M.Map k (container a)) ->  a
