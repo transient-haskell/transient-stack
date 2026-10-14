@@ -31,6 +31,7 @@ library
         Transient.Move.Logged
         Transient.Move.JSON
         Transient.Move.Job
+        Transient.Move.Utils
     build-depends:
         base > 4,
         mtl -any,
@@ -66,7 +67,6 @@ library
         exposed-modules:
             Transient.Move.Web
             Transient.Move.Services
-            Transient.Move.Utils
             Transient.Move.IPFS
         build-depends:
             HTTP -any,

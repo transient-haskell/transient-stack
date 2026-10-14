@@ -515,8 +515,12 @@ keep mx = do
 
       void $
         runTransient1 $ do
+#ifdef BROWSER
+          let hLogFile = stderr
+#else
           liftIO $ removeFile logFile `catch` \(e :: IOError) -> return ()
           hLogFile <- liftIO $ openFile  logFile AppendMode
+#endif
 
           onException $ \(e :: SomeException) -> do
                 liftIO $ do
@@ -593,6 +597,7 @@ keep mx = do
                     putStrLn "- saving cache at the end of the 'keep' execution"
                     writeIORef save True
                   empty
+#ifndef BROWSER
           <|> do
 
                   let react' h= react h (return ())
@@ -605,6 +610,7 @@ keep mx = do
 
                   exitLeft sigmsg
                   empty
+#endif
           <|> do
                   option "saveonexit" "commit the current execution state to permanent storage on exit"
                   liftIO $ writeIORef save True

@@ -2418,7 +2418,8 @@ execLog mlog = transient $ do
     processMessage  s1 closl s2 closr log bool
 
 #ifdef BROWSER
-listen node = onAll $ do
+listen :: Node -> TransIO ()
+listen node = do
         addNodes [node]
         setRState(JobGroup M.empty)
         -- ex <- exceptionPoint :: TransIO (BackPoint SomeException)

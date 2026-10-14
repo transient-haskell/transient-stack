@@ -13,7 +13,11 @@
 -----------------------------------------------------------------------------
 {-# LANGUAGE CPP, ScopedTypeVariables #-}
 module Transient.Move.Utils (initNode,initNodes, initWebApp,initNodeDef, initNodeServ, addService, inputNodes
-, onServer, onBrowser, atServer, atBrowser, showURL, getURL)
+, onServer, onBrowser, atServer, atBrowser
+#ifndef BROWSER
+, showURL, getURL
+#endif
+ )
  where
 
 import Transient.Internals
@@ -21,7 +25,9 @@ import Transient.Move.Logged
 import Transient.Console
 import Transient.Move.Internals
 import Transient.Move.Defs
+#ifndef BROWSER
 import Transient.Move.Web
+#endif
 import Control.Applicative
 import Control.Monad
 import Control.Monad.State
@@ -256,7 +262,7 @@ initWebApp node app=  do
 #ifndef BROWSER
             (initPublishMinput >> optionEndpoints) <|> 
 #else
-              local empty  <|>
+            local empty  <|>
 #endif
               app
 
