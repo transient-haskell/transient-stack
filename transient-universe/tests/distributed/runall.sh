@@ -53,7 +53,9 @@ done
 # --- restarts
 count  "apprestart: the job after the applicative"  2 'AFTER JOB \(1,2\)'           ./runrestart.sh restart 0
 expect "runatrestart: the called node restarts"          'RESULT before after'      ./runrr.sh rr runatrestart 9970
-expect "multiuser: restart"                              'GUESS alice \(7,7\).*errors: 0' ./mur.sh mur 9420 multiuser nocookie
+expect "multiuser: restart, invoked without session"      'GUESS alice \(7,7\).*result msg: 1.*errors: 0' ./mur.sh mur 9420 multiuser nocookie
+expect "multiuser: restart, invoked by the same session"  'GUESS alice \(7,7\).*result msg: 1.*errors: 0' ./mur.sh mua 9440 multiuser alice
+expect "multiuser: restart, invoked by another session"   'GUESS alice \(7,7\).*result msg: 1.*errors: 0' ./mur.sh mub 9450 multiuser bob
 expect "minput: two sessions invoke the endpoint of a third"  'GUESS alice \(7,3\);;GUESS alice \(7,7\);;errors: 0' ./mu2.sh mu 9430 multiuser
 expect "collectc: restart"                               'inputs=2 resultsEndpoint=1;;MINPUT RESULT' ./runcol.sh col collecttest 9960
 
