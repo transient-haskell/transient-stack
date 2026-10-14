@@ -12,10 +12,10 @@ mapKeyB, mapKeyU, reduce,eval,
 DDS(..),Partition(..),PartRef(..))
  where
 
-#ifdef ghcjs_HOST_OS
+#ifdef BROWSER
 import Transient.Base
 import Transient.Move hiding (pack)
-import Transient.Logged hiding (hash)
+import Transient.Move.Logged hiding (hash)
 -- dummy Transient.MapReduce module,
 reduce _ _ = local stop :: Loggable a => Cloud a
 mapKeyB _ _= undefined

@@ -57,7 +57,7 @@ import Data.ByteString.Builder
 import GHC.Generics
 import Data.Hashable
 
-#ifndef ghcjs_HOST_OS
+#ifndef BROWSER
 import Network.URI
 --import qualified Data.IP                              as IP
 import qualified Network.Socket                         as NS
@@ -80,16 +80,8 @@ import Network.Mime
 import Data.Text.Encoding
 
 #else
-import           JavaScript.Web.WebSocket
-import qualified JavaScript.Web.MessageEvent           as JM
-import           GHCJS.Prim (JSVal)
-import           GHCJS.Marshal(fromJSValUnchecked)
-import qualified Data.JSString                          as JS
--- import Data.Text.Encoding
-import           JavaScript.Web.MessageEvent.Internal
-import           GHCJS.Foreign.Callback.Internal (Callback(..))
-import qualified GHCJS.Foreign.Callback                 as CB
---import           Data.JSString  (JSString(..), pack,drop,length)
+import Transient.Move.Browser
+import qualified Data.ByteString.Lazy                   as BL
 
 #endif
 
@@ -119,7 +111,7 @@ import System.IO.Error (isResourceVanishedError)
 
 pk = BS.pack
 up = BS.unpack
-#ifdef ghcjs_HOST_OS
+#ifdef BROWSER
 type HostName  = String
 newtype PortID = PortNumber Int deriving (Read, Show, Eq, Typeable)
 #endif
@@ -159,7 +151,7 @@ getHTTProxyParams t = do
           return $ Just pr
     getUPass = tTakeUntilToken "@" <|> return ""
 
-#ifndef ghcjs_HOST_OS
+#ifndef BROWSER
 
 --- empty Hooks for TLS
 
@@ -240,7 +232,7 @@ onAllDeep proc = do
     modifyState' (\prevclos -> prevclos{preservePath=True}) $ noExState "setCloudState"
     onAll proc
 
--- #ifndef ghcjs_HOST_OS
+-- #ifndef BROWSER
 
 -- | Run a distributed computation inside the IO monad. Enables asynchronous
 -- console input (see 'keep').
@@ -864,7 +856,7 @@ foldNodes' :: (Loggable a1, Loggable a2) => [Node] -> (Cloud a2 -> Cloud a1 -> C
 foldNodes' nodes op init proc = foldr (op . (`runAt` proc)) init nodes
 
 -----
-#ifndef ghcjs_HOST_OS
+#ifndef BROWSER
 -- reconnect if connection timed out
 sendRawRecover con r =
   do
@@ -919,13 +911,14 @@ sendRaw con r= do
    c <- liftIO $ readIORef $ connData con
    case c of
       Just (Web2Node sconn) ->
-              JavaScript.Web.WebSocket.send   r sconn
+              webSocketSend sconn (BS.unpack r)
       _ -> error "No connection stablished"
 
 
 #endif
 
 
+#ifndef BROWSER
 -- | Find a live web connection for the given session, excluding 'conn'.
 -- Returns 'Nothing' and cleans up the node if no live connection is found.
 findLiveWebConn :: BC.ByteString -> Connection -> TransIO (Maybe Connection)
@@ -1013,11 +1006,12 @@ webSend con bs = localExceptions $ do
         TOD time _ <- getClockTime
         return $ Just time
     _ -> error "webSend: no HTTP/HTTPS connection"
+#endif
 
 -- | Send raw bytes over a connection. Dispatches on the connection type
 -- (TLS, plain TCP, WebSocket, HTTP2Node, etc.) and handles keep-alive.
 msend :: Connection -> BL.ByteString -> TransIO ()
-#ifndef ghcjs_HOST_OS
+#ifndef BROWSER
 
 msend con bs = do
   ttr ("MSEND---------->", lazy $ readIORef $ remoteNode con, idConn con,  bs)
@@ -1087,7 +1081,7 @@ msend con r= do
               tr "MSEND BROWSER"
           --modifyMVar_ (isBlocked con) $ const $ do 
               let bs = toLazyByteString $ serialize r
-              JavaScript.Web.WebSocket.send  (JS.pack $ BS.unpack bs) sconn   -- TODO OPTIMIZE THAT!
+              webSocketSend sconn (BS.unpack bs)   -- TODO OPTIMIZE THAT!
               tr "AFTER MSEND"
               --TOD time _ <- getClockTime
               --return $ Just time
@@ -1107,7 +1101,7 @@ msend (Connection _ _ remoten (Just (Web2Node sconn)) _ _ blocked _  _ _ _) r= l
 #endif
 
 
-#ifdef ghcjs_HOST_OS
+#ifdef BROWSER
 
 mread con= do
    labelState "mread"
@@ -1122,88 +1116,24 @@ mread con= do
 
 wsRead :: Loggable a => WebSocket  -> TransIO  a
 wsRead ws= do
-  dat <- react (hsonmessage ws) (return ())
-  tr "received"
-
-  case JM.getData dat of
-    JM.StringData ( text)  ->  do
-      setParseString $ BS.pack  . JS.unpack $ text    -- TODO OPTIMIZE THAT
-
-      --len <- integer
-      tr ("Browser webSocket read", text)  !> "<------<----<----<------"
-      deserialize     -- return (read' $ JS.unpack str)
-                 
-    JM.BlobData   blob -> error " blob"
-    JM.ArrayBufferData arrBuffer -> error "arrBuffer"
+  text <- react (webSocketOnMessage ws) (return ())
+  tr ("Browser webSocket read", text)  !> "<------<----<----<------"
+  setParseString $ BS.pack text    -- TODO OPTIMIZE THAT
+  deserialize
 
 
-wsOpen :: JS.JSString -> TransIO WebSocket
+wsOpen :: String -> TransIO WebSocket
 wsOpen url= do
-   ws <-  liftIO $ js_createDefault url      --  !> ("wsopen",url)
-   react (hsopen ws) (return ())             -- !!> "react"
-   return ws                                 -- !!> "AFTER ReACT"
-
-foreign import javascript safe
-    "window.location.hostname"
-   js_hostname ::    JSVal
-
-foreign import javascript safe
-   "window.location.pathname"
-  js_pathname ::    JSVal
-
-foreign import javascript safe
-    "window.location.protocol"
-   js_protocol ::    JSVal
-
-foreign import javascript safe
-   "(function(){var res=window.location.href.split(':')[2];if (res === undefined){return 80} else return res.split('/')[0];})()"
-   js_port ::   JSVal
-
-foreign import javascript safe
-    "$1.onmessage =$2;"
-   js_onmessage :: WebSocket  -> JSVal  -> IO ()
+   ws <-  liftIO $ webSocketNew url
+   react (webSocketOnOpen ws) (return ())
+   return ws
 
 
 getWebServerNode :: TransIO Node
 getWebServerNode = liftIO $ do
-   h <- fromJSValUnchecked js_hostname
-   p <- fromIntegral <$> (fromJSValUnchecked js_port :: IO Int)
+   h <- locationHostname
+   p <- locationPort
    createNode h p
-
-
-hsonmessage ::WebSocket -> (MessageEvent ->IO()) -> IO ()
-hsonmessage ws hscb= do
-  cb <- makeCallback1 MessageEvent hscb
-  js_onmessage ws cb
-
-foreign import javascript safe
-             "$1.onopen =$2;"
-   js_open :: WebSocket  -> JSVal  -> IO ()
-
-foreign import javascript safe
-             "$1.readyState"
-  js_readystate ::  WebSocket -> Int
-
-newtype OpenEvent = OpenEvent JSVal deriving Typeable
-hsopen ::  WebSocket -> (OpenEvent ->IO()) -> IO ()
-hsopen ws hscb= do
-   cb <- makeCallback1 OpenEvent hscb
-   js_open ws cb
-
-makeCallback1 :: (JSVal -> a) ->  (a -> IO ()) -> IO JSVal
-
-makeCallback1 f g = do
-   Callback cb <- CB.syncCallback1 CB.ContinueAsync (g . f)
-   return cb
-
--- makeCallback ::  IO () -> IO ()
-makeCallback f  = do
-  Callback cb <- CB.syncCallback CB.ContinueAsync  f
-  return cb
-
-
-foreign import javascript safe
-   "new WebSocket($1)" js_createDefault :: JS.JSString -> IO WebSocket
 
 
 #else
@@ -1269,7 +1199,7 @@ getWebServerNode = getNodes >>= return . Prelude.head
 
 -- | Close a connection, releasing the underlying socket/TLS context.
 mclose :: MonadIO m => Connection -> m ()
-#ifndef ghcjs_HOST_OS
+#ifndef BROWSER
 
 mclose con = do
   tr "mclose"
@@ -1298,10 +1228,10 @@ mclose con= do
    c <- liftIO $ atomicModifyIORef (connData con) $ \c  -> (Nothing,c)
    case c of
      Just (Web2Node sconn)->
-        liftIO $ JavaScript.Web.WebSocket.close Nothing Nothing sconn
+        liftIO $ webSocketClose sconn
 #endif
 
-#ifndef ghcjs_HOST_OS
+#ifndef BROWSER
 -- connection cookie
 rcookie= unsafePerformIO $ newIORef $ BS.pack "cookie1"
 #endif
@@ -1363,7 +1293,7 @@ lookup2 key doubleList =
   let r = mapMaybe (lookupService key) doubleList
   in if null r then Nothing else Just $ head r
 
-#ifndef ghcjs_HOST_OS
+#ifndef BROWSER
 -- effective connect trough different methods
 mconnect1 (node@(Node host port _ services)) = do
   tr ("MCONNECT1",host,port,isTLSIncluded)
@@ -1639,6 +1569,21 @@ getFirstLineResp = do
     getCode = parseString
     getMessage = tTakeUntilToken ("\r\n")
 
+#else
+-- the browser only connects to its web server, through a websocket
+mconnect1 node@(Node host port pool _) = do
+  conn <- getSData <|> error "mconnect: listen not set for this node"
+  if host == "webnode"
+    then do
+      liftIO $ writeIORef (connData conn) $ Just Self
+      return conn
+    else do
+      ws <- connectToWS host $ PortNumber $ fromIntegral port
+      liftIO $ writeIORef (connData conn) $ Just (Web2Node ws)
+      liftIO $ writeIORef (remoteNode conn) $ Just node
+      liftIO $ modifyMVar_ (fromJust pool) . const $ return [conn]
+      addNodes [node]
+      return conn
 #endif
 
 -- check for cached connect, if not, it connects and check cookie with mconnect2
@@ -1679,20 +1624,19 @@ mconnect node' = exclusiveCon $ do
       --  `catcht` \(e :: SomeException) -> empty
       cd <- liftIO $ readIORef $ connData conn
       case cd of
-#ifndef ghcjs_HOST_OS
         Just Self -> return ()
+#ifndef BROWSER
         Just (TLSNode2Node _) -> do
           checkCookie conn
           watchConnection conn node
         Just (Node2Node _ _ _) -> do
           checkCookie conn
           watchConnection conn node
-        _ -> watchConnection conn node
-
 #endif
+        _ -> watchConnection conn node
       -- tr "before mconnect2 return"
       return conn
-#ifndef ghcjs_HOST_OS   
+#ifndef BROWSER   
     checkCookie conn = do
       cookie <- liftIO $ readIORef rcookie
       mynode <- getMyNode
@@ -1733,7 +1677,7 @@ mconnect node' = exclusiveCon $ do
       -- tr "after watchConnection"
 
 
-#ifndef ghcjs_HOST_OS
+#ifndef BROWSER
 
 
 -- | Open a TCP socket to @host@:@port@ with the given receive buffer size.
@@ -1755,11 +1699,11 @@ connectTo' bufSize host port = do
       return (sock :: NS.Socket)
 #else
 connectToWS  h (PortNumber p) = do
-   protocol <- liftIO $ fromJSValUnchecked js_protocol
-   pathname <- liftIO $ fromJSValUnchecked js_pathname
+   protocol <- liftIO locationProtocol
+   pathname <- liftIO locationPathname
    tr ("PAHT",pathname)
-   let ps = case (protocol :: JS.JSString)of "http:" -> "ws://"; "https:" -> "wss://"
-   wsOpen $ JS.pack $ ps++ h++ ":"++ show p ++ pathname
+   let ps = case protocol of "http:" -> "ws://"; "https:" -> "wss://"
+   wsOpen $ ps++ h++ ":"++ show p ++ pathname
 #endif
 
 
@@ -1773,7 +1717,7 @@ noParseContext =
   let err = error "parseContext not set"
    in ParseContext err err err
 
--- #ifndef ghcjs_HOST_OS
+-- #ifndef BROWSER
 instance Default Connection where def= lazy defConnection
 
 
@@ -1804,7 +1748,7 @@ defConnection = do
         False
         z
 
-#ifndef ghcjs_HOST_OS
+#ifndef BROWSER
 
 -- | Override the receive buffer size for the current connection (default 8192 bytes).
 setBuffSize :: Int -> TransIO ()
@@ -2473,7 +2417,7 @@ execLog mlog = transient $ do
     --      setLastClosureForConnection (idConn conn) $ getDBRef (kLocalClos s2 closr)
     processMessage  s1 closl s2 closr log bool
 
-#ifdef ghcjs_HOST_OS
+#ifdef BROWSER
 listen node = onAll $ do
         addNodes [node]
         setRState(JobGroup M.empty)
@@ -2499,7 +2443,7 @@ listen node = onAll $ do
 -- filter2 key doubleList = mapMaybe (lookup key) doubleList
 
 --------------------------------------------
-#ifndef ghcjs_HOST_OS
+#ifndef BROWSER
 
 
 readFrom con = do
@@ -2696,7 +2640,7 @@ getHeaders = manyTill paramPair (string "\r\n\r\n") :: TransIO NWS.Headers -- !>
       where
         endline c = c == '\r' || c == '\n'
 #endif
-#ifdef ghcjs_HOST_OS
+#ifdef BROWSER
 isBrowserInstance= True
 api _= empty
 #else
@@ -2712,11 +2656,11 @@ emptyPool = liftIO $ newMVar []
 
 -- | Create a node from a hostname (or IP address), port number and a list of
 -- services.
-createNodeServ :: NS.HostName -> Int -> [Service] -> IO Node
+createNodeServ :: String -> Int -> [Service] -> IO Node
 createNodeServ h p svs = return $ Node h p Nothing svs
 
 -- | Create a plain node with no services.
-createNode :: MonadIO m => NS.HostName -> Int -> m Node
+createNode :: MonadIO m => String -> Int -> m Node
 createNode h p = liftIO $ createNodeServ h p []
 
 -- | Create an ephemeral web node (hostname @\"webnode\"@, random port, empty pool).
@@ -2873,7 +2817,7 @@ setConnectionIn node = do
   return node {connection = Just ref}
 
 
-#ifndef ghcjs_HOST_OS
+#ifndef BROWSER
 
 -- | Reconcile the list of nodes in the cluster using a remote node already
 -- part of the cluster. Reconciliation end up in each node in the cluster

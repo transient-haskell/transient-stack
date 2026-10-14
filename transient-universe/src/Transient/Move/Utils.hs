@@ -94,7 +94,7 @@ initNode app= do
 getNodeParams  :: TransIO Node
 getNodeParams  =
       if isBrowserInstance then  liftIO createWebNode else
-#ifdef ghcjs_HOST_OS
+#ifdef BROWSER
               empty
 #else
         do
@@ -253,7 +253,7 @@ initWebApp node app=  do
         abduce  -- to allow onFinish and onWaitthreads to fire
 
         unCloud $ wormhole serverNode $ do 
-#ifndef ghcjs_HOST_OS
+#ifndef BROWSER
             (initPublishMinput >> optionEndpoints) <|> 
 #else
               local empty  <|>

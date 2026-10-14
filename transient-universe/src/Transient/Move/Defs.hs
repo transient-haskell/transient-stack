@@ -21,12 +21,17 @@ import Data.TCache  hiding (onNothing)
 import GHC.Generics
 import Data.Coerce
 
+#ifndef BROWSER
 import qualified Network.Socket                         as NS
 import qualified Network.WebSockets.Connection          as WS
 import qualified Network.WebSockets                     as NWS
+#else
+import Transient.Move.Browser (WebSocket)
+#endif
 
 
 
+import Data.CaseInsensitive (CI)
 import Data.Typeable
 import Data.Default
 import Control.Exception
@@ -146,7 +151,7 @@ newtype Ping = Ping Node
 -- | A cluster node identified by host and port, with an optional connection pool
 -- and the list of services it advertises.
 data Node = Node
-  { nodeHost :: NS.HostName,
+  { nodeHost :: String,
     nodePort :: Int,
     connection :: Maybe (MVar Pool),
     nodeServices :: [Service]
@@ -218,16 +223,18 @@ type Blocked = MVar (Maybe Integer)
 type BuffSize = Int
 
 -- | Parsed HTTP request line (version, status\/method, path) plus the raw header list.
-data HTTPHeaders = HTTPHeaders (BL.ByteString, B.ByteString, BL.ByteString) NWS.Headers deriving (Show)
+data HTTPHeaders = HTTPHeaders (BL.ByteString, B.ByteString, BL.ByteString) [(CI B.ByteString, B.ByteString)] deriving (Show)
 emptyHeaders= HTTPHeaders (mempty,mempty,mempty)[]
 
+#ifndef BROWSER
 instance Show WS.Connection where
   show _ = "WS"
+#endif
 
 -- | The transport-specific handle stored inside a 'Connection'.
 data ConnectionData
 
-#ifndef ghcjs_HOST_OS
+#ifndef BROWSER
   = Node2Node
       { port :: NS.ServiceName,
         socket :: NS.Socket,
@@ -244,7 +251,7 @@ data ConnectionData
       }
   | Self
 #else
-  Self
+  = Self
   | Web2Node{webSocket :: WebSocket}
 #endif
    deriving (Show)

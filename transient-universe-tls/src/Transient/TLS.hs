@@ -14,7 +14,7 @@
 {-# LANGUAGE   CPP, OverloadedStrings, BangPatterns, ScopedTypeVariables #-}
 
 module Transient.TLS(initTLS, initTLS') where
-#ifndef ghcjs_HOST_OS
+#ifndef BROWSER
 import           Transient.Internals
 import           Transient.Move.Defs
 import           Transient.Move.Internals

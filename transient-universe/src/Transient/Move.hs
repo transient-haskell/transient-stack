@@ -83,7 +83,7 @@ putMailbox, putMailbox',getMailbox,getMailbox',deleteMailbox,deleteMailbox',
 -- * Thread Control
 single, unique,
 
-#ifndef ghcjs_HOST_OS
+#ifndef BROWSER
 -- * Buffering Control
 setBuffSize, getBuffSize,
 #endif
@@ -91,7 +91,7 @@ setBuffSize, getBuffSize,
 -- * Session management
 newSession, setSession, getSession,genSessionId,
 
-#ifndef ghcjs_HOST_OS
+#ifndef BROWSER
 -- * REST API
 api, HTTPMethod(..), HTTPHeaders(..), PostParams, noHTTP
 #endif

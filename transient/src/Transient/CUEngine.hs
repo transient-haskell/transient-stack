@@ -397,7 +397,7 @@ instance  Applicative (Transient r StateIO) where
 fullStop :: TransIO stop
 fullStop= do modify $ \s ->s{execMode= Remote} ; stop
 
--- #ifndef ghcjs_HOST_OS11
+-- #ifndef BROWSER11
 instance   Monad (Transient r StateIO) where
     return  = pure
     m >>= k  = Transient $ \c -> runContT m (\a -> runContT (mayb k a) c)

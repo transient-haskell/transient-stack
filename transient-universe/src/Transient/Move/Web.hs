@@ -9,7 +9,7 @@
 {-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
 {-# HLINT ignore "Use typeRep" #-}
 
-#ifndef ghcjs_HOST_OS
+#ifndef BROWSER
 
 
 module Transient.Move.Web

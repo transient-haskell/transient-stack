@@ -29,11 +29,7 @@ library
         Transient.Move.Defs
         Transient.Move.Internals
         Transient.Move.Logged
-        Transient.Move.Utils
         Transient.Move.JSON
-        Transient.Move.Web
-        Transient.Move.Services
-        Transient.Move.IPFS
         Transient.Move.Job
     build-depends:
         base > 4,
@@ -42,7 +38,6 @@ library
         bytestring,
         containers,
         stm,
-        HTTP -any,
         mime-types,
         TCache >= 0.12,
         case-insensitive -any,
@@ -50,12 +45,7 @@ library
         filepath -any,
         hashable -any,
         hashtables,
-        iproute -any,
-        network >= 3.0,
-        network-info -any,
-        network-uri -any,
         vector -any,
-        websockets >= 0.12.7.1,
         process -any,
         random -any,
         text -any,
@@ -65,6 +55,26 @@ library
         transient,
         old-time,
         time
+    if arch(wasm32) || impl(ghcjs >=0.1)
+        cpp-options: -DBROWSER
+        exposed-modules: Transient.Move.Browser
+        if arch(wasm32)
+            build-depends: ghc-experimental
+        else
+            build-depends: ghcjs-base, ghcjs-prim
+    else
+        exposed-modules:
+            Transient.Move.Web
+            Transient.Move.Services
+            Transient.Move.Utils
+            Transient.Move.IPFS
+        build-depends:
+            HTTP -any,
+            iproute -any,
+            network >= 3.0,
+            network-info -any,
+            network-uri -any,
+            websockets >= 0.12.7.1
     default-language: Haskell2010
     hs-source-dirs: src .
     ghc-options: -w -O0

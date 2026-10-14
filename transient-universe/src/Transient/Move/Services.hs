@@ -20,7 +20,7 @@ module Transient.Move.Services (
 runService,callService, callService',callServiceFail,serve,ping
 , monitorNode, monitorService, setRemoteJob,killRemoteJob
 
-#ifndef ghcjs_HOST_OS
+#ifndef BROWSER
 
 ,initService,authorizeService,requestInstance,requestInstanceFail,requestInstanceHost
 ,findInNodes,endMonitor,freePort, controlNodeService, controlNode

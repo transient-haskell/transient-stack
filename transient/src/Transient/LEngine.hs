@@ -473,7 +473,7 @@ apTransIO mf mx =  do
 fullStop :: TransIO stop
 fullStop= do modify $ \s ->s{execMode= Remote} ; stop
 
--- #ifndef ghcjs_HOST_OS11
+-- #ifndef BROWSER11
 instance Monad TransIO where
   return   = pure
   x >>= f  = Transient $ do

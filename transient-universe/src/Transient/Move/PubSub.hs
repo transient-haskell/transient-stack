@@ -14,7 +14,7 @@ import System.IO.Unsafe
 import Control.Monad.IO.Class (liftIO)
 import Data.ByteString.Lazy.Char8 (pack, unpack)
 import Data.Typeable
-#ifndef ghcjs_HOST_OS
+#ifndef BROWSER
 import Data.TCache
 import Data.TCache.DefaultPersistence
 #endif
@@ -24,7 +24,7 @@ import Data.TCache.DefaultPersistence
 
 type Suscribed = M.Map String [Node]
 
-#ifndef ghcjs_HOST_OS
+#ifndef BROWSER
 
 instance Indexable Suscribed where
    key _= "#suscribed"
@@ -108,7 +108,7 @@ publish key dat= do
 
 -- | executes `proc` in all the nodes suscribed to `key`
 foldPublish op init excnodes key proc= atServer $ do
-#ifndef ghcjs_HOST_OS
+#ifndef BROWSER
     nodes <- localIO $ atomically  ((readDBRef suscribed) `onNothing` return M.empty) 
                         >>= return . fromMaybe [] . M.lookup key
 #else
