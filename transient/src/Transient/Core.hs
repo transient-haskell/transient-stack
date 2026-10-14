@@ -2658,7 +2658,7 @@ getMailbox =  getMailbox' (0 :: Int)
 
 -- | read from a mailbox identified by an identifier besides the type
 getMailbox' :: (Typeable key, Ord key, Typeable val) => key -> TransIO val
-getMailbox' mboxid= getEVarFromMailbox >>= \ev -> readEVar ev
+getMailbox' mboxid= getEVarFromMailbox' mboxid >>= \ev -> readEVar ev
 
 -- | Retrieve the 'EVar' backing the default mailbox for values of type @val@.
 --
