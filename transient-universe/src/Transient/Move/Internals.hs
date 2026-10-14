@@ -465,11 +465,17 @@ wormhole node (Cloud comp) =  local $  do
         my <- getMyNode
         if node== my
           then do
+            -- a call to the own node: a Self connection of its own, so that the connection of the state (the one to
+            -- the caller of this node, if this node is executing a request) is not modified and it is restored at the end
             let conn = fromMaybe (error "wormhole: no connection") moldconn
             rself <- liftIO $ newIORef  $ Just Self
-            liftIO $ writeIORef (remoteNode conn) $ Just node
-            setData conn{connData=   rself}
-            comp
+            rnode <- liftIO $ newIORef  $ Just node
+            -- It is a call of this node, not the response to its caller: like in a call to another node, the closure to
+            -- respond to is not used (see 'calledConn') and the connection is the one of a caller.
+            sandboxData (ofType :: ClosToRespond) $ sandboxData (ofType :: Connection) $ do
+                delState (ofType :: ClosToRespond)
+                setData conn{connData= rself, remoteNode= rnode, calling= True}
+                comp
           else do
             (prevprevclos,idconn,r) <-
                  sandboxData (ofType :: ClosToRespond) $
