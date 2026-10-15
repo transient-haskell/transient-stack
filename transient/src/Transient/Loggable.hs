@@ -1,4 +1,4 @@
- {-#Language OverloadedStrings, ScopedTypeVariables #-}
+ {-#Language OverloadedStrings, ScopedTypeVariables, FlexibleInstances, UndecidableInstances #-}
 {-# LANGUAGE InstanceSigs #-}
 {-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
 {-# HLINT ignore "Use typeRep" #-}
@@ -76,6 +76,11 @@ fragment s
             else     (r,rest)
 
 
+-- | Default 'Loggable' instance for any @(Show, Read, Typeable)@ type.
+-- Uses the default 'serialize' \/ 'deserialize' implementations (show\/reads).
+-- Specific instances override this via their higher specificity.
+instance {-# OVERLAPPABLE #-} (Show a, Read a, Typeable a) => Loggable a
+
 instance Loggable a => Loggable (StreamData a) where
     serialize (SMore x)= byteString "SMore/" <> serialize x
     serialize (SLast x)= byteString "SLast/" <> serialize x
@@ -127,9 +132,9 @@ instance   (Typeable a, Loggable a) => Loggable [a]  where
 
     deserialize= r
       where
-      ty :: TransIO [a] -> [a]
-      ty = undefined
-      r= if typeOf (ty r) /= typeOf (ofType :: String)
+      -- ty :: TransIO [a] -> [a]
+      -- ty = undefined
+      r= if typeOf r /= typeOf (ofType :: TransIO String)
               then (tChar '[' *> commaSep deserialize <* tChar ']')
               else
                   

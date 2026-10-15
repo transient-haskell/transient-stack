@@ -1,4 +1,4 @@
-{-# LANGUAGE ScopedTypeVariables, CPP #-}
+{-# LANGUAGE ScopedTypeVariables, CPP, NoMonomorphismRestriction #-}
 {-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
 {-# HLINT ignore "Used otherwise as a pattern" #-}
 {-# HLINT ignore "Use lambda-case" #-}
@@ -9,11 +9,6 @@
 
 
 
--- | Console interaction primitives for the Transient monad.
---
--- Provides non-blocking, multi-threaded @stdin@ reading with option matching,
--- typed input, navigation history, and the 'keep'\/'keep'' entry points that
--- drive the Transient runtime loop with an interactive console.
 module Transient.Console(keep, keep', exit,exitLeft,keepCollect,option, option1, input, input', inputf, inputNav,Navigation(..),
 inputfm, inputParse, processLine,delListener,rprompt,thereIsArgPath,lockOut) where
 
@@ -58,11 +53,9 @@ import System.Signal
 import Transient.Mailboxes (putMailbox)
 
 {-# NOINLINE outputlock #-}
--- | Mutex protecting concurrent writes to stdout (currently a no-op; see 'lockOut').
 outputlock :: MVar ()
 outputlock  = unsafePerformIO $ newMVar ()
--- | Wrap an IO action to serialise stdout output. Currently identity (no locking).
-lockOut = id
+lockOut =  liftIO . withMVar outputlock . const
 
 -- * Non-blocking keyboard input for multiple threads
 
@@ -84,7 +77,7 @@ option ::
   TransIO b
 option = optionf False
 
--- | Like 'option' but the listener is removed after the first match (one-shot).
+-- Implements the same functionality than `option` but waits only once for a single input 
 option1 ::
   (Typeable b, Show b, Read b, Eq b) =>
   b ->
@@ -107,9 +100,9 @@ optionf remove ret message =  do
       liftIO $ putStrLn message -- "\noption: " >> putStrLn sret
       return ret
 
-{-# NOINLINE newInput #-}
--- | Set to 'True' when a new option\/input handler has been registered, so 'processLine' retries with the updated handler list.
+-- a new option/input has been added. should be applied to the line if none has parsed the last fragment
 newInput= unsafePerformIO $ newIORef False
+{-# NOINLINE newInput #-}
 
 -- | General asynchronous console input.
 --
@@ -148,6 +141,7 @@ inputfm remove ident message mv cond = do
   liftIO $ delListener ident     -- if the same action has been registered, deregister it
 
   str <- reactId True ident ConsoleCallback message  (const $ return ()) (return ())
+              
   case str of
     '\ESC':_ -> do
         liftIO $ do
@@ -246,6 +240,9 @@ input cond prompt = inputf True "input" prompt Nothing cond
 input' :: (Typeable a, Loggable a) =>  a -> (a -> Bool) -> String -> TransIO a
 input' v cond prompt = inputf True "input" prompt (Just v) cond
 
+-- -- input removed after use either if it validades or not
+-- input1 cond prompt = inputf False "input" prompt Nothing cond
+
 newtype NavBack= NavBack Bool
 
 newtype NavResps  =  NavResps  (M.Map String String) deriving (Read,Show, Typeable) --(Generic,ToJSON,FromJSON,Typeable)
@@ -269,7 +266,7 @@ inputNav :: (Typeable a, Loggable a) =>
 inputNav mv cond prompt= do
 
   def <- default' prompt `onBack` \Navigation ->  do
-          NavBack doit <- getState <|> return (NavBack False)
+          NavBack doit <- tryState <|> return (NavBack False)
           -- tr  $ ("doit",doit)
           if not doit
             then do
@@ -309,7 +306,6 @@ inputNav mv cond prompt= do
 
 
 {-# NOINLINE rprompt #-}
--- | The prompt string printed before each line of input (default @"tr > "@).
 rprompt = unsafePerformIO $ newIORef "tr > "
 
 inputLoop =
@@ -328,10 +324,8 @@ inputLoop =
 
 
 {-# NOINLINE rdefault #-}
--- | Pre-filled default text shown in the input line (consumed by 'getLineNoBuffering').
 rdefault= unsafePerformIO $ newIORef ""
 
--- | Read a line from @stdin@ in raw (no-buffering) mode, supporting cursor movement and delete keys.
 getLineNoBuffering= do
   hSetBuffering stdin NoBuffering
   hSetBuffering stdout NoBuffering
@@ -366,7 +360,7 @@ getLineNoBuffering= do
                               return "\ESC[A"
                     'D' -> do
                               i <- readIORef index
-                              when (i>0)$ putChar '\b'
+                              when (i>0)$ lockOut $ putChar '\b'
                               writeIORef index $ if i> 0 then i - 1 else i
                               loop
                     'C' -> do
@@ -423,8 +417,8 @@ getLineNoBuffering= do
   loop
 
 {-# NOINLINE rconsumed #-}
--- | Remaining input fragment after the last successful parse.
--- 'Nothing' = no parser has consumed anything yet; 'Just rest' = consumed up to @rest@.
+
+-- Remaining line not parsed yet. Nothing -> no parser has consumed any fragment yet. Just -> a parser has consumed a fragment
 rconsumed :: IORef (Maybe String)
 rconsumed = unsafePerformIO $ newIORef Nothing
 
@@ -436,7 +430,7 @@ processLine line' = liftIO $ do
   ttr ("processline",line)
 
   mbs <- consoleCallbacks
-  process  mbs line
+  process  mbs (if null line then " " else line)
   writeIORef recho False
   where
     process ::  [(String,TypeCallback, String, TranShip, Callback)] -> String -> IO ()
@@ -525,16 +519,16 @@ keep mx = do
           onException $ \(e :: SomeException) -> do
                 liftIO $ do
                   th <- myThreadId
-                  putStrLn $ "\x1b[31mERROR:\x1b[0m " <> show e   
+                  lockOut $ putStrLn $ "\x1b[31mERROR:\x1b[0m " <> show e   
                   showAllThreads
-                  hPrint hLogFile e  -- `catch` \(e:: IOError) -> exc
+                  lockOut $ hPrint hLogFile e  -- `catch` \(e:: IOError) -> exc
                 -- log <- getLog
                 -- tttr  log
                 empty
 
           onException $ \(e :: IOException) -> do
             when (ioeGetErrorString e == "resource busy") $ do
-              liftIO $ do putStrLn $ "\x1b[31mERROR:\x1b[0m " <> show e 
+              lockOut $ do putStrLn $ "\x1b[31mERROR:\x1b[0m " <> show e 
               exitLeft "resource busy"
               empty
 
@@ -553,12 +547,13 @@ keep mx = do
           -- readFromFile 
           do
           
-              option "alloptions" "show all options"
+              option "options" "show all options"
               mbs <- consoleCallbacks
               let filteryn x = x == "y" || x == "n" || x == "Y" || x  == "N"
-              prefix <- input' "" (not . filteryn) "command prefix? (default none) "
-              ttr ("PREFIX",prefix)
-              liftIO $ mapM_ ((\c -> when (prefix `isPrefixOf` c) $ do putStr c; putStr "|") . (\(fst, _, _,_,_) -> fst)) mbs
+              p <- input' "none" (not . filteryn) "command prefix? (default none) "
+              let prefix = if p =="none" then "" else p
+
+              liftIO $ mapM_ ((\c -> when (prefix `isPrefixOf` c) $ lockOut $ do putStr c; putStr "|") . (\(fst, _, _,_,_) -> fst)) mbs
 
               d <- input' "n" filteryn "\nDetails? N/y "
               when (d == "y" || d =="Y") $
@@ -623,12 +618,27 @@ keep mx = do
                      syncCache
                      putStrLn "\nSaved!!"
                   empty
+                {-
+                <|> do
+                      option "log" "inspect the log of a thread"
+                      th <- input (const True)  "thread number>"
+                      ml <- liftIO $ getStateFromThread th st
+                      liftIO $ print $ fmap (\(Log _ _ log _) -> reverse log) ml
+                      empty
+                      -}
 
           <|> do
                   option "end" "exit"
                   -- liftIO $ putStrLn "exiting..."
                   abduce
 
+                  -- st <- threadState $ fromString "input"
+                  -- liftIO $ killThread $ threadId st
+                  --  killChilds
+                  -- top <- topState
+                  -- liftIO $ killChildren  top
+                  -- liftIO $ killThread $ threadId top
+                  -- liftIO $ putMVar rexit $ Left "end"
                   exitLeft "end"
                   empty
             <|> do
@@ -644,12 +654,12 @@ keep mx = do
   where
   banner = unlines
     [ ""
-    , "          /\\/\\/\\  /\\/\\/\\  /\\/\\/\\               "
-    , "        \\/      \\/      \\/      \\/                  "
-    , "                                                    "
-    , "            T R A N S I E N T                    "
-    , "      Concurrent, Distributed & More!            "
-    , "═══════════════════════════════════════════════════"
+    , "          /\\/\\/\\  /\\/\\/\\  /\\/\\/\\"
+    , "        \\/      \\/      \\/      \\/"
+    , ""
+    , "            T R A N S I E N T"
+    , "      Concurrent, Distributed & More!"
+    , "════════════════════════════════════════════"
     ]
     -- | Wait for the execution of `exit` and return the result or the exhaustion of thread activity
   stay save rexit = do
@@ -661,14 +671,20 @@ keep mx = do
       syncCache
       putStrLn "\nsaved\n"
 
+
+    -- top <- topState
+    -- liftIO $ (do 
+    --   killChildren  top
+    --   killThread $ threadId top) `CE.onException` return()c
+
     case r of  Left "signal" -> do  print "exiting"; exitFailure
                _ -> return ()
     return r
 
--- | Read and execute console commands from a file (triggered by the @file@ option).
 readFromFile= do
               option "file" "read commands from a file"
               abduce
+              -- liftIO $ threadDelay 1000000
               file <- input (const True ) "file: "
               ls <- liftIO $ readFile file
               let l= concatMap homogenize $ words ls
@@ -681,10 +697,10 @@ readFromFile= do
 -- as well as to embed the Transient monad inside another computation.
 -- It returns the list of results produced by all the threads when all the threads have finished
 keep' :: Typeable a => TransIO a -> IO [a]
-keep' mx = keepCollect 0 0 $
-                mx <||>
-                readFromFile <||>
-                (liftIO  execCommandLine >> empty)
+keep' mx = keepCollect 0 0 $ mx
+                -- mx  <->
+                -- readFromFile <->
+                -- (liftIO  execCommandLine >> empty)
 
 
 -- | gather all the results returned by all the thread. It waits for a certain number of results and for a certain time (0 as first parameter means "all the results", 0 in the second paramenter means "until all thread finish"). It is the same than `collect'` but it returns in the IO monad.
@@ -699,7 +715,7 @@ keepCollect n time mx = do
           runTransient1 $ do
             onException $ \(e :: SomeException) -> do
               --  top <- topState
-              liftIO $ do
+              lockOut $ do
                 th <- myThreadId
                 putStr $ show th
                 putStr ": "
@@ -712,7 +728,7 @@ keepCollect n time mx = do
 
             onException $ \(e :: IOException) ->
               when (ioeGetErrorString e == "resource busy") $ do
-                liftIO $ do putStrLn $ "\x1b[31mERROR:\x1b[0m " <> show e  ; putStrLn "EXITING!!!"
+                lockOut $ do putStrLn $ "\x1b[31mERROR:\x1b[0m " <> show e  ; putStrLn "EXITING!!!"
                 liftIO $ putMVar rexit $ Left $ show e
                 empty
 
@@ -738,15 +754,14 @@ keepCollect n time mx = do
       Left _ -> return []
       Right x  -> return x
 
--- | Set to 'True' while processing a command-line @-p@ path to echo parsed input.
+-- echo of the input when processing a command line
 {-# NOINLINE recho #-}
 recho= unsafePerformIO $ newIORef False
 
--- | 'True' while the initial @-p@ command-line path is being executed.
+-- is executing the command line or not
 {-# NOINLINE commandLine #-}
 commandLine= unsafePerformIO $ newIORef False
 
--- | Execute the @-p@ command-line path (if present) by injecting it into 'processLine'.
 execCommandLine :: IO ()
 execCommandLine = do
       writeIORef commandLine True
@@ -757,7 +772,7 @@ execCommandLine = do
         threadDelay 10000
         processLine    path
 
--- | Collapse one or more separator characters into a single @/@, preserving quoted substrings.
+-- substitute one of more separators by a single '/'
 subst = subst1
             where
             subst2 []=[]
@@ -771,12 +786,9 @@ subst = subst1
                   | h `elem` separators = whyNot (recho =: True) `seq` if null t then "" else '/':subst2 t
                   | otherwise= h: subst1 t
 
--- | Operator alias for 'writeIORef'.
 (=:) = writeIORef
--- | Alias for 'unsafePerformIO'.
 whyNot= unsafePerformIO
 
--- | Return the @-p@ / @--path@ argument from the program's command line, or empty string if absent.
 thereIsArgPath=  do
   args <- getArgs
   ttr ("args",args)
@@ -786,13 +798,18 @@ thereIsArgPath=  do
   ttr ("argpath",r)
   return r
 
--- | Normalise a command-line argument into the @/@-separated path format used by 'processLine'.
 homogenize "-p" = ""
 homogenize s=
     let sc= dropWhile (=='-') s
         scq= if not ("start" `isPrefixOf` s )  && '/' `elem` sc then '\"':sc <> "\"" else sc
     in scq <> "/"
 
+{-
+searchOption op= do
+  args <- getArgs
+  let s = dropWhile (\s -> let s'='-':op || s /= s' && s /= '-':s')
+  return $ takeWhile (\t ->head t /= '.') s
+-}
 
 -- | write a message and parse a complete line from the console. The parser is constructed with 'Transient.Parse' primitives
 inputParse :: (Typeable b) => TransIO b -> String -> TransIO b
@@ -800,8 +817,12 @@ inputParse parse message = r
   where
     r = do
       liftIO $ putStr (message ++ ": " ) >> hFlush stdout
-      str <- reactId True message ConsoleCallback message (const $ return ()) (return ())
+      str <- reactId True message ConsoleCallback message (const $ return ()) (return ()) -- (addInternalCallbackData message message) (return ())
       delListener message
+
+      -- let (str',rest)= span (/= '/') str
+
+      -- liftIO $ putStrLn str
       liftIO $ print str
       (r, rest) <- withParseString (BSL.pack str) $ (,) <$> parse <*> giveParseString
       ttr ("REST",rest)

@@ -43,6 +43,7 @@ library
                      , vector
                      , TCache
                      , signal
+                     , data-default
 
 
     exposed-modules: Transient.Backtrack
