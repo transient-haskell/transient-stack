@@ -307,7 +307,7 @@ wcallback x f= Widget $ do
 
 redraw :: JSString -> Widget a -> TransIO a
 redraw idelem w=  do
-   path <- getState <|> return ( Path [])
+   path <- tryState <|> return ( Path [])
    r <- render $ at idelem Insert  w
    setState path
    redraw  idelem w   <|> return r
@@ -815,7 +815,7 @@ data Path= Path [JSString]
 
 -- | avoid that a recursive widget with links may produce long paths. It is equivalent to tail call elimination
 staticNav  x= do
-  Path paths <-  getState <|> return (Path  [])
+  Path paths <-  tryState <|> return (Path  [])
   x <*** setState (Path paths)
   
 
@@ -1643,7 +1643,7 @@ data UpdateMethod= Append | Prepend | Insert deriving Show
 -- update method.
 at ::  JSString -> UpdateMethod -> Widget a -> Widget  a
 at id method w= setAt id method <<< w -- do
-  -- original@(IdLine level i) <- Widget $ getState <|> error "IdLine not defined"
+  -- original@(IdLine level i) <- Widget $ tryState <|> error "IdLine not defined"
   -- setState $ IdLine level  $ JS.tail id 
   -- w  `with` setState original
   -- where

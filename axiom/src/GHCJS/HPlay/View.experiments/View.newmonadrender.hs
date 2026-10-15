@@ -354,14 +354,14 @@ span1 id1 rend= Perch $ \e -> do
 --   return x=  Widget $ return x
 --   Widget w >>= w' = Widget  $ do
 --     id1 <- genNewId
---     -- prevr <-  getState <|> return noHtml
+--     -- prevr <-  tryState <|> return noHtml
 --     delData noHtml
     
 --     x <-  w  <*** do
 --             meid <- liftIO $ elemById id1 
 --             if isNothing meid
 --               then do
---                 rend <- getState <|> return noHtml  
+--                 rend <- tryState <|> return noHtml  
 --                 setState $ rend <> (span ! id id1 $ noHtml)
 --               else do
 --                 liftIO $ clearChildren $ fromJust meid
@@ -371,12 +371,12 @@ span1 id1 rend= Perch $ \e -> do
 --                    delData noHtml --setData prevr 
 --     let Widget wy = w' x
  
---     rend <-  getState <|> return noHtml
+--     rend <-  tryState <|> return noHtml
 
 --     delData noHtml
 --     wy <*** do
          
---           rend' <-  getState <|> return noHtml
+--           rend' <-  tryState <|> return noHtml
 
 --           setState $ rend <> (span1 id1 $ rend')
 --     where
@@ -453,7 +453,7 @@ wcallback :: Widget a -> (a ->Widget b) -> Widget b
 
 wcallback (Widget x) f= Widget $ do
   --nid <-  genNewId
-  IdLine _ nid <-  getState <|>  do
+  IdLine _ nid <-  tryState <|>  do
                     id1 <- genNewId                                -- !> "ONNOTHING"
                     top <- liftIO getBody
                     liftIO $ build (span ! id id1 $ noHtml) top
@@ -473,7 +473,7 @@ wcallback (Widget x) f= Widget $ do
 
 redraw :: JSString -> Widget a -> TransIO a
 redraw idelem w=  do
-   path <- getState <|> return ( Path [])
+   path <- tryState <|> return ( Path [])
    r <- render $ at idelem Insert  w
    setState path
    redraw  idelem w   <|> return r
@@ -981,7 +981,7 @@ data Path= Path [JSString]
 
 -- | avoid that a recursive widget with links may produce long paths. It is equivalent to tail call elimination
 staticNav  x= do
-  Path paths <-  getState <|> return (Path  [])
+  Path paths <-  tryState <|> return (Path  [])
   x <*** setState (Path paths)
   
 

@@ -332,7 +332,7 @@ wcallback x f= do
 
 redraw :: JSString -> Widget a -> TransIO a
 redraw idelem w=  do
-   path <- getState <|> return ( Path [])
+   path <- tryState <|> return ( Path [])
    r <- render $ at idelem Insert  w
    setState path
    redraw  idelem w   <|> return r
@@ -821,7 +821,7 @@ data Path= Path [JSString]
 
 -- | avoid that a recursive widget with links may produce long paths. It is equivalent to tail call elimination
 staticNav  x= do
-  Path paths <-  getState <|> return (Path  [])
+  Path paths <-  tryState <|> return (Path  [])
   x <*** setState (Path paths)
   
 -- | show something enclosed in the <pre> tag, so ASCII formatting chars are honored
@@ -1381,7 +1381,7 @@ pass v event= do
 -- runWidget' action e  = do
 
 --       mx <- norender action <*** do                        -- !> "runVidget'"
---               torender <- getState
+--               torender <- tryState
 --               tr "build de runWidget"
               
 --               liftIO $ build torender e >> return()

@@ -184,7 +184,7 @@ todo = do
 
  getFiltered :: M.IntMap (String, Status)-> Widget (M.IntMap (String, Status))
  getFiltered tasks= do
-   Mode todisplay <- Widget getState <|> return (Mode all)
+   Mode todisplay <- Widget tryState <|> return (Mode all)
    let ts= M.filter (fil todisplay)  tasks 
    return ts
 
@@ -214,7 +214,7 @@ todo = do
       when( evdata == Key 13) $ do
          entry .= ""
          idtask <- addTask task Active
-         Mode m <-  getState <|> return (Mode all)
+         Mode m <-  tryState <|> return (Mode all)
          when (m /= completed) $ at "#todo-list" Prepend $ display idtask
          itemsLeft
 
