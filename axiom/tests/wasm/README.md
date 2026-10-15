@@ -3,6 +3,9 @@
 `Widget.hs` is a client-side form (`runBody`): a text box and a button. `run.sh` compiles it to wasm, runs it in node over
 jsdom, writes "Ana" in the box, clicks the button and waits for `hello Ana`; it prints `PASS` or `FAIL`.
 
+`Calc.hs` / `calc.sh`: computations in the `Widget` monad without rendering (bind, `liftIO`, applicative, alternative) through
+`runBody`; they give the right result (`Just 20`) in wasm.
+
 Status (2026-10-15): `View.hs` and `Cell.hs` compile with wasm, the form is drawn (text box and button) and the click handler
 runs, but the page is not updated, so the test prints `FAIL`.
 
