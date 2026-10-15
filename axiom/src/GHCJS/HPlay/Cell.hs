@@ -13,7 +13,7 @@
 -----------------------------------------------------------------------------
 {-# LANGUAGE TypeSynonymInstances, FlexibleInstances, OverloadedStrings, CPP, ScopedTypeVariables #-}
 module GHCJS.HPlay.Cell(Cell(..),boxCell,bcell,(.=),get,mkscell,scell, gcell, calc)  where
-import Transient.Internals
+import Transient.Internals hiding (genNewId)
 import Transient.Move --hiding (JSString)
 import GHCJS.HPlay.View
 import Data.Typeable
@@ -27,9 +27,13 @@ import Data.List
 import Control.Exception
 import Data.IORef
 import System.IO.Unsafe
-#ifdef ghcjs_HOST_OS
+#ifdef BROWSER
 
+#if defined(wasm32_HOST_ARCH)
+import Perch.JS (JSString)
+#else
 import Data.JSString hiding (empty)
+#endif
 
 #else
 

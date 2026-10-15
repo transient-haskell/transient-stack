@@ -112,11 +112,11 @@ module GHCJS.HPlay.View(
 )  where
 
 
-import           Transient.Internals     hiding (input, option, parent,genNewId)
+import           Transient.Internals     hiding (input, option, parent,genNewId,Callback)
 import           Transient.Move.Logged hiding ((<<))
 import           Transient.Move.Utils
 import qualified Prelude(id,span,div)
-#ifndef ghcjs_HOST_OS
+#ifndef BROWSER
 import           Transient.Parse hiding(parseString)
 import           Data.Char(isSpace)
 import           System.Directory
@@ -126,6 +126,7 @@ import           Control.Exception hiding (try)
 import qualified Data.ByteString.Lazy.Char8 as BS
 #endif
 
+import           Control.Monad
 import           Control.Monad.State
 -- import qualified Data.Map                as M
 
@@ -143,26 +144,31 @@ import           Unsafe.Coerce
 import           Data.IORef
 
 
-#ifdef ghcjs_HOST_OS
+#ifdef BROWSER
 
+#if defined(wasm32_HOST_ARCH)
+import           Perch.JS                hiding (takeWhile, drop)
+import qualified Perch.JS                as JS
+#else
 import           GHCJS.Foreign
 import           GHCJS.Foreign.Callback
 import           GHCJS.Foreign.Callback.Internal (Callback(..))
 import           GHCJS.Marshal
 
-import           GHCJS.Perch             hiding (JsEvent (..), eventName, option,head,map,tr)
 import           GHCJS.Types
-import           Transient.Move          hiding (pack)
 
 import qualified Data.JSString           as JS hiding (empty, center,span, strip,foldr,head)
 import           Data.JSString (pack,unpack,toLower)
+#endif
+import           GHCJS.Perch             hiding (JsEvent (..), eventName, option,head,map,tr)
+import           Transient.Move          hiding (pack)
 #else
 import           Data.List as JS         hiding (span)
 import           GHCJS.Perch             hiding (JSVal, JsEvent (..), eventName, option,head, map,tr)
 import           Transient.Move          
 #endif
 
-#ifndef ghcjs_HOST_OS
+#ifndef BROWSER
 type JSString = String
 #else
 instance Loggable JSString
@@ -186,7 +192,7 @@ fromJSString s = x
 getValue :: MonadIO m => Elem -> m (Maybe String)
 
 getName :: MonadIO m => Elem -> m (Maybe String)
-#ifdef ghcjs_HOST_OS
+#ifdef BROWSER
 getValue e = liftIO $ do
    s <- getValueDOM e
    fromJSVal s -- return $ JS.unpack s
@@ -200,7 +206,7 @@ getName = undefined
 #endif
 
 elemBySeq :: (MonadState TranShip m, MonadIO m) => JSString -> m (Maybe Elem)
-#ifdef ghcjs_HOST_OS
+#ifdef BROWSER
 elemBySeq id = do
   mid <- getData
   case mid of
@@ -215,7 +221,7 @@ elemBySeq id = do
 elemBySeq _ = return Nothing
 #endif
 
-#ifdef ghcjs_HOST_OS
+#ifdef BROWSER
 attribute :: (MonadIO m)  => Elem -> JSString -> m (Maybe JSString)
 attribute elem prop=  liftIO $ do
     rv <- attributeDOM elem "id"
@@ -225,7 +231,7 @@ attribute _ = return Nothing
 #endif
 
 elemById :: MonadIO m  => JSString -> m (Maybe Elem)
-#ifdef ghcjs_HOST_OS
+#ifdef BROWSER
 elemById id= liftIO $ do
    re <- elemByIdDOM id
    fromJSVal re
@@ -606,7 +612,7 @@ validate  w val=  do
 
 {-#NOINLINE rprefix #-}
 rprefix= unsafePerformIO $ newIORef 0
-#ifdef ghcjs_HOST_OS
+#ifdef BROWSER
 genNewId ::  (MonadState TranShip m, MonadIO m) => m  JSString
 genNewId=  do
       -- r <- liftIO $ atomicModifyIORef rprefix (\n -> (n+1,n))
@@ -963,7 +969,7 @@ rReadIndexPath= unsafePerformIO $ newIORef 0
 --
 -- It also update the path in the URL.
 wlink :: (Show a, Typeable a) => a -> Perch -> Widget a
-#ifdef ghcjs_HOST_OS
+#ifdef BROWSER
 wlink x v=  do
     (a ! href "#"   $ v)  `pass` OnClick
     Path paths <- Widget $ getSData <|> return (Path  [])
@@ -1187,7 +1193,7 @@ data EventData= EventData{ evName :: JSString, evData :: Dynamic} deriving (Show
 instance  IsEvent  BrowserEvent  where
 --  data EData _= EventData{ evName :: JSString, evData :: EvData} deriving (Show,Typeable)
   eventName e =
-#ifdef ghcjs_HOST_OS
+#ifdef BROWSER
     JS.toLower $ JS.drop 2 (toJSString $ show e) -- const "load"
 #else
     ""
@@ -1402,7 +1408,7 @@ data ExecRender= HasEventSet | ExecEvent   deriving (Eq, Read, Show)
 
 
 raiseEvent ::  IsEvent event  => Widget a -> event -> Widget a
-#ifdef ghcjs_HOST_OS
+#ifdef BROWSER
 raiseEvent w event = Widget  $ Transient $ do
   --  noTrans $ do
   --     id <- genNewId
@@ -1490,7 +1496,7 @@ pageX _= undefint
 pageY _= undefint
 #endif
 
-#ifdef ghcjs_HOST_OS
+#ifdef BROWSER
 foreign import javascript unsafe
   "$1.stopPropagation()"
   stopPropagation :: JSVal -> IO ()
@@ -1550,7 +1556,7 @@ runWidgetId w id=  do
 
 -- | add a header in the <header> tag
 addHeader :: Perch -> IO ()
-#ifdef ghcjs_HOST_OS
+#ifdef BROWSER
 addHeader format= do
     head <- getHead
     build format head
@@ -1584,7 +1590,7 @@ runBody w= do
 -- However the rendering of elements combined with `<|>` or `<>` or `<*>`  are independent.
 -- This allows for full dynamic and composable client-side Web apps.
 render :: Widget a -> TransIO a
-#ifdef ghcjs_HOST_OS
+#ifdef BROWSER
 render  mx = Transient $ do
        delData RenderExec ; tr "reset RenderExec"
        idline1@(IdLine level id1')
@@ -1677,7 +1683,7 @@ render  mx = Transient $ do
        return r
 
 -- render :: Widget a -> TransIO a
--- #ifdef ghcjs_HOST_OS
+-- #ifdef BROWSER
 -- render  mx = Transient $ do
 --        delData RenderExec ; tr "reset RenderExec"
 --        idline1@(IdLine level id1')
@@ -1862,7 +1868,7 @@ at' id method w= setAt id method `insert` w
 
 
 
-#ifdef ghcjs_HOST_OS
+#ifdef BROWSER
 
 foreign import javascript unsafe  "$1[$2].toString()" getProp :: Elem -> JSString -> IO JSString
 
@@ -1903,7 +1909,7 @@ fromJSValUnchecked= undefined
 fromJSValUncheckedListOf= undefined
 #endif
 
-#ifdef ghcjs_HOST_OS
+#ifdef BROWSER
 foreign import javascript unsafe
   "$1.addEventListener($2, $3,false);"
   js_addEventListener :: Elem -> JSString -> Callback (JSVal -> IO ()) -> IO ()
@@ -1912,13 +1918,13 @@ js_addEventListener= undefined
 #endif
 
 
-#ifdef ghcjs_HOST_OS
+#ifdef BROWSER
 foreign import javascript unsafe "document.head" getHead :: IO Elem
 #else
 getHead= undefined
 #endif
 
-#ifdef ghcjs_HOST_OS
+#ifdef BROWSER
 foreign import javascript unsafe "$1.childNodes" getChildren :: Elem -> IO JSVal
 foreign import javascript unsafe "$1.firstChild" firstChild :: Elem -> IO JSVal
 foreign import javascript unsafe "$2.insertBefore($1, $3)" addChildBefore :: Elem -> Elem -> Elem -> IO()
@@ -1948,7 +1954,7 @@ addChildBefore= undefined
 ---------------------------- TEMPLATES & NAVIGATION ---------------
 
 editW ::   Cloud String
-#ifdef ghcjs_HOST_OS
+#ifdef BROWSER
 editW = onBrowser $ loggedc $ do
 
       local $ do

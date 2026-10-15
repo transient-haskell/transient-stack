@@ -17,7 +17,7 @@ module GHCJS.Perch
   ( -- * Perch DOM Builder
     module Internal.Perch
     -- * Types
-  , Elem
+  , Elem (..)
   , PropId
   , Attribute
   , NamedEvent (..)

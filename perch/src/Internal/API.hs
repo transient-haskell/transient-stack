@@ -4,7 +4,7 @@ module Internal.API where
 import           Internal.FFI
 import           Internal.Type
 
-import           Internal.JS
+import           Perch.JS
 --------------------------------------------------------------------------------
 
 

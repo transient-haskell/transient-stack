@@ -2,7 +2,7 @@
 module Internal.FFI where
 
 #ifdef BROWSER
-import           Internal.JS
+import           Perch.JS
 --------------------------------------------------------------------------------
 
 

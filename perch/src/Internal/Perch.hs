@@ -10,7 +10,7 @@ module Internal.Perch where
 import           Internal.API
 import           Internal.Type
 
-import           Internal.JS
+import           Perch.JS
 
 import           Control.Monad.IO.Class (MonadIO (..))
 import           Data.String            (IsString (..))

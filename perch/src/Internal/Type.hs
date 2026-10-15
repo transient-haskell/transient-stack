@@ -4,10 +4,12 @@
 {-# LANGUAGE UndecidableInstances #-}
 module Internal.Type where
 
-import           Internal.JS
+import           Perch.JS
+#ifdef BROWSER
+import           Internal.FFI  (js_isInCurrentDOM)
+#endif
 #if defined(ghcjs_HOST_OS)
 import           GHCJS.Marshal (FromJSVal (..), ToJSVal (..))
-import           Internal.FFI  (js_isInCurrentDOM)
 #endif
 --------------------------------------------------------------------------------
 
@@ -42,7 +44,15 @@ data JsEvent = Blur
              | Wheel
 
 
-#if defined(ghcjs_HOST_OS)
+#if defined(wasm32_HOST_ARCH)
+instance FromJSVal Elem where
+  fromJSVal v =
+    do isElem <- js_isInCurrentDOM v
+       return $
+         if isElem
+         then Just (Elem v)
+         else Nothing
+#elif defined(ghcjs_HOST_OS)
 instance FromJSVal Elem where
   fromJSVal v =
     do isElem <- js_isInCurrentDOM v

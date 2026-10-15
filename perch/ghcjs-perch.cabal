@@ -35,10 +35,10 @@ cabal-version:       >=1.10
 
 library
   exposed-modules: GHCJS.Perch
+                   Perch.JS
 
   other-modules: Internal.API
                  Internal.FFI
-                 Internal.JS
                  Internal.Perch
                  Internal.Type
 
