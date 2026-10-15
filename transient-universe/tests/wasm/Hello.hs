@@ -13,13 +13,10 @@ app = onBrowser $ do
          return ("hello from the server" :: String)
   localIO $ putStrLn ("BROWSER: " ++ r)
 
-#ifdef BROWSER
-foreign export javascript "hs_start" hs_start :: IO ()
-hs_start :: IO ()
-hs_start = keep (initNode app) >> return ()
-main :: IO ()
-main = return ()
-#else
 main :: IO ()
 main = keep (initNode app) >> return ()
+
+#ifdef BROWSER
+-- the wasm is a reactor: main does not run, JS calls hs_start
+foreign export javascript "hs_start" main :: IO ()
 #endif
