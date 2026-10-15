@@ -263,7 +263,7 @@ instance Monad Widget where
        delData noHtml
        mk <- runView x
        form1 <- getData `onNothing` return noHtml
-       resetEventCont mk
+       resetEventCont
        case mk of
          Just k  -> do
             delData noHtml
@@ -1446,10 +1446,10 @@ raiseEvent w event = Widget  $ Transient $ do
    runCont' cont= do
      setData ExecEvent                              --  !> "REPEAT: SET EXECEVENT"
 
-     mr <- runClosure cont !> "runclosure"
+     mr <- runView w                                -- reevaluate the widget: its value is read again from the page
      case mr of
          Nothing -> return Nothing
-         Just r -> runContinuation cont r     -- !> "continue"
+         Just r -> runCont r cont                   -- !> "continue"
 
        -- create an element and add any event handler to it.
    addEvent :: IsEvent a =>   a -> (EventData -> IO()) -> Perch -> Perch
