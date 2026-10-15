@@ -22,16 +22,16 @@
 -- This example prints the final state as "world".
 --
 -- @
--- import Transient.Base (keep, setState, getState)
+-- import Transient.Base (keep, setState, tryState)
 -- import Transient.Backtrack (onUndo, undo)
 -- import Control.Monad.IO.Class (liftIO)
 --
 -- main = keep $ do
 --     setState "hello"
---     oldState <- getState
+--     oldState <- tryState
 --
 --     liftIO (putStrLn "Register undo") \`onUndo\` (do
---         curState <- getState
+--         curState <- tryState
 --         liftIO $ putStrLn $ "Final state: "  ++ curState
 --         liftIO $ putStrLn $ "Old state: "    ++ oldState)
 --

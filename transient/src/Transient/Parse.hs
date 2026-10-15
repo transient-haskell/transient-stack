@@ -69,7 +69,7 @@ withParseString x parse= do
 
 -- | Run a parser driven by a 'StreamData' stream, restoring the previous parse context on exit.
 withParseStream stream parse= do
-     p <- gets parseContext -- getState <|> return(ParseContext (return SDone) mempty)
+     p <- gets parseContext -- tryState <|> return(ParseContext (return SDone) mempty)
      setParseStream stream
      r <- parse
      modify $ \s -> s{parseContext= p} --setState (ParseContext c (str :: BS.ByteString))

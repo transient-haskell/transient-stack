@@ -13,7 +13,7 @@
 -----------------------------------------------------------------------------
 {-# LANGUAGE  ScopedTypeVariables, CPP #-}
 module Transient.Indeterminism (
-choose, for, collect, collect', group, groupByTime, burst
+choose, for, collect, collect', endCollect, group, groupByTime, burst
 ) where
 
 import Transient.Internals

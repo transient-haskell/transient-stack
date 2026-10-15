@@ -238,7 +238,7 @@ TransIO
 , (**>), (<**), (<***)
 
 -- * Running the monad
-,keep, keep',keepCollect, stop, exit,exitFailure, runTransient
+,keep, keep',keepCollect, stop, exit,exitFailure, runTransient,noTrans
 
 -- * Asynchronous console IO
 ,option,option1, input,input'
@@ -248,8 +248,8 @@ TransIO
 ,parallel, for, async, waitEvents, sample, spawn, react,react1,reactId, abduce, fork,sync
 
 -- * State management, not reactive
-,setData, getSData, getData, delData, modifyData, modifyData', try, setState, getState, delState, newRState,getRState,setRState,delRState, modifyState
-,labelState, findState, removeState, getIndexData,getIndexState,withIndexRData,setIndexRData,getIndexRData
+,setData, getSData, getData, delData, modifyData, modifyData', try, setState, tryState, delState, newRState,getRState,setRState,delRState, modifyState
+,modifyRState,labelState, findState, removeState, getIndexData,getIndexState,withIndexRData,setIndexRData,getIndexRData
 
 -- * Thread management
 , threads, anyThreads, addThreads, freeThreads, hookedThreads,oneThread, showAllThreads,showThreads
@@ -265,7 +265,7 @@ TransIO
 ,module Transient.Mailboxes
 
 -- * Utilities
-,genId, tr, ttr, tttr, tracec,ofType,color
+,genId, tr, ttr, tttr, tracec,ofType,color, lazy
 )
 
 where
