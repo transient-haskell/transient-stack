@@ -1080,8 +1080,7 @@ msend con r= do
      Just (Web2Node sconn) -> liftIO $  do
               tr "MSEND BROWSER"
           --modifyMVar_ (isBlocked con) $ const $ do 
-              let bs = toLazyByteString $ serialize r
-              webSocketSend sconn (BS.unpack bs)   -- TODO OPTIMIZE THAT!
+              webSocketSend sconn (BS.unpack r)   -- TODO OPTIMIZE THAT!
               tr "AFTER MSEND"
               --TOD time _ <- getClockTime
               --return $ Just time
