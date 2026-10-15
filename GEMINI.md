@@ -1640,11 +1640,11 @@ liftIO $ print $ "The total combined size is: " ++ show totalSize
 
 This code is clean, expressive, and fully parallel.
 
-### 2. Parallel Composition Operators like `<||>`
+### 2. Parallel Composition Operators like `<->`
 
-`transient` also defines specific operators for composition. The most relevant here is `<||>`.
+`transient` also defines specific operators for composition. The most relevant here is `<->`.
 
-`(<||>) :: TransIO a -> TransIO a -> TransIO a`
+`(<->) :: TransIO a -> TransIO a -> TransIO a`
 
 This operator executes both computations (the one on the left and the one on the right) in parallel and joins their result streams. This means that any result produced by either of the two branches will be sent to the continuation.
 
@@ -1652,13 +1652,13 @@ This operator executes both computations (the one on the left and the one on the
 
 ```haskell
 -- We launch two data "streams" in parallel
-(for [1,2,3]) <||> (for [10,20,30])
+(for [1,2,3]) <-> (for [10,20,30])
 
 -- The continuation (whatever comes next) will receive all the values:
 -- 1, 10, 2, 20, 3, 30 (or in any other interleaved order)
 ```
 
-In summary, you are not limited to the "raw" applicative syntax. `transient` encourages you to use overloaded operators (`+`, `*`) and composition operators (`<||>`) to write concurrent code that is almost as readable as normal sequential code.
+In summary, you are not limited to the "raw" applicative syntax. `transient` encourages you to use overloaded operators (`+`, `*`) and composition operators (`<->`) to write concurrent code that is almost as readable as normal sequential code.
 
 ---
 
@@ -1804,7 +1804,7 @@ It is extremely expressive but has a very high learning curve, as it requires th
 | **Concurrency**           | `Thread`, `goroutine`, `Task`                                  | `abduce`, `fork`                                                |
 | **Parallelism (N tasks)** | `Promise.all`, `Task.WhenAll`, `WaitGroup`                     | Composition with `abduce` and `<|>`                             |
 | **Choice (1st of N tasks)**| `Promise.race`, `select` (in Go)                               | `<|>`                                                           |
-| **State Management**      | Dependency Injection, `ThreadLocal`, `useState`/`useContext`   | `setData`, `getData`, `setState`, `getState`                    |
+| **State Management**      | Dependency Injection, `ThreadLocal`, `useState`/`useContext`   | `setData`, `getData`, `setState`, `tryState`                    |
 | **Error Handling**        | `try/catch`, `throw`, `Result<T,E>`, `Either<L,R>`              | `empty` (failure), `<|>`                                        |
 | **Data Flow (Streams)**   | `Observable`/`Observer`, `Stream`, `yield` (Generators)        | `waitEvents`, `sample`, `parallel`, `StreamData`                |
 | **Finalization / Cleanup**| `finally`, `defer` (in Go), `using` (in C#)                    | `<***` (atEnd), `onFinish`, `oneThread`, `killChildren`          |

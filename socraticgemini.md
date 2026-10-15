@@ -1412,20 +1412,20 @@ tamañoTotal <- async (getTamaño "fichero1.zip") + async (getTamaño "fichero2.
 liftIO $ print $ "El tamaño total combinado es: " ++ show tamañoTotal
 Este código es limpio, expresivo y totalmente paralelo.
 
-2. Operadores de Composición Paralela como <||>
-transient también define operadores específicos para la composición. El más relevante aquí es <||>.
+2. Operadores de Composición Paralela como <->
+transient también define operadores específicos para la composición. El más relevante aquí es <->.
 
-(<||>) :: TransIO a -> TransIO a -> TransIO a
+(<->) :: TransIO a -> TransIO a -> TransIO a
 Este operador ejecuta ambas computaciones (la de la izquierda y la de la derecha) en paralelo y une sus flujos de resultados. Esto significa que cualquier resultado producido por cualquiera de las dos ramas se enviará a la continuación.
 
 Ejemplo:
 
 -- Lanzamos dos "flujos" de datos en paralelo
-(for [1,2,3]) <||> (for [10,20,30])
+(for [1,2,3]) <-> (for [10,20,30])
 
 -- La continuación (lo que venga después) recibirá todos los valores:
 -- 1, 10, 2, 20, 3, 30 (o en cualquier otro orden intercalado)
-En resumen, no estás limitado a la sintaxis aplicativa "cruda". transient te anima a usar operadores sobrecargados (+, *) y operadores de composición (<||>) para escribir código concurrente que es casi tan legible como el código secuencial normal.
+En resumen, no estás limitado a la sintaxis aplicativa "cruda". transient te anima a usar operadores sobrecargados (+, *) y operadores de composición (<->) para escribir código concurrente que es casi tan legible como el código secuencial normal.
 
 ---
 
@@ -1551,7 +1551,7 @@ Asincronía	async, await, Promise, Future, Callback	async, liftIO, TransIO (la m
 Concurrencia	Thread, goroutine, Task	abduce, fork
 Paralelismo (N tareas)	Promise.all, Task.WhenAll, WaitGroup	Composición con abduce y `<`
 Elección (1ª de N tareas)	Promise.race, select (en Go)	`<`
-Manejo de Estado	Inyección de Dependencias, ThreadLocal, useState/useContext	setData, getData, setState, getState
+Manejo de Estado	Inyección de Dependencias, ThreadLocal, useState/useContext	setData, getData, setState, tryState
 Manejo de Errores	try/catch, throw, Result<T,E>, Either<L,R>	empty (fallo), `<`
 Flujo de Datos (Streams)	Observable/Observer, Stream, yield (Generadores)	waitEvents, sample, parallel, StreamData
 Finalización / Limpieza	finally, defer (en Go), using (en C#)	<*** (atEnd), onFinish, oneThread, killChildren
@@ -2419,37 +2419,37 @@ Sí, absolutamente. Es una característica clave del diseño de transient (y de 
 
 Analizando el código de transient-universe, encontramos una jerarquía de funciones construidas sobre runAt:
 
-1. callNodes' (El Generalista)
+1. foldNodes' (El Generalista)
 Esta es la abstracción más directa y configurable sobre runAt. Su propósito es ejecutar una computación en una lista de nodos y combinar los resultados usando un operador que tú elijas.
 
 Mira su definición:
 
-callNodes' :: [Node] -> (Cloud a -> Cloud b -> Cloud b) -> Cloud b -> Cloud a -> Cloud b
-callNodes' nodes op init proc = loggedc $ foldr (op . (`runAt` proc)) init nodes
+foldNodes' :: [Node] -> (Cloud a -> Cloud b -> Cloud b) -> Cloud b -> Cloud a -> Cloud b
+foldNodes' nodes op init proc = loggedc $ foldr (op . (`runAt` proc)) init nodes
 Como puedes ver, hace un fold (un reduce) sobre la lista de nodos. Para cada nodo, aplica runAt proc y luego usa el operador op que le pasaste para combinar el resultado con el acumulador.
 
-2. callNodes (El Inteligente)
-Es una versión de callNodes' que te ahorra el trabajo de tener que pasarle la lista de nodos. La obtiene automáticamente llamando a local getEqualNodes, que devuelve los nodos del clúster que tienen los mismos servicios.
+2. foldNodes (El Inteligente)
+Es una versión de foldNodes' que te ahorra el trabajo de tener que pasarle la lista de nodos. La obtiene automáticamente llamando a local getEqualNodes, que devuelve los nodos del clúster que tienen los mismos servicios.
 
-callNodes op init proc = do
+foldNodes op init proc = do
   nodes <- local getEqualNodes
-  callNodes' nodes op init proc
+  foldNodes' nodes op init proc
 3. clustered y mclustered (Los Especialistas para "Map-Reduce")
 Estas son las abstracciones de más alto nivel y las más útiles en la práctica. Resuelven el patrón "Map-Reduce": ejecutar la misma computación en todos los nodos ("map") y luego combinar los resultados ("reduce").
 
 clustered: Ejecuta la computación en todos los nodos y devuelve los resultados como un stream. Cada resultado que llega de cualquier nodo se emite inmediatamente. Usa el operador <|> para lograr esto.
 
 clustered :: Loggable a => Cloud a -> Cloud a
-clustered proc = callNodes (<|>) empty proc
+clustered proc = foldNodes (<|>) empty proc
 mclustered: Ejecuta la computación en todos los nodos y combina todos los resultados en uno solo usando el operador <> (mappend). Por ejemplo, si los resultados son listas, las concatena. Si son números, los suma (si has definido (+) en términos de <>). Espera a tener al menos un resultado de cada nodo antes de producir el resultado combinado.
 
 mclustered :: (Monoid a, Loggable a) => Cloud a -> Cloud a
-mclustered proc = callNodes (<>) mempty proc
+mclustered proc = foldNodes (<>) mempty proc
 En Resumen
 Sí, transient te ofrece un abanico de opciones:
 
 Control total: Usa runAt para apuntar a un nodo específico.
-Patrones de grupo: Usa callNodes o callNodes' para ejecutar algo en un grupo de nodos con lógica de combinación personalizada.
+Patrones de grupo: Usa foldNodes o foldNodes' para ejecutar algo en un grupo de nodos con lógica de combinación personalizada.
 Map-Reduce fácil: Usa clustered para obtener un stream de resultados o mclustered para obtener un único resultado agregado de todo el clúster.
 Esta estructura te permite elegir el nivel de abstracción adecuado para tu problema, desde el control más fino hasta los patrones distribuidos más comunes con una sola palabra.
 
@@ -4049,7 +4049,7 @@ initWebApp node app=  do
 
 htmlInterface :: Cloud ()
 htmlInterface = do
-    HTTPHeaders (_, url, _) _ <- getState <|> error "No HTTP Headers"
+    HTTPHeaders (_, url, _) _ <- tryState <|> error "No HTTP Headers"
     let urlStr = BS.unpack url
     when ("/html" `isSuffixOf` urlStr) $ do
         let endpointName = take (length urlStr - 5) urlStr

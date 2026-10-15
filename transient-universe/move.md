@@ -395,7 +395,7 @@ init proc= do
 -- show the URL of any place in the program:
 showtURL= do
   Node host port _ <- getMyNode
-  currentHash <- getState
+  currentHash <- tryState
   (cont,deltalog) <- lockup currentHash continuations
   liftIO $ print $ http://"<> host <> "/" <> port <>"/" <> deltalog
 

@@ -9,7 +9,7 @@ To compile every change and create the test programs in debug mode
 cabal install -f debug test-transient1 --overwrite-policy=always
 
 TO run the monitor in debug mode
-runghc -w -threaded -rtsopts  -i../src -i../../transient/src ../app/server/Transient/Move/Services/MonitorService.hs -p start/localhost/3000
+ clear & runghc -w -threaded -rtsopts   -itransient-stack/transient/src -itransient-stack/transient-universe/src -iTCache transient-stack/transient-universe/tests/MultiRemote.hs  --start localhost:8000 --add 127.0.0.1:8001 n --add 127.0.0.1 8002 n
 
 To run te test suite in debug mode:
 runghc -DDEBUG -w  -threaded -rtsopts  -i../src -i../../transient/src TestSuite.hs
@@ -202,7 +202,7 @@ react un mismo thread con varios react. Se necesitan varios registros con el mis
       cuando se activa un react, se debe poner en state el identificador del react, para poder hacer delReact
       
       delReact= do
-         React cont <- getState
+         React cont <- tryState
       que debe mirar ?  tiene que tener una lista de conts y si esta vacia liberar  
       pero react no maneja directamente una lista de conts
         a no ser que se añada a cada registro de thread una lista de react conts
@@ -224,7 +224,7 @@ react un mismo thread con varios react. Se necesitan varios registros con el mis
          return r
 
         delListener delCallback= do
-          Listener id callback <- getState
+          Listener id callback <- tryState
           search id in conts up
           remove id en lista de listeners
           delcallback id callback
@@ -871,7 +871,7 @@ wormhole que evite crear threads y labels
                      entonces es un teleport de vuelta
                   se considera que el primer teleport despues de wormhole siempre se ejecuta vivo
 
-                  conn <- getState <|> guessCon
+                  conn <- tryState <|> guessCon
                   endpoint (crear closure[closOrig,closDest])
 
                   guessCon=do
@@ -1109,13 +1109,13 @@ checkNoActivity n proc= proc `onBack` check
 
 --
 gather  ::  TransIO (Collect [a])
-   Buffer ref ev <- getState <|> "gather :: no buffer defined"
+   Buffer ref ev <- tryState <|> "gather :: no buffer defined"
    events <- 
    ..
    ..
 
 timer :: Int -> TransIO (Collect [a])
-  Buffer ref .. <- getState...
+  Buffer ref .. <- tryState...
 
 
 
@@ -1437,3 +1437,194 @@ teleportNamed service= do
 
 escritura recursiva de DBRefs
 writeResource 
+
+
+A ver si lo extendemos a un problema mas general, que es el  centro y objetivo de todo:  este clente general index.html es solo un cliente de referencia para programadores que usen transient para hacer programas cliente REST. Por tanto tiene que haber una llamada rest previa para asignar una cookie.
+
+Por tanto, no se debe asignar la cookie cuando se carga index.html, sino que este, una vez cargado, solicite una cookie y se la autoasigne al principio una vez cargado. 
+
+Ese servicio deberia visualizarse en la interaccion con index.html,  comn dos opciones: use current cookie <|> enter cookie y <|> solicitar cookie. Ese siempre será en start fijo. y por tanto no necesitamos ese tratamiento de /start ni de firstEndpointNames.  Tendria que estar en todos los programas que usan interacciones REST con minput. A no ser eso quiera que sea voluntari
+
+para que published pueda ver sus publicaciones en cold start, es necesario que el otro haya ejecutado su exportacion antes.
+  solciones:
+   publish que ejecute job
+     con eso siempre se ejecuta
+
+  hay alternativa? no porque la computacion no puede adivinar el futuro. se pueden guardar las expowrtaciones en un registro
+  
+  persitente o en el log con un key=keylog + offset
+
+
+partLog contiene el log parcial a enviar
+
+si el anterior es 0, solo usar partLog
+
+a          .->  a'
+b         /     b'
+c        /      c'
+teleport/ <-.   teleport    40503000
+d'           \  d
+              \
+teleport   .-->.teleport    60503000
+f         /     f'
+g        /      g'
+teleport/
+
+setLastClosureForConnection
+  debe ser en teleport o en donde se recibe el paquete, pero esto ultimo puede venir de un ficher
+  cuando se ejecuta teleport en modo recovery
+
+concurrentCloud hace abstracción de PrevClos o de remoteClos? 
+  remoteClos cunado hay concurrentCLoud y hay que mandar a un nodo que participó, hay que enviar solo prevclos - concurrentClos
+
+  pero si es un nodo que no participo hay que enviar desde lasClosureForConnection
+
+  hay que: hacer update de lastClosureForConnection cuando participó de esa operacion concurrent
+
+  setConcurrentCloudClosure= do
+     (do ConcurrentClosure clos <- tryState
+         setLastClosureForConnection clos)  <|> return ()
+ 
+
+ mejor sandboxear la ejecucion y asi dejar el endpoint previo. 
+   en teleport poner updateLast para esa conexion
+   no vale, porque eso hace update de todas las closures
+     solo hacerlo en esa closure
+   otra opcion: una variable 
+        data ConcurrentClosure= ConcurrentClosure (DBRef LocalClosure)
+        para saber a donde enviar variables:
+          closToRespond
+          ConcurrentClosure - borrarla despues de usar
+          lastClosureForConnection
+        no vale porque esa concurrenclosure todavia no ha sido envida
+        setearla despues del envio
+
+concurrentCloud :: Loggable a => Cloud a -> Cloud a
+concurrentCloud cl=   do
+    log <- getLog
+    onAll $ do
+      ttr "concurrentCloud"
+      endpoint Nothing <|> guard (not $ recover log)
+
+    local   $ sandboxData (ofType :: PrevClos)
+            $ sandboxData (ofType ::M.Map Int (IORef (DBRef LocalClosure))) -- map of lastClosureForConnection
+            $ unCloud cl
+y si el aplicativo se resuelve en
+
+una alternativa a concurrentClosure seria que el remoto enviara a su gemelo
+ en el nodo llamante y que el aplicativo se resolviera, pero las variables
+ ioRef del aplicativo ya no existen ¿¿???
+    pero las llamadas remotas son reactivas, deberian permanecer no?
+    que es lo que impide que se produzca esa reaccion?
+    el problema es que lastClosure para el nodo remoto ha dejado de ser
+      la de su nodo gemelo.
+      por tanto que concurrentClosure sea un flag que mantenga la closure de  su gemelo llamante a ver que pasa
+     
+      hay que llamar a la closure de ida en el nodo remoto, no a la de vuelta
+
+      NO SIRVE: el nodo remoto ejecutara el log y al segundo teleport enviara la respuesta al llamante sin ejecutar el resto del log
+
+      en el aplicativo sin concurrentCloud el llamante invoca la segunda closure del elemento aplicativo. El remoto, Para seguir el log, necesita el resultado de todo el aplicativo, que no se suministra.
+      el objetivo de cCloud es suministrarlo.
+        se puede hacer de otra manera?
+        se necesita un endpoint antes del aplicativo
+
+
+
+      seria como la llamada anterior de la expresion con aplicativo, pero con mas log.
+
+      como guardar esa closure de ida?
+         en processMessage si el flag concurrentclosure, no actualizar setLastClosureFor..
+
+         pero como se borra esa condicion
+           cuando se haya usado una vez
+
+
+como señalar al nodo remoto que esta dentro de un aplicativo?
+  solo en la instancia aplicativo:
+    con una variable de entorno
+
+el flag concurrentClosure closure
+  se usa para el envio y para el envio de vuelta
+  debe guardarse esa closure despues de invocar un nodo en setClosureForConnection, quitando la que setea processMessage
+  cuando se borra? cuando el aplicativo ha finalizado? 
+     no porque su efecto es para invocaciones posteriores
+     no se borra nunca, solo que cuando hay un processMessage y el lastclosurefor era ya == concurrentclosure
+       no hay que hacer caso, ya fue usado
+
+
+
+teleport
+ endpoint
+ local $ do
+  cuando tiene la clos de envio
+    if Applicative  setLastClos clos del endpoint de teleport
+
+
+setLog
+  si no Aplicative setLAstClos clos re recepcion
+
+poner un teleport en el primer elemento del aplicativo
+    no poner en sucesivos teleport
+
+
+concurrenclosure no puede ser general porque la siguiente invocacion puede ser para un nodo que no ha intervenido en el aplicativo.
+
+cuando se quita concurrentClosure?
+  no se puede quitar en general. concurrentClosure debe ser por nodo
+
+  debe haber un flag general:  isApplicative que se elimina cuando acaba el aplicativo
+  un flag concurrentclosure que lee el flag anterior y lleve la lista de nodos que han pasado por el applicative
+  un mecanismo para quitar ese nodo de la lista cuando se invoque por primera vez despues del aplicativo
+
+  alternativa:
+  un flag de aplicativo que se elimina cuando acaba
+  en teleport, no meter un endpoint si hay aplicativo
+
+  en el remoto hay que meter el teleport siempre  
+
+
+concurrentCloud ::  Cloud a -> Cloud a
+concurrentCloud clcomp=  do
+  log <- getLog
+
+  isapp <- gets isApplicative
+  modify $ \s ->s{isApplicative= True}
+  when (not isapp) $ Cloud $ endpoint Nothing <|> guard (not $ recover log)
+  r <-    clcomp <|>  do modify $ \s -> s{isApplicative= isapp} ; empty
+  modify $ \s -> s{isApplicative= isapp}
+  return r
+
+
+sobre teleport sin endpoint para resolver aplicativo:
+  no puede funcionar ya que teleport es el que devuelve la respuesta de cada termino
+  hay que usar el flag de aplicativo para no tener en cuenta ese endpoint en lastClosurefor...
+
+
+data Cloud a= Cloud a | forall a.Loggable a => Local a
+
+logged x= Local $ do
+
+instance Applicative (Cloud a) where
+   Local a <*> Logged a= 
+
+addwait que sustituya el w/ por el resiltado en logged?
+  asi se envia al nodo remoto el otro termino del applicativo. pero nunca llamar el endpoint 
+  del ternimo sino uno anterior para que contenga todo el aplicativo.
+
+no exactamtente setLasCLosure for connection no es el problema porque es indexado  por conexion y cada conexion tiene su lastclosure distinta. El problema real es que un aplicativo se puede resolver en el nodo local aunque invoque nodos remotos ya que esa invocacion es un detalle interno de cada termino y la misma insancia de TransiIO puede ejecutarlo, elevada a la Cloud monad. El problema es en una invocacion posterior al aplicativo, un nodo invoca a la lastclousre conocida para esa conexion. pero si esa closure es parte de un aplicativo, como es un termino solo , no puede resolver ese aplicativo en el nodo remoto , ya que el otro termino 
+
+----------------------------
+   r <-   runAt (nodes !! 1) (local $ return "HELLO ")  <|>  local (return "WORLD") -- runAt (nodes !! 2) (local $ return "WORLD")
+  ttr ("RESULT1",r)
+
+
+  r' <- runAt (nodes !! 1) $ return "HELLO2"
+  ttr ("RESULT2",r,r')
+
+antes de que el primer runat se acabe de eejcutar el alternativo ya ha devuelto "WORLD"
+
+asi que practicamente ambos runat se enecutan en paralelo a pesar de que estan uno detras del otro
+y abren distintas conexiones.
+----------
+

@@ -614,7 +614,7 @@ Programmer defined State
 ------------------------
 A real program could have dozens if not hundred of states, created by different programmers for different layers, functionalities or modules within the program. It is not good to force each programmer to know the low level details about how to program to create the states that he need.
 
-In Transient you just define your own data types, store them  using `setData` (or the synonym `setState`) and read them later using `getData` (or `getState`), modify them with modifyData(modifyState), modifyData'(modifyState'). That's all.
+In Transient you just define your own data types, store them  using `setData` (or the synonym `setState`) and read them later using `getData` (or `tryState`), modify them with modifyData(modifyState), modifyData'(modifyState'). That's all.
 
 Session state is handled like the state in a state monad (so state is **pure**), but you can store and retrieve as many kinds of data as you like. The session data management uses the type of the data to discriminate among them. But the semantic is the same. This means that if you add or update some session data, the change is available for the next sentences in the execution, but not in the previous ones. state in transient is pure. *There is no global state at all*.
 
@@ -632,13 +632,13 @@ main= keep $ do
      processPerson
 
 processPerson= do
-     Person name age <- getState
+     Person name age <- tryState
      liftIO $ print (name, age)
 ```
 
-I like how `getState` return the data, apparently out of thin air! It uses the type of the result to locate the data in the global state of the Transient monad. For this reason it needs to be `Typeable`.
+I like how `tryState` return the data, apparently out of thin air! It uses the type of the result to locate the data in the global state of the Transient monad. For this reason it needs to be `Typeable`.
 
-getState :: Typeable a => TransIO a
+tryState :: Typeable a => TransIO a
 
 What happens if there is no such data? The computation simply stops. If `doSomething` finds no Person data it stops the current branch.
 
@@ -653,7 +653,7 @@ This runs processOther if there is no Person data.
 If the type system can't deduce the type of the data that you want to recover, you can annotate the type:
 
 ```haskell
-p <- getState :: TransIO Person
+p <- tryState :: TransIO Person
 ```
 
 Sometimes you need to be sure that there is data available. 
@@ -661,31 +661,31 @@ Sometimes you need to be sure that there is data available.
 The line below returns `p` if there is not data stored for the type of `p`:
 
 ```haskell
-getState <|>  return p
+tryState <|>  return p
 ```
 This other does the same than above, but sets the session data for that type:
 
 ```haskell
-getState <|> (setState p >> return p)
+tryState <|> (setState p >> return p)
 ```
 This one produces an error if the data is not available:
 
 ```haskell
-getState <|> error "Person data not avilable"  :: TransIO Person
+tryState <|> error "Person data not avilable"  :: TransIO Person
 ```
 This one produces a message, but continues execution if an alternative branch is available:
 
 ```haskell
-getState <|> (liftIO (putStrLn "Person data not avilable") >> stop) :: TransIO Person
+tryState <|> (liftIO (putStrLn "Person data not avilable") >> stop) :: TransIO Person
 ```
 
-Finally, if we are insecure, this is the strongly typed, manly state primitive [`get`](https://hackage.haskell.org/package/mtl-2.2.1/docs/Control-Monad-State-Lazy.html) defined in terms of `getState`. This is for an `Int` state, but it can be used for any kind of data:
+Finally, if we are insecure, this is the strongly typed, manly state primitive [`get`](https://hackage.haskell.org/package/mtl-2.2.1/docs/Control-Monad-State-Lazy.html) defined in terms of `tryState`. This is for an `Int` state, but it can be used for any kind of data:
 
 
 ```haskel
  -- defined one time
  get :: TransIO Int
- get= getState <|> return 0  -- 0 equivalent to the seed value in the state monad, 
+ get= tryState <|> return 0  -- 0 equivalent to the seed value in the state monad, 
                              -- when runStateT is called.
  
 ```
@@ -696,7 +696,7 @@ State data does not pass trough node boundaries unless you use normal variables,
 ```haskell
 
 do
-    dat <- local $ getState <|> myUserDataDefault
+    dat <- local $ tryState <|> myUserDataDefault
     r <- runAt node do
               use dat
           ...
@@ -708,7 +708,7 @@ do
 do 
     copyData $ myUserDataDefault
     r <- runAt node $ do
-            dat <- getState
+            dat <- tryState
             ...
     .....
 ```
@@ -854,10 +854,10 @@ import Control.Exception hiding (onException)
 
 main= keep' $ do
     setState "hello"
-    oldState <- getState
+    oldState <- tryState
     onException $ \(e:: ErrorCall) -> do
                           liftIO $ print e
-                          newState <- getState <|> return "no state!"
+                          newState <- tryState <|> return "no state!"
                           liftIO $ putStrLn newState
                           liftIO $ putStrLn oldState
                           exit()
