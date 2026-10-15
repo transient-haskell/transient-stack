@@ -1,9 +1,8 @@
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>JS Request Console</title>
+  <title>Transient JS Request Console</title>
   <style>
     body {
       font-family: sans-serif;
@@ -18,8 +17,71 @@
     #root {
       margin-top: 10px;
     }
-    details {
+    .endpoint-item {
       background: #fff;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      margin: 10px 0;
+      padding: 4px 8px;
+    }
+    .endpoint-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      min-height: 1.6em;
+    }
+    .endpoint-title {
+      font-weight: bold;
+      cursor: default;
+    }
+    .endpoint-buttons {
+      display: flex;
+      gap: 4px;
+      flex-shrink: 0;
+    }
+    .toggle-btn {
+      font-size: 0.75rem;
+      padding: 0 5px;
+      line-height: 1.6;
+      border: 1px solid #ccc;
+      border-radius: 3px;
+      background: #f5f5f5;
+      cursor: pointer;
+      color: #555;
+    }
+    .toggle-btn:hover {
+      background: #e0e0e0;
+      color: #000;
+    }
+    .toggle-btn.active {
+      background: #d0d0ff;
+      border-color: #8888cc;
+      color: #000;
+    }
+    .endpoint-section {
+      display: none;
+      margin-top: 6px;
+      padding: 6px;
+      background: #f9f9f9;
+      border-radius: 3px;
+    }
+    .endpoint-section.visible {
+      display: block;
+    }
+    .msg-section {
+      white-space: pre-wrap;
+      font-family: monospace;
+      font-size: 0.85rem;
+    }
+    .curl-section {
+      white-space: pre-wrap;
+      font-family: monospace;
+      font-size: 0.85rem;
+      background: #2d2d2d;
+      color: #f0f0f0;
+      padding: 8px;
+      border-radius: 4px;
+      overflow-x: auto;
     }
     .wallet-card {
       border: 1px solid #ccc;
@@ -42,17 +104,11 @@
   </style>
 </head>
 <body>
-  <h1>JS Request Console</h1>
+  <h1>Transient JS Request Console</h1>
   <div id="root"></div>
 
-
-  <!-- <script src="./cardano_serialization_lib.umd.js"></script> -->
-
-  <script  src="./file/handlers.js"></script>
+  <script src="handlers.js"></script>
   <script>
-
-
-
     // ============================================================
     // Función genérica: rellena un template de body con varValues
     // ============================================================
@@ -64,17 +120,21 @@
         typeof template === "string" ||
         typeof template === "boolean"
       ) {
-        // Si es string, tratamos como plantilla con $var
-        if (typeof template === "string") {
-          const obj = varValues; // vars ya viene como objeto; no es array JSON aquí
-          return template.replace(/\$([a-zA-Z_]\w*)/g, (_, key) => obj[key] ?? `$${key}`);
-        }
-        // primitivos no-string mantienen el hack old-school de body
+        // Si existe varValues.body, se usa. Si no, se deja el default.
         if (Object.prototype.hasOwnProperty.call(varValues, "body")) {
           return varValues.body;
         }
+        // Sustituir $var en strings (ej. URLs con $int, $string, etc.)
+        if (typeof template === "string") {
+          return template.replace(/\$(\w+)/g, (match, varName) => {
+            if (Object.prototype.hasOwnProperty.call(varValues, varName)) {
+              return String(varValues[varName]);
+            }
+            return match;
+          });
+        }
+        return template;
       }
-      
 
       // Arrays
       if (Array.isArray(template)) {
@@ -96,379 +156,360 @@
         return result;
       }
 
+      return template;
+    }
+
+    // ============================================================
+    // Generar comando curl a partir de req
+    // ============================================================
+    function generateCurl(req) {
+      if (!req || !req.requrl) return "# no request data";
+      const method = req.reqtype || "GET";
+      const url = req.requrl;
+      let parts = ["curl"];
+      if (method !== "GET") parts.push("-X " + method);
+      parts.push('"' + url + '"');
+      if (req.reqheaders) {
+        try {
+          const h = typeof req.reqheaders === "string" ? JSON.parse(req.reqheaders) : req.reqheaders;
+          Object.entries(h).forEach(([k, v]) => parts.push('-H "' + k + ": " + v + '"'));
+        } catch(e) {}
+      }
+      if (method !== "GET" && req.reqbody != null && req.reqbody !== undefined) {
+        const body = typeof req.reqbody === "string" ? req.reqbody : JSON.stringify(req.reqbody);
+        parts.push("-d '" + body + "'");
+      }
+      return parts.join(" ");
     }
 
     // ============================================================
     // Render principal
     // ============================================================
+    const renderItem = (item, container) => {
+      console.log("renderItem item =", item, "isArray?", Array.isArray(item));
 
-async function handleResponse(res, container) {
-  if (!res.body) {
-    const text = await res.text();
-    console.log("TEXT RECEIVED (no stream)", text);
+      // --- wrapper ---
+      const wrapper = document.createElement("div");
+      wrapper.className = "endpoint-item";
 
-    let result;
-    try {
-      result = JSON.parse(text);
-    } catch {
-      result = text;
-    }
+      // --- header line: title + toggle buttons ---
+      const header = document.createElement("div");
+      header.className = "endpoint-header";
 
-    if (Array.isArray(result)) {
-      result.forEach(it => renderItem(it, container));
-    } else {
-      renderItem(result, container);
-    }
-    return;
-  }
+      const title = document.createElement("span");
+      title.className = "endpoint-title";
+      title.textContent =
+        typeof item === "string"
+          ? item
+          : (item && typeof item === "object" && typeof item.msg === "string"
+              ? item.msg
+              : "See detail");
 
-  const reader  = res.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer    = "";
-  let inArray   = false;
-  let depth     = 0;
-  let lastCut   = 0;
+      const buttons = document.createElement("span");
+      buttons.className = "endpoint-buttons";
 
-  const flushElement = chunk => {
-    const s = chunk.trim();
-    if (!s) return;
+      // --- sections (hidden by default) ---
+      const msgSection = document.createElement("div");
+      msgSection.className = "endpoint-section msg-section";
+      msgSection.textContent =
+        typeof item === "object"
+          ? JSON.stringify(item, null, 2)
+          : String(item);
 
-    let parts = [];
-    let d = 0;
-    let currentPart = "";
+      const formSection = document.createElement("div");
+      formSection.className = "endpoint-section";
 
-    for (let i = 0; i < s.length; i++) {
-      const ch = s[i];
-      if (ch === "{" || ch === "[") d++;
-      if (ch === "}" || ch === "]") d--;
-      if (ch === "," && d === 0) {
-        if (currentPart.trim()) parts.push(currentPart.trim());
-        currentPart = "";
-      } else {
-        currentPart += ch;
-      }
-    }
-    if (currentPart.trim()) parts.push(currentPart.trim());
+      const curlSection = document.createElement("div");
+      curlSection.className = "endpoint-section curl-section";
+      curlSection.textContent = generateCurl(item && item.req ? item.req : null);
 
-    parts.forEach(part => {
-      const clean = part.trim();
-      if (!clean) return;
-      console.log("JSON ELEMENT PART", clean);
-      try {
-        const parsed = JSON.parse(clean);
-        if (Array.isArray(parsed)) {
-          parsed.forEach(it => renderItem(it, container));
-        } else {
-          renderItem(parsed, container);
+      // --- toggle helper ---
+      const makeToggle = (label, section) => {
+        const btn = document.createElement("button");
+        btn.className = "toggle-btn";
+        btn.textContent = label;
+        btn.onclick = () => {
+          section.classList.toggle("visible");
+          btn.classList.toggle("active");
+        };
+        return btn;
+      };
+
+      const msgBtn = makeToggle("Msg", msgSection);
+      const formBtn = makeToggle("Form", formSection);
+      const curlBtn = makeToggle("Curl", curlSection);
+
+      buttons.appendChild(msgBtn);
+      buttons.appendChild(formBtn);
+      buttons.appendChild(curlBtn);
+
+      header.appendChild(title);
+      header.appendChild(buttons);
+      wrapper.appendChild(header);
+      wrapper.appendChild(msgSection);
+      wrapper.appendChild(formSection);
+      wrapper.appendChild(curlSection);
+
+      container.appendChild(wrapper);
+
+      // ==========================================================
+      // Si item.req existe -> construimos el formulario
+      // ==========================================================
+      if (item && typeof item === "object" && item.req) {
+        const req = item.req;
+
+        // vínculo item <-> formSection
+        formSection._item = item;
+        item._form = formSection;
+        item._req = req;
+
+        // --------------------------------------------------------
+        // Detección de variables en URL y body (item._vars)
+        // --------------------------------------------------------
+        const vars = {};
+
+        if (req.requrl) {
+          const reUrl = /\$(\w+)/g;
+          let m;
+          while ((m = reUrl.exec(req.requrl)) !== null) {
+            vars[m[1]] = true;
+          }
         }
-      } catch (e) {
-        console.error("Error parsing element", e, clean);
-      }
-    });
-  };
-
-  while (true) {
-    const { value, done } = await reader.read();
-    if (done) break;
-
-    const chunkText = decoder.decode(value, { stream: true });
-    console.log("CHUNK RAW", chunkText);
-    buffer += chunkText;
-
-    for (let i = lastCut; i < buffer.length; i++) {
-      const ch = buffer[i];
-
-      if (!inArray) {
-        if (ch === "[") {
-          inArray = true;
-          depth   = 1;
-          lastCut = i + 1;
+        const method = req.reqtype || "GET";
+        if (method !== "GET" && req.reqbody && typeof req.reqbody === "string") {
+          const reBody = /\$(\w+)/g;
+          let m;
+          while ((m = reBody.exec(req.reqbody)) !== null) {
+            vars[m[1]] = true;
+          }
         }
-        continue;
-      }
 
-      if (ch === "{") depth++;
-      if (ch === "}") depth--;
-      if (ch === "[" && depth > 0) depth++;
-      if (ch === "]" && depth > 0) depth--;
+        item._vars = vars;
 
-      if (inArray && depth === 1 && ch === ",") {
-        const chunk = buffer.slice(lastCut, i);
-        flushElement(chunk);
-        lastCut = i + 1;
-        continue;
-      }
-
-      if (inArray && ch === "]" && depth === 0) {
-        const chunk = buffer.slice(lastCut, i);
-        flushElement(chunk);
-        lastCut = i + 1;
-        inArray = false;
-        continue;
-      }
-    }
-
-    if (lastCut > 0) {
-      buffer  = buffer.slice(lastCut);
-      lastCut = 0;
-    }
-  }
-
-  if (buffer.trim()) {
-    flushElement(buffer);
-  }
-}
-
-const renderItem = (item, container) => {
-  console.log("renderItem item =", item, "isArray?", Array.isArray(item));
-
-  const details = document.createElement("details");
-  details.style.cssText =
-    "margin:10px 0;border:1px solid #ccc;border-radius:4px;padding:4px;";
-
-  const summary = document.createElement("summary");
-  summary.textContent =
-    typeof item === "string"
-      ? item
-      : (item && typeof item === "object" && typeof item.msg === "string"
-          ? item.msg
-          : "See detail");
-  summary.style.cssText = "cursor:pointer;font-weight:bold;";
-  details.appendChild(summary);
-
-  const div = document.createElement("div");
-  div.style.cssText =
-    "margin-top:6px;padding:6px;background:#f9f9f9;white-space:pre-wrap;font-family:monospace;";
-  div.textContent =
-    typeof item === "object"
-      ? JSON.stringify(item, null, 2)
-      : String(item);
-
-  // ==========================================================
-  // Si item.req existe -> construimos el formulario
-  // ==========================================================
-  if (item && typeof item === "object" && item.req) {
-    const req = item.req;
-
-    const form = document.createElement("div");
-    form.style.marginTop = "8px";
-
-    // vínculo item <-> form
-    form._item = item;
-    item._form = form;
-    item._req = req;
-
-    // --------------------------------------------------------
-    // Detección de variables en URL y body (item._vars)
-    // --------------------------------------------------------
-    const vars = {};
-
-if (req.requrl) {
-  const reUrl = /\$(\w+)/g;
-  let m;
-  while ((m = reUrl.exec(req.requrl)) !== null) {
-    vars[m[1]] = true;
-  }
-}
-// Solo escanear el body si NO es GET
-const method = req.reqtype || "GET";
-if (method !== "GET" && req.reqbody && typeof req.reqbody === "string") {
-  const reBody = /\$(\w+)/g;
-  let m;
-  while ((m = reBody.exec(req.reqbody)) !== null) {
-    vars[m[1]] = true;
-  }
-}
-
-
-    item._vars = vars;
-
-    // Optional JSON HEADERS
-    let headersTa = null;
-    if (req.reqheaders) {
-      headersTa = document.createElement("textarea");
-      headersTa.placeholder = "reqheaders (JSON)";
-      headersTa.value = req.reqheaders;
-      headersTa.id = `headers_${Math.random().toString(16).slice(2)}`;
-      headersTa.style.display = "block";
-      headersTa.style.marginTop = "4px";
-      form.appendChild(headersTa);
-    }
-
-
-
-    // Detectar tipo de request para mostrar inputs inline
-    const hasVars = Object.keys(vars).length > 0;
-    const isPrimitiveBody =
-      method !== "GET" &&
-      req.reqbody !== null &&
-      req.reqbody !== undefined &&
-      (typeof req.reqbody === "number" ||
-        typeof req.reqbody === "string" ||
-        typeof req.reqbody === "boolean");
-    const isPlainObjectBody =
-      method !== "GET" &&
-      req.reqbody &&
-      typeof req.reqbody === "object" &&
-      !Array.isArray(req.reqbody);
-
-    // Mostrar inputs de parámetros inmediatamente
-    if (hasVars) {
-      Object.keys(vars).forEach(varName => {
-        const label = document.createElement("label");
-        label.textContent = `${varName}: `;
-        label.style.cssText = "display:block;margin-top:4px;";
-        const inp = document.createElement("input");
-        inp.id = `var_${varName}_${Math.random().toString(16).slice(2)}`;
-        inp.type = varName.toLowerCase().includes("int") ? "number" : "text";
-        item._varInputIds = item._varInputIds || {};
-        item._varInputIds[varName] = inp.id;
-        form.appendChild(label);
-        form.appendChild(inp);
-      });
-    } else if (isPrimitiveBody) {
-      const label = document.createElement("label");
-      label.textContent = "body:";
-      label.style.cssText = "display:block;margin-top:4px;";
-      const inp = document.createElement("input");
-      inp.id = `var_body_${Math.random().toString(16).slice(2)}`;
-      item._bodyInputId = inp.id;
-      if (typeof req.reqbody === "number") {
-        inp.type = "number"; inp.value = String(req.reqbody);
-      } else if (typeof req.reqbody === "boolean") {
-        inp.type = "checkbox"; inp.checked = req.reqbody;
-      } else {
-        inp.type = "text"; inp.value = req.reqbody;
-      }
-      form.appendChild(label);
-      form.appendChild(inp);
-    } else if (isPlainObjectBody) {
-      item._bodyFieldIds = {};
-      Object.entries(req.reqbody).forEach(([key, value]) => {
-        const label = document.createElement("label");
-        label.textContent = `${key}: `;
-        label.style.cssText = "display:block;margin-top:4px;";
-        const inp = document.createElement("input");
-        inp.id = `body_${key}_${Math.random().toString(16).slice(2)}`;
-        if (typeof value === "number") {
-          inp.type = "number"; inp.value = String(value);
-        } else if (typeof value === "boolean") {
-          inp.type = "checkbox"; inp.checked = value;
-        } else {
-          inp.type = "text"; inp.value = value ?? "";
+        // Optional JSON HEADERS
+        if (req.reqheaders) {
+          const headersTa = document.createElement("textarea");
+          headersTa.placeholder = "reqheaders (JSON)";
+          headersTa.value = req.reqheaders;
+          headersTa.id = `headers_${Math.random().toString(16).slice(2)}`;
+          headersTa.style.display = "block";
+          headersTa.style.marginTop = "4px";
+          formSection.appendChild(headersTa);
         }
-        item._bodyFieldIds[key] = inp.id;
-        form.appendChild(label);
-        form.appendChild(inp);
-      });
-    }
 
-    // Botón Enviar siempre visible
-    const btn = document.createElement("button");
-    btn.textContent = "Enviar";
-    btn.style.cssText = "margin-top:6px;padding:4px 8px;";
+        // --- Botón Process ---
+        const btn = document.createElement("button");
+        btn.textContent = "Process";
+        btn.style.cssText = "margin-top:6px;padding:4px 8px;";
 
-    btn.onclick = async (ev) => {
-      ev.preventDefault();
+        // --- handleResponse (renderiza respuestas anidadas dentro de wrapper) ---
+        async function handleResponse(res) {
+          const target = wrapper;
+          if (!res.body) {
+            const text = await res.text();
+            console.log("TEXT RECEIVED (no stream)", text);
+            let result;
+            try { result = JSON.parse(text); } catch { result = text; }
+            if (Array.isArray(result)) {
+              result.forEach(it => renderItem(it, target));
+            } else {
+              renderItem(result, target);
+            }
+            return;
+          }
 
-      const path = new URL(req.requrl, window.location.origin).pathname;
-      const special = window.specialVarHandlers?.[path];
-      const finalVars = {};
+          const reader = res.body.getReader();
+          const decoder = new TextDecoder();
+          let buffer = "";
+          let inArray = false;
+          let depth = 0;
+          let current = "";
 
-      if (special) {
-        const specialVars = await special(vars, item);
-        if (Array.isArray(specialVars)) {
-          specialVars.forEach(v => {
-            if (!v || typeof v.name !== "string") return;
-            finalVars[v.name] = v.value;
-          });
+          const flushElement = chunk => {
+            const s = chunk.trim();
+            if (!s) return;
+            let parts = [];
+            let d = 0;
+            let currentPart = "";
+            for (let i = 0; i < s.length; i++) {
+              const ch = s[i];
+              if (ch === "{" || ch === "[") d++;
+              if (ch === "}" || ch === "]") d--;
+              if (ch === "," && d === 0) {
+                if (currentPart.trim()) parts.push(currentPart.trim());
+                currentPart = "";
+              } else {
+                currentPart += ch;
+              }
+            }
+            if (currentPart.trim()) parts.push(currentPart.trim());
+            parts.forEach(part => {
+              const clean = part.trim();
+              if (!clean) return;
+              console.log("JSON ELEMENT PART", clean);
+              try {
+                const parsed = JSON.parse(clean);
+                if (Array.isArray(parsed)) {
+                  parsed.forEach(it => renderItem(it, target));
+                } else {
+                  renderItem(parsed, target);
+                }
+              } catch (e) {
+                console.error("Error parsing element", e, clean);
+              }
+            });
+          };
+
+          while (true) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            const chunkText = decoder.decode(value, { stream: true });
+            console.log("CHUNK RAW", chunkText);
+            buffer += chunkText;
+            for (let i = 0; i < buffer.length; i++) {
+              const ch = buffer[i];
+              if (!inArray) {
+                if (ch === "[") { inArray = true; }
+                continue;
+              }
+              if (ch === "]" && depth === 0) {
+                flushElement(current);
+                current = "";
+                inArray = false;
+                continue;
+              }
+              current += ch;
+              if (ch === "{" || ch === "[") depth++;
+              if (ch === "}" || ch === "]") depth--;
+              if (inArray && depth === 0 && (ch === "}" || ch === "]")) {
+                flushElement(current);
+                current = "";
+              }
+            }
+            buffer = "";
+          }
+          flushElement(current);
         }
-      } else if (hasVars) {
-        Object.keys(vars).forEach(name => {
-          const input = item._varInputIds && document.getElementById(item._varInputIds[name]);
-          if (!input) return;
-          if (input.type === "number") finalVars[name] = input.value === "" ? null : Number(input.value);
-          else if (input.type === "checkbox") finalVars[name] = input.checked;
-          else finalVars[name] = input.value;
-        });
-      } else if (isPrimitiveBody) {
-        const bodyInput = item._bodyInputId && document.getElementById(item._bodyInputId);
-        if (bodyInput) {
-          if (bodyInput.type === "number") finalVars.body = bodyInput.value === "" ? null : Number(bodyInput.value);
-          else if (bodyInput.type === "checkbox") finalVars.body = bodyInput.checked;
-          else finalVars.body = bodyInput.value;
-        }
-      } else if (isPlainObjectBody) {
-        const updatedBody = { ...req.reqbody };
-        Object.keys(updatedBody).forEach(key => {
-          const input = item._bodyFieldIds && document.getElementById(item._bodyFieldIds[key]);
-          if (!input) return;
-          if (input.type === "number") updatedBody[key] = input.value === "" ? null : Number(input.value);
-          else if (input.type === "checkbox") updatedBody[key] = input.checked;
-          else updatedBody[key] = input.value;
-        });
-        finalVars.body = updatedBody;
-      }
 
-      if (method === "GET") {
-        const finalUrl = hasVars ? fillBodyWithValues(req.requrl, finalVars) : req.requrl;
-        try {
-          const res = await fetch(finalUrl, { method, headers: { "Content-Type": "application/json" } });
-          await handleResponse(res, div);
-        } catch (e) {
-          console.error(e);
-          div.textContent += `\nError: ${e.message}`;
-        }
-        return;
-      }
+        // --- onclick del botón Process ---
+        btn.onclick = async (ev) => {
+          ev.preventDefault();
 
-      let body;
-      const reqBody = req.reqbody;
-      const hasTemplateVars = typeof reqBody === "string" && /\$\w+/.test(reqBody);
-      if (!hasTemplateVars && "body" in finalVars) {
-        body = finalVars.body;
-      } else {
-        body = fillBodyWithValues(reqBody, finalVars);
-      }
+          const req = item._req;
+          const baseVars = item._vars || {};
+          const method = req.reqtype || "GET";
 
-      const fetchOpts = { method, headers: { "Content-Type": "application/json" } };
-      if (method === "POST" || method === "PUT" || method === "PATCH") {
-        if (body !== undefined) fetchOpts.body = JSON.stringify(body);
-      }
-      try {
-        const res = await fetch(req.requrl, fetchOpts);
-        await handleResponse(res, div);
-      } catch (e) {
-        console.error(e);
-        div.textContent += `\nError: ${e.message}`;
+          const path = new URL(req.requrl, window.location.origin).pathname;
+          const special = window.specialVarHandlers?.[path];
+
+          const hasVars = Object.keys(baseVars).length > 0;
+          const isPrimitiveBody =
+            method !== "GET" &&
+            req.reqbody !== null &&
+            req.reqbody !== undefined &&
+            (typeof req.reqbody === "number" ||
+              typeof req.reqbody === "string" ||
+              typeof req.reqbody === "boolean");
+          const isPlainObjectBody =
+            method !== "GET" &&
+            req.reqbody &&
+            typeof req.reqbody === "object" &&
+            !Array.isArray(req.reqbody);
+
+          console.log("DEBUG hasVars =", hasVars);
+          console.log("DEBUG isPrimitiveBody =", isPrimitiveBody);
+          console.log("DEBUG isPlainObjectBody =", isPlainObjectBody);
+          console.log("DEBUG special =", special);
+
+          // ===== CASO 1: GET sin vars ni body editable -> FETCH DIRECTO =====
+          if (!special && method === "GET" && !hasVars && !isPrimitiveBody && !isPlainObjectBody) {
+            const fetchOpts = { method, headers: { "Content-Type": "application/json" } };
+            try {
+              const res = await fetch(req.requrl, fetchOpts);
+              await handleResponse(res);
+            } catch (e) {
+              console.error(e);
+              msgSection.textContent += `\nError: ${e.message}`;
+            }
+            return;
+          }
+
+          // ===== CASO 2: HAY SPECIAL O EDICIÓN DE USUARIO =====
+          let specialVars;
+          if (special) {
+            console.log("RAMA: special");
+            specialVars = await special(baseVars, item);
+          } else if (isPlainObjectBody && !hasVars) {
+            console.log("RAMA: objectBodyInputHandler");
+            specialVars = await objectBodyInputHandler(baseVars, item);
+          } else {
+            console.log("RAMA: userInputHandler");
+            specialVars = await userInputHandler(baseVars, item);
+          }
+
+          const vars = { ...baseVars };
+          if (Array.isArray(specialVars)) {
+            specialVars.forEach(v => {
+              if (!v || typeof v.name !== "string") return;
+              vars[v.name] = v.value;
+            });
+          }
+
+          // >>> GET con $vars <<<
+          if (method === "GET") {
+            alert(["vars",JSON.stringify(vars)]);
+            const finalUrl = fillBodyWithValues(req.requrl, vars);
+            console.log("DEBUG finalUrl =", finalUrl);
+            const fetchOpts = { method, headers: { "Content-Type": "application/json" } };
+            try {
+              const res = await fetch(finalUrl, fetchOpts);
+              await handleResponse(res);
+            } catch (e) {
+              console.error(e);
+              msgSection.textContent += `\nError: ${e.message}`;
+            }
+            return;
+          }
+
+          // Construir body con o sin plantilla
+          let body;
+          const reqBody = req.reqbody;
+          const hasTemplateVars = typeof reqBody === "string" && /\$\w+/.test(reqBody);
+          if (!hasTemplateVars && "body" in vars) {
+            body = vars.body;
+          } else {
+            body = fillBodyWithValues(reqBody, vars);
+          }
+
+          const fetchOpts = { method, headers: { "Content-Type": "application/json" } };
+          if (method === "POST" || method === "PUT" || method === "PATCH") {
+            if (body !== undefined) fetchOpts.body = JSON.stringify(body);
+          }
+
+          try {
+            const res = await fetch(req.requrl, fetchOpts);
+            await handleResponse(res);
+          } catch (e) {
+            console.error(e);
+            msgSection.textContent += `\nError: ${e.message}`;
+          }
+        };
+
+        formSection.appendChild(btn);
       }
     };
-
-    form.appendChild(btn);
-    div.appendChild(form);
-  }
-
-  details.appendChild(div);
-  container.appendChild(details);
-};
-
 
     // ============================================================
     // Bootstrap: usa window.initialRequestMessage
     // ============================================================
-    (async function init() {
+    (function init() {
       const root = document.getElementById("root");
       if (!root) return;
 
-      try {
-        const disc = await fetch("/start", { headers: { "Content-Type": "application/json" } });
-        const items = await disc.json();
-        const first = Array.isArray(items) ? items[0] : items;
-        if (!first?.req?.requrl) return;
-
-        renderItem(first, root);
-      } catch (e) {
-        console.error("Startup failed:", e);
+      if (window.initialRequestMessage) {
+        renderItem(window.initialRequestMessage, root);
+      } else {
+        root.textContent = "No initialRequestMessage defined.";
       }
     })();
   </script>
