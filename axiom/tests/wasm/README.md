@@ -6,6 +6,9 @@ jsdom, writes "Ana" in the box, clicks the button and waits for `hello Ana`; it 
 `Calc.hs` / `calc.sh`: computations in the `Widget` monad without rendering (bind, `liftIO`, applicative, alternative) through
 `runBody`; they give the right result (`Just 20`) in wasm.
 
+`Static.hs` / `static.sh`: widgets with rendering and without events (`rawHtml`, `<<<`, a bind in between): the HTML is drawn
+in order, one `span` per bind (`<span id="n0"><p>one</p><span id="n1"><span id="n2"><div><p>two 2</p></div>...`).
+
 Status (2026-10-15): `View.hs` and `Cell.hs` compile with wasm, the form is drawn (text box and button) and the click handler
 runs, but the page is not updated, so the test prints `FAIL`.
 
