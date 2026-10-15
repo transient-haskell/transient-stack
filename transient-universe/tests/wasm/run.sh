@@ -4,6 +4,7 @@
 # usage: run.sh [port]      run it inside the nix shell, with the wasm toolchain installed (see README.md)
 P=${1:-8600}; D=$(cd $(dirname $0) && pwd); R=$D/../../..; W=$D/run-wasm; rm -rf $W; mkdir -p $W/srv
 cd $R
+cabal build lib:transient lib:transient-universe > $W/srv-libs.log 2>&1 || { echo "FAIL (server libs, $W/srv-libs.log)"; exit 1; }
 cabal exec -- ghc -package transient -package transient-universe -threaded -w -O0 -outputdir $W/build-srv -o $W/hello-srv $D/Hello.hs > $W/srv-build.log 2>&1 || { echo "FAIL (server build, $W/srv-build.log)"; exit 1; }
 (source ~/.ghc-wasm/env
  cat > $W/cabal.project <<EOP
