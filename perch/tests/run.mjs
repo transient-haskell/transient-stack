@@ -1,0 +1,20 @@
+// usage: node run.mjs <file.wasm>   (jsdom must be installed in ./node_modules)
+import { WASI } from "node:wasi";
+import fs from "node:fs";
+import { JSDOM } from "jsdom";
+import jsffi from "./ghc_wasm_jsffi.js";
+const dom = new JSDOM("<!doctype html><html><body></body></html>");
+globalThis.window = dom.window; globalThis.document = dom.window.document;
+const wasi = new WASI({ version: "preview1", args: ["perch-test"], env: {} });
+const __exports = {};
+const { instance } = await WebAssembly.instantiate(fs.readFileSync(process.argv[2]), { wasi_snapshot_preview1: wasi.wasiImport, ghc_wasm_jsffi: jsffi(__exports) });
+Object.assign(__exports, instance.exports);
+wasi.initialize(instance);
+await instance.exports.hs_start();
+const built = document.body.innerHTML;
+document.getElementById("btn").dispatchEvent(new dom.window.Event("click"));
+await new Promise(r => setTimeout(r, 200));
+const clicked = document.body.innerHTML;
+const ok = built === '<div id="box"><p>hello perch</p><button id="btn">go</button></div>' && clicked === built + "<p>clicked</p>";
+console.log(ok ? "PASS" : "FAIL\n" + built + "\n" + clicked);
+process.exit(ok ? 0 : 1);
