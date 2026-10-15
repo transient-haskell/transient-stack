@@ -100,7 +100,7 @@ cloudControl= do
 
               
       vis <- local $ do
-          visited <- getState <|> return []
+          visited <- tryState <|> return []
           let vis = nod `elem` visited
           when (not vis) $ setState $ nod:visited
           return vis
@@ -111,7 +111,7 @@ cloudControl= do
 
       squeeze  node= do
        vis <- local $ do
-          visited <- getState <|> return []
+          visited <- tryState <|> return []
           let vis= node `elem` visited
           when (not vis) $ setState $ node:visited
           return vis
@@ -130,7 +130,7 @@ cloudControl= do
            
                 Just "monitor" -> do 
                         spawn $ controlMonitor node
-                        visited <- local $ getState <|> return []
+                        visited <- local $ tryState <|> return []
                         when (not $ node `elem` visited) $ do
                            local $ setState $ node:visited
                            
@@ -155,7 +155,7 @@ cloudControl= do
       
       controlMonitor node=  do
             local $ do
-               n <- getState <|> return (0 :: Int) 
+               n <- tryState <|> return (0 :: Int) 
                setState $ n +1
                liftIO $ putStr "\t\t"
                option1 n  "control this node\n" 
@@ -164,7 +164,7 @@ cloudControl= do
                
       controlService node= do
            local $ do
-               n <- getState <|> return (0 :: Int) 
+               n <- tryState <|> return (0 :: Int) 
                setState $ n +1
                liftIO $ putStr "\t\t"
                option1 n "control this node\n"
@@ -176,7 +176,7 @@ cloudControl= do
       
       controlProcess str= do              
               local $ do
-                 n <- getState <|> return (0 :: Int)
+                 n <- tryState <|> return (0 :: Int)
                  setState $ n +1
                  liftIO $ do
                      putStr $ take tab $ repeat ' '

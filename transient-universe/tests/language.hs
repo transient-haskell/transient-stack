@@ -204,7 +204,7 @@ withCon mx= do
      runAt console mx
 
   pushConsoleHandlers= do
-    cbs <- getState
+    cbs <- tryState
     liftIO $ writeIORef rcb cbs -- restore local node options
 
 

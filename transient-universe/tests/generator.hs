@@ -204,7 +204,7 @@ program= unsafePerformIO $ newIORef ""
 unT :: Show b => Term b -> b -> TransIO b
 unT f x=do
    r<- pre *> unTerm (threadst f) x
-   p <- getState :: TransIO String
+   p <- tryState :: TransIO String
    liftIO $ writeIORef program p
    return r
   where

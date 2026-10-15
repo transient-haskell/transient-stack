@@ -1048,7 +1048,7 @@ looptest= runTransient $ do
 
     sum  r 1000000
 
-    s <-   getState 
+    s <-   tryState 
 
     liftIO $ putStrLn s
 
@@ -1706,9 +1706,9 @@ getSData =    do
 
 -- | Same as `getSData`
 
-getState :: Typeable a => TransIO a
+tryState :: Typeable a => TransIO a
 
-getState = getSData
+tryState = getSData
 
 
 

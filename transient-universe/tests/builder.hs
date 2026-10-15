@@ -548,7 +548,7 @@ instance Loggable Vers where
     serialize (Vers p)= undefined
     deserialize= Vers <$>  (do
 
-        mod <- getState <|> error "no mod"
+        mod <- tryState <|> error "no mod"
         tr ("MOD", mod :: BS.ByteString)
         --try(do r <- notParsed ; liftIO $ print r; empty) <|> return()
         tDropUntilToken "Versions"
@@ -620,7 +620,7 @@ replace a b s | BS.null s = s
 cabalInstall mod = do
     tr ("CABALINSTALL", mod)
     liftIO $ setCurrentDirectory $ up mod
-    Options ops <-  getState <|> return (Options mempty)
+    Options ops <-  tryState <|> return (Options mempty)
     let cabops  = if "-prof" `elem` ops then ["--enable-library-profiling", "--enable-executable-profiling", "--reinstall","--force-reinstalls" ] else []
     tr ("CABAL", ("install":up mod:cabops) )
     r <-  liftIO $ readProcessWithExitCode "cabal" ("install": up mod:cabops) ""
@@ -630,7 +630,7 @@ cabalInstall mod = do
 
 
 ghc proc (dirs :: [Dir])= do
-    Options ops <-  getState <|> return (Options mempty)
+    Options ops <-  tryState <|> return (Options mempty)
     let dirss= map up dirs
     liftIO $ print $ "ghc " <> " "<> proc <> " " <> concatMap (<>" ") ops <> concatMap (<>" ") dirss
 

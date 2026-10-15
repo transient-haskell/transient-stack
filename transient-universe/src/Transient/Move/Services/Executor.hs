@@ -122,7 +122,7 @@ controlNodeProcess cmdline= do
          killRemoteJob exnode  controlToken
          local $ do
 
-            (oldprompt,cbs) <- getState
+            (oldprompt,cbs) <- tryState
             liftIO $ writeIORef rcb cbs -- restore local node options
             liftIO $ writeIORef rprompt  oldprompt
               

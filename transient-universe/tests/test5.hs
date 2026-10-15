@@ -188,7 +188,7 @@ mainsimple= keep $ initNode $ do
     log <- getLog
     tr ("LOG after MINPUT", toPathLon $ fulLog log)
   caller <- local getSessionState
-  rec <- local getState
+  rec <- local tryState
   localIO $ print (s :: String, s2 :: String)
   localIO $ print (caller :: String, rec :: String)
 
@@ -316,7 +316,7 @@ maingame= keep $ initNode $ do
 
   addToOptions :: Loggable a => Cloud a
   addToOptions=  do
-        idata :: InputData <- local getState
+        idata :: InputData <- local tryState
         -- liftIO $ atomically $ do
         lcks :: [InputData] <- local getRState --  readDBRef locks `onNothing` return []
         local $ setRState $ idata:lcks -- writeDBRef locks $ idata:lcks 
@@ -355,7 +355,7 @@ setRPState val = do
   onAll $ setRState val'
   
 withRPState f = onAll $ do
-    ref <- getState 
+    ref <- tryState 
     liftIO $ atomicModifyIORef ref f
 
 

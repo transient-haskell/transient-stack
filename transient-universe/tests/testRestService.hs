@@ -59,14 +59,14 @@ main=  do
       
       r <-callService postRestService (10 :: Int,4 :: Int, "true" :: Symbol ,  "title alberto" :: Literal)  :: Cloud Value
       local $ do
-          HTTPHeaders _ headers <- getState <|> error "no headers. That should not happen" 
+          HTTPHeaders _ headers <- tryState <|> error "no headers. That should not happen" 
           liftIO $ print headers 
           liftIO $ print ("POST RESPONSE:",r)
  
       
       r <- callService getRestService (1::Int)
       local $ do
-          HTTPHeaders _ headers <- getState <|> error "no headers. That should not happen"
+          HTTPHeaders _ headers <- tryState <|> error "no headers. That should not happen"
           liftIO $ do
               putStrLn "HEADERS"
               print headers
@@ -76,7 +76,7 @@ main=  do
       
       r <- callService getRestService (2::Int)
       local $ do
-          HTTPHeaders _ headers <- getState <|> error "no headers. That should not happen"
+          HTTPHeaders _ headers <- tryState <|> error "no headers. That should not happen"
           liftIO $ do
               putStrLn "HEADERS"
               print headers
