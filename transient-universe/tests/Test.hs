@@ -251,18 +251,18 @@ main12= keep $ initNode $ inputNodes <|> do
 
 -- servname= [("name","serv")]
 
--- main9= keep $ runService servname 3000  [serve plus2 ] $ trans  <|> service  -- <|> callNodes1
+-- main9= keep $ runService servname 3000  [serve plus2 ] $ trans  <|> service  -- <|> foldNodes1
 --   -- return ()
 
 -- plus2 (x :: Int) = do
 --    return () !> ("PLUS2",x)
 --    return $ x + 2
 
--- callNodes1= do
---     local $ option "call" "callNodes"
+-- foldNodes1= do
+--     local $ option "call" "foldNodes"
 --     node <- local getMyNode
 --     nodes <- local $ findInNodes servname
---     r <- callNodes' nodes (<>) mempty $ return "hello " 
+--     r <- foldNodes' nodes (<>) mempty $ return "hello " 
 --     localIO $ putStrLn r
 
 -- trans = do

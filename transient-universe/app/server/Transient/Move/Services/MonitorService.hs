@@ -133,7 +133,7 @@ returnInstances = do
         ns <-  local getEqualNodes
 
         tr ("monitors: ",map nodeHost ns)
-        auth <- callNodes' ns (<>) mempty  $  localIO $ authorizeService ident service >>=  \x -> return [x]
+        auth <- foldNodes' ns (<>) mempty  $  localIO $ authorizeService ident service >>=  \x -> return [x]
         tr ("authotorized: ",auth)
         let nodes = map fst $ filter  snd  $ zip ns auth
             nnodes= length nodes
@@ -141,8 +141,8 @@ returnInstances = do
             lacking= num `rem` nnodes
             (nodes1,nodes2)= splitAt  lacking nodes
         return () !> (pernode,lacking,nodes1,nodes2)
-        rs <- callNodes' nodes1 (<>) mempty (installHere  service (pernode+1))  <>
-              callNodes' nodes2 (<>) mempty (installHere  service pernode)
+        rs <- foldNodes' nodes1 (<>) mempty (installHere  service (pernode+1))  <>
+              foldNodes' nodes2 (<>) mempty (installHere  service pernode)
         local $ addNodes rs
         --ns <- onAll getNodes
         tr   ("MONITOR RETURN---------------------------------->", rs)

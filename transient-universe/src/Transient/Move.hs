@@ -66,7 +66,7 @@ getMyNode, getWebServerNode, getNodes, getEqualNodes, nodeList, isBrowserInstanc
 
 
 -- * Running Local Computations
-local, localIO,Loggable(..),onAll, onAllNodes, logged,loggedc, liftCloud,
+local, localIO,Loggable(..),onAll, onAllDeep, logged,loggedc,
 
 -- * Moving Computations
 wormhole, teleport,
@@ -75,7 +75,7 @@ wormhole, teleport,
  beamTo, forkTo,runAt, atRemote, setSynchronous, syncStream,
 
 -- * Running at Multiple Nodes
-clustered, mclustered, callNodes, callNodes', foldNet, exploreNet, exploreNetUntil,
+clustered, mclustered, foldNodes, foldNodes', foldNet, exploreNet, exploreNetUntil, liftCloud,
 
 -- * Messaging
 putMailbox, putMailbox',getMailbox,getMailbox',deleteMailbox,deleteMailbox',

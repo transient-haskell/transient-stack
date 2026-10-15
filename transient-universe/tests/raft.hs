@@ -61,10 +61,10 @@ election raftNodes= cunique $ do
        localIO $ atomicModifyIORef sentVote $ const (False,())
        election raftNodes
 
-cluster nodes proc= callNodes' (<|>) empty nodes proc
-mcluster nodes proc= callNodes' (<>) mempty nodes proc
+cluster nodes proc= foldNodes' (<|>) empty nodes proc
+mcluster nodes proc= foldNodes' (<>) mempty nodes proc
 
-callNodes' op init nodes proc= foldr op init $ map (\node -> runAt node proc) nodes
+foldNodes' op init nodes proc= foldr op init $ map (\node -> runAt node proc) nodes
 
 runRaftNodes ports= do
     nodes <- onAll $  mapM (\p -> liftIO $ createNodeServ "localhost" p [("raft","raft")]) ports
