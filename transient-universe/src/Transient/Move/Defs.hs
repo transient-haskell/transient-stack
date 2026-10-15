@@ -11,7 +11,6 @@ import Transient.Internals
 import Transient.EVars
 import Transient.Loggable
 import Transient.Parse
-import {-# SOURCE #-} Transient.Move.Logged (endpoint, noExState)
 import Data.ByteString.Builder
 import qualified Data.ByteString.Builder.Internal as BI
 import Data.String (IsString(..))
