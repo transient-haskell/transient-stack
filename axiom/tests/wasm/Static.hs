@@ -1,19 +1,20 @@
 {-# LANGUAGE CPP, OverloadedStrings, JavaScriptFFI #-}
--- Rendering without events: the HTML of consecutive widgets of a bind is drawn in order.
+-- Rendering without events: each line is a `render`, in the TransIO monad.
 module Main where
 
 import Prelude hiding (div)
+import Transient.Base (keep, TransIO)
 import GHCJS.HPlay.View
 
-page :: Widget ()
+page :: TransIO ()
 page = do
-  rawHtml (p ("one" :: String))
+  render $ rawHtml (p ("one" :: String))
   n <- return (2 :: Int)
-  div <<< rawHtml (p ("two " ++ show n))
-  rawHtml (p ("three" :: String))
+  render $ div <<< rawHtml (p ("two " ++ show n))
+  render $ rawHtml (p ("three" :: String))
 
 main :: IO ()
-main = runBody page >> return ()
+main = keep page >> return ()
 
 #ifdef BROWSER
 foreign export javascript "hs_start" main :: IO ()

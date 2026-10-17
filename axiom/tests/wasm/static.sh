@@ -21,11 +21,13 @@ const __exports = {};
 const { instance } = await WebAssembly.instantiate(fs.readFileSync(process.argv[2]), { wasi_snapshot_preview1: wasi.wasiImport, ghc_wasm_jsffi: jsffi(__exports) });
 Object.assign(__exports, instance.exports);
 wasi.initialize(instance);
-await instance.exports.hs_start();
-await new Promise(r => setTimeout(r, 500));
+instance.exports.hs_start().then(() => {}, e => console.log("hs_start threw", String(e).slice(0, 300)));
+const until = async (cond, ms = 10000) => { const t0 = Date.now(); while (!cond() && Date.now() - t0 < ms) await new Promise(r => setTimeout(r, 50)); return cond(); };
+await until(() => document.body.querySelectorAll("p").length >= 3);
 const ps = [...document.body.querySelectorAll("p")].map(p => p.textContent).join("|");
 console.log("BODY " + document.body.innerHTML);
 console.log("TEXTS " + ps);
+process.exit(0);
 EOJ
 cd $W && npm install jsdom > npm.log 2>&1 && timeout 40 node run.mjs static.wasm < /dev/null 2>&1 | sed 's/\x1b\[[0-9;]*m//g' | grep -a -E '^(BODY|TEXTS)' | tee node.log | cut -c1-300
 grep -aq "TEXTS one|two 2|three" node.log && echo PASS || echo FAIL
