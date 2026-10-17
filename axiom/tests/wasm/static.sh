@@ -5,8 +5,8 @@ source ~/.ghc-wasm/env
 cat > $W/cabal.project <<EOP
 packages: $D $R/../TCache/TCache.cabal $R/transient $R/transient-universe $R/perch
 EOP
-wasm32-wasi-cabal build --project-file=$W/cabal.project --builddir=$W/dist exe:static-test > $W/build.log 2>&1 || { echo "FAIL (build, $W/build.log)"; exit 1; }
-cp $(find $W/dist -name static-test.wasm | head -1) $W/static.wasm
+wasm32-wasi-cabal build --project-file=$W/cabal.project --builddir=${AXIOM_DIST:-$W/dist} exe:static-test > $W/build.log 2>&1 || { echo "FAIL (build, $W/build.log)"; exit 1; }
+cp $(find ${AXIOM_DIST:-$W/dist} -name static-test.wasm | head -1) $W/static.wasm
 node $(wasm32-wasi-ghc --print-libdir)/post-link.mjs --input $W/static.wasm --output $W/ghc_wasm_jsffi.js
 cat > $W/run.mjs <<'EOJ'
 import { WASI } from "node:wasi";
