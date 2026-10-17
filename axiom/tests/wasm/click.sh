@@ -34,7 +34,8 @@ if (drawn) {
 }
 console.log("BEFORE " + before);
 console.log("AFTER " + after);
-console.log(after.includes("<p>clicked</p>") ? "RESULT ok" : "RESULT bad");
+const buttons = document.querySelectorAll("input[type=submit]").length;
+console.log(after.includes("<p>clicked</p>") && buttons === 1 ? "RESULT ok" : "RESULT bad (buttons: " + buttons + ")");
 process.exit(0);
 EOJ
 cd $W && npm install jsdom > npm.log 2>&1 && timeout 40 node run.mjs click.wasm < /dev/null 2>&1 | sed 's/\x1b\[[0-9;]*m//g' | grep -a -E '^(BEFORE|AFTER|RESULT)' | tee node.log | cut -c1-300

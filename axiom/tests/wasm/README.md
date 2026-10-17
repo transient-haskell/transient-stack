@@ -10,11 +10,13 @@ jsdom, writes "Ana" in the box, clicks the button and waits for `hello Ana`; it 
 in order, one `span` per bind (`<span id="n0"><p>one</p><span id="n1"><span id="n2"><div><p>two 2</p></div>...`).
 
 `Click.hs` / `click.sh`: a button and a widget after it. The click draws the next widget (`<p>clicked</p>` in the span of
-the bind): the event and the continuation work. But the left side is drawn again: after the click the button appears twice
-(`<span id="n3"><input type="submit" id="n2" ...>` besides the original, same id). The test only checks the text.
+the bind) and the button stays once: the event and the continuation work. For that, `runCont'` discards the rendering of the
+reevaluated widget (`delData noHtml`). Replacing `setEventContW` by `setEventCont (norender x) (norender . f)` in the bind
+also runs the continuation, but the new HTML is appended at the end of the root span, not in the span of the bind
+(`setEventContW` renders with `runWidgetId` in the element of the bind), and the button is drawn again.
 
-Status (2026-10-15): `View.hs` and `Cell.hs` compile with wasm, the form is drawn (text box and button) and the click handler
-runs, but the page is not updated, so the test prints `FAIL`.
+Status (2026-10-15): `View.hs` and `Cell.hs` compile with wasm; the form of `Widget.hs` (a text box and a button joined with `<*`)
+is drawn and its click handler runs, but the page is not updated, so `run.sh` prints `FAIL`.
 
 * `raiseEvent` (`runCont'`) reevaluates only the widget that raises the event (the button), not the left side of the bind
   (the text box and the button), so the box is not read again from the page.

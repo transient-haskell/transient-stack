@@ -1447,6 +1447,7 @@ raiseEvent w event = Widget  $ Transient $ do
      setData ExecEvent                              --  !> "REPEAT: SET EXECEVENT"
 
      mr <- runView w                                -- reevaluate the widget: its value is read again from the page
+     delData noHtml                                 -- its rendering is already in the page
      case mr of
          Nothing -> return Nothing
          Just r -> runCont r cont                   -- !> "continue"
