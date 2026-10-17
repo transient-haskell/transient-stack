@@ -9,6 +9,10 @@ jsdom, writes "Ana" in the box, clicks the button and waits for `hello Ana`; it 
 `Static.hs` / `static.sh`: widgets with rendering and without events (`rawHtml`, `<<<`, a bind in between): the HTML is drawn
 in order, one `span` per bind (`<span id="n0"><p>one</p><span id="n1"><span id="n2"><div><p>two 2</p></div>...`).
 
+`Click.hs` / `click.sh`: a button and a widget after it. The click draws the next widget (`<p>clicked</p>` in the span of
+the bind): the event and the continuation work. But the left side is drawn again: after the click the button appears twice
+(`<span id="n3"><input type="submit" id="n2" ...>` besides the original, same id). The test only checks the text.
+
 Status (2026-10-15): `View.hs` and `Cell.hs` compile with wasm, the form is drawn (text box and button) and the click handler
 runs, but the page is not updated, so the test prints `FAIL`.
 
