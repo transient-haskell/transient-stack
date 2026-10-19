@@ -17,3 +17,10 @@ Earlier results with plain `Widget` and `runBody` (not the way Axiom is used, bu
 widget (`delData noHtml`) and the bind keeps `setEventContW`, which places the result in the span of the bind
 (`setEventCont` alone appends it at the end of the root span). The form `(campo) <* (botón)` with `runBody` did not update.
 `eventclosure-experiment.patch`: a try in which `>>=` stores `runView x` in the state; not applied.
+
+`render-split-experiment.patch` (2026-10-19): two changes in `render`, not applied. (1) the rest of `render` (the part after
+`norender mx <*** hook`) is a `TransIO` step instead of the tail of one `Transient` block, so it runs again in the event
+continuation: with `alert`s, after a click the order is `runCont'` -> tail of the render of the button -> next line -> next
+`render` in `ExecEvent` mode. (2) the `ExecEvent` branch builds `torender` in the element `id1` (like `runWidgetId`), which
+draws `<p>clicked</p>`, but in `n0` (it clears the button): the `IdLine` of the next render is still `n0`, not the span left
+after the button, although the tail of the first render runs before it.
