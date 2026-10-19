@@ -1,14 +1,14 @@
 {-# LANGUAGE CPP, OverloadedStrings, JavaScriptFFI #-}
--- A form: a text box and a button. The click reevaluates the form and the rest of the computation.
+-- A text box that raises the event: its code runs in the continuation, reads the page and returns the content.
 module Main where
 
 import Prelude hiding (div)
-import Transient.Base (keep, TransIO, (<**))
+import Transient.Base (keep, TransIO)
 import GHCJS.HPlay.View
 
 page :: TransIO ()
 page = do
-  name <- render $ (div <<< inputString (Just "world")) <** (inputSubmit ("greet" :: String) `fire` OnClick)
+  name <- render $ inputString (Just "world") `fire` OnChange
   render $ rawHtml (p ("hello " ++ name))
 
 main :: IO ()

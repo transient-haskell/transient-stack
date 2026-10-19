@@ -8,7 +8,7 @@ The widgets are used as `widgets.hs` does: in `TransIO`, with `render` before ev
 | `calc.sh` (`Calc.hs`) | computations in the `Widget` monad without rendering, with `runBody` | PASS (`Just 20`) |
 | `static.sh` (`Static.hs`) | a `render` in every line, no events | PASS |
 | `click.sh` (`Click.hs`) | `render (wbutton ..)` and a `render` after it; a click draws `clicked` in the gap of the button, the button stays once | PASS |
-| `run.sh` (`Widget.hs`) | `render` of a text box `<**` a button; writes "Ana" and clicks: expects `hello Ana` | FAIL: it draws `hello greet` |
+| `run.sh` (`Widget.hs`) | `render (inputString .. `fire` OnChange)`; writes "Ana" and fires `change`: expects `hello Ana` | PASS |
 
 `render` builds the DOM directly (as in the 2020 version): its HTML, followed by an empty element (`id2`) where the next render
 hangs. It is split in `TransIO` steps, so its last step also runs in the continuation of an event: there it deletes the
@@ -16,5 +16,6 @@ rendering of the subsequent renders (`deleteSiblings`/`clearChildren` of `id2`) 
 
 `raiseEvent` works as `react`: the handler of the page resumes the computation with the event (no `cont`/`runCont'`).
 
-The form fails because the continuation of the event receives the value of the widget that raised it (the button: "greet"), not
-the value of the whole `text box <** button` (the text box, "Ana"): the text box is not evaluated again, so nothing reads it.
+The widget that raises the event runs again in the continuation, in `ExecEvent` mode (its HTML is not built), reads the page and
+returns its content. Not covered yet: a form `text box <** button`, where the event is raised by the button and the value is the
+one of the text box (the continuation gets the value of the button).

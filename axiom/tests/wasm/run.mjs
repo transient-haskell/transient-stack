@@ -14,14 +14,14 @@ wasi.initialize(instance);
 instance.exports.hs_start().then(() => {}, e => console.log("hs_start threw", String(e).slice(0, 300)));
 const until = async (cond, ms = 15000) => { const t0 = Date.now(); while (!cond() && Date.now() - t0 < ms) await new Promise(r => setTimeout(r, 50)); return cond(); };
 const q = s => document.querySelector(s);
-const rendered = await until(() => q("input[type=submit]"));
+const rendered = await until(() => q("input[type=text]"));
 const html0 = document.body.innerHTML;
 let ok = rendered;
 let html1 = "";
 if (rendered) {
   const box = q("input[type=text]");
   box.value = "Ana";
-  q("input[type=submit]").dispatchEvent(new dom.window.Event("click", { bubbles: true }));
+  box.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
   ok = await until(() => document.body.innerHTML.includes("hello Ana"));
   html1 = document.body.innerHTML;
 }
