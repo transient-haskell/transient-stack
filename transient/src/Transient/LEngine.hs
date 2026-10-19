@@ -653,7 +653,10 @@ instance AdditionalOperators TransIO where
   (<**) ma mb =
     Transient $ do
       a <- runTrans ma
-      runTrans  mb
+      case a of
+        Nothing -> void $ runTrans mb
+        -- an event in mb continues with the result of ma, which is not executed again
+        Just r  -> void $ runTrans $ mb >> return r
       return a
 
 infixl 4 <***, <**, **>
