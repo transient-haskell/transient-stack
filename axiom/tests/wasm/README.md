@@ -14,5 +14,7 @@ The widgets are used as `widgets.hs` does: in `TransIO`, with `render` before ev
 hangs. It is split in `TransIO` steps, so its last step also runs in the continuation of an event: there it deletes the
 rendering of the subsequent renders (`deleteSiblings`/`clearChildren` of `id2`) and leaves `IdLine` pointing to `id2`.
 
+`raiseEvent` works as `react`: the handler of the page resumes the computation with the event (no `cont`/`runCont'`).
+
 The form fails because the continuation of the event receives the value of the widget that raised it (the button: "greet"), not
-the value of the whole `text box <** button` (the text box, "Ana"): `x` is not reexecuted any more.
+the value of the whole `text box <** button` (the text box, "Ana"): the text box is not evaluated again, so nothing reads it.

@@ -1409,49 +1409,22 @@ data ExecRender= HasEventSet | ExecEvent   deriving (Eq, Read, Show)
 
 raiseEvent ::  IsEvent event  => Widget a -> event -> Widget a
 #ifdef BROWSER
-raiseEvent w event = Widget  $ Transient $ do
-  --  noTrans $ do
-  --     id <- genNewId
-  --     setData HasEventSet
-
-  --     setState id
-  --  Transient $ do
-      --  Alternative cont <- getData  `onNothing` (Alternative <$> get)
-       cont <- get
+raiseEvent w event = Widget $ do
+       -- as `react`: the handler that is set in the page resumes the computation, with the event, when the event happens
+       ref <- liftIO $ newIORef (const $ return ())
        let iohandler :: EventData -> IO ()
-           iohandler eventdata =do
-                runStateT (setData eventdata >> runCont' cont) cont  --  !> "runCont INIT"
-                return ()                                            --  !> "runCont finished"
+           iohandler eventdata = readIORef ref >>= \h -> h eventdata
 
-      --  id <- genNewId
-      --  setState id
-      --  let id'= JS.takeWhile (/='p') id
-       runView $ addEvent  event iohandler <<< w  
-       
+       (do
+              eventdata <- react (writeIORef ref) (return ())
+              setData eventdata
+              setData ExecEvent
+              r <- norender w                           -- its value is read again from the page
+              delData noHtml                            -- its rendering is already in the page
+              return r)
+        <|> norender (addEvent event iohandler <<< w)
+
    where
-  --  -- to restore event handlers when a new template is loaded
-  --  addEventList a b c= do
-  --   mid <- getData
-  --   case mid of
-  --     Nothing -> return()
-  --     Just (IdLine level _) -> do
-  --       liftIO $ atomicModifyIORef eventRef $ \(EventSet mlist) ->
-  --         let (cut,rest)= Prelude.span (\(x,l,_,_) -> x < a) mlist
-  --             rest'= Prelude.takeWhile(\(_,l,_,_) -> l <= level) $ tail1 rest
-  --         in (EventSet $ cut ++ (a,level, Event b, c):rest' ,())
-  --  tail1 []= []
-  --  tail1 xs= tail xs
-
-
-   runCont' cont= do
-     setData ExecEvent                              --  !> "REPEAT: SET EXECEVENT"
-
-     mr <- runView w                                -- reevaluate the widget: its value is read again from the page
-     delData noHtml                                 -- its rendering is already in the page
-     case mr of
-         Nothing -> return Nothing
-         Just r -> runCont r cont                   -- !> "continue"
-
        -- create an element and add any event handler to it.
    addEvent :: IsEvent a =>   a -> (EventData -> IO()) -> Perch -> Perch
    addEvent event iohandler be= Perch $ \e -> do
