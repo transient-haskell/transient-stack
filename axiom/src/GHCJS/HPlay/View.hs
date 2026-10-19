@@ -1592,193 +1592,39 @@ runBody w= do
 -- This allows for full dynamic and composable client-side Web apps.
 render :: Widget a -> TransIO a
 #ifdef BROWSER
-render  mx = Transient $ do
-       delData RenderExec ; tr "reset RenderExec"
-       idline1@(IdLine level id1')
+render  mx = do
+  (level, id1, id2) <- Transient $ do
+       idline1@(IdLine level id1)
              <- getData `onNothing` do
-                    id1 <- genNewId                                -- !> "ONNOTHING"
+                    id1 <- genNewId
                     -- if is being edited or not
                     top <-  liftIO  $ (elemById "edited") `onNothing` getBody
                     liftIO $ build (span ! id id1 $ noHtml) top
                     return $ IdLine 0 id1
+       setData idline1
+       id2 <- genNewId
+       return $ Just (level, id1, id2)
 
-       tr("render",id1')
-       let id1= id1'
+  -- the rendering of mx is built in the element of id1, followed by an empty element (id2) where the next render hangs
+  r <- norender mx <*** noTrans (do
+          torender <- getData `onNothing` return noHtml
+          eid1 <- liftIO $ elemById id1 `onNothing` error ("not found: " ++ show id1)
+          liftIO $ build (torender <> (span ! id id2 $ noHtml)) eid1
+          delData torender)
 
-       id2 <-  genNewId
-       tr ("id2 generated",id2)
-
-
-       needIndent<- liftIO $ newIORef False
-
---       r <- runWidgetId' (mx' id1 id2 <++ (span ! id id2 $ noHtml)) id1
-       prevRender <- getData `onNothing` return noHtml
-       delData noHtml
-       r <-runTrans $ norender mx <*** noTrans (do
-       
-          mtorender    :: Maybe Perch       <- getData 
-          mrenderExec  :: Maybe RenderExec  <- getData 
-
-          tr ("mtorender, mrenderExec ",isNothing mtorender,isJust mrenderExec)
-          if isJust mrenderExec then do 
-                 tr ("second level render" , id2)
-                 liftIO $ writeIORef needIndent True
-                 --alert("creating", id2)
-                 setData $ (fromMaybe noHtml mtorender  <> (span ! id id2 $ noHtml))
-          else if isNothing mtorender then do  setData prevRender;  tr "no HTML" ; return () 
-          else do
-           liftIO $ writeIORef needIndent True
-           let torender = fromMaybe mempty mtorender -- fromJust mtorender
-           tr ("HAY HTML",id1')
-
-           execmode <- getData
-
-           case execmode of
-            Just ExecEvent ->   do
-                tr "ExecEvent"
-                tr ("EVENT id1,id2",id1,id2)
-                meid2 <- liftIO $ elemBySeqDOM id1 id2 >>= fromJSVal  -- elemById id2
-                -- tr ("isJust id2", isJust meid2)
-                delData ExecEvent
-                delData noHtml
-                setData $ IdLine (level +1) id2
-
-                when (isJust meid2) $ do
-                   liftIO $ clearChildren $ fromJust meid2
-
-
-            Just HasEventSet  -> do 
-            
-                     delData HasEventSet
-                     tr "render HasEventSet"
-                     --liftIO $ build (torender <> (span ! id id2 $ noHtml)) eid1
-                     
-                     setData $ ((Perch $ \e -> do
-                        build prevRender e
-                        parent <- liftIO $ elemById id1 `onNothing`  error ("not found: " ++ show id1)
-                        build (torender <> (span ! id id2 $ noHtml)) parent >> return e) :: Perch)
-                     delData ExecEvent
-            _ -> do
-                     tr "render noEvent"
-                     liftIO $ writeIORef needIndent False
-                     setData $ ((Perch $ \e -> do
-                        build prevRender e
-                        parent <- liftIO $ elemById id1 `onNothing`  error ("not found: " ++ show id1)
-                        build torender  parent >> return e) :: Perch)
-                     
-              
-          return  ())
-       tr ("ISJUST", isJust r)
-       when (isJust r) $ do
-            setData RenderExec; tr "set RennderExec"
-            indent <- liftIO $ readIORef needIndent -- interesa rendering producido en esa llamada no el acumulado
-            when indent $ do
-               tr ("SET ID2",id2)
-               setData (IdLine (level +1) id2 )  
-                             --delData $ fromJust mtorender
-            -- delData (Alternative undefined)-- >> setData (IdLine (level +1) id2 )    --solo cuando ha habido rendering!
-          -- else do 
-               --delData noHtml
-              --  cont <- get
-              --  setData (Alternative cont)  !> "SETDATA ALTERNATIVE"
-       return r
-
--- render :: Widget a -> TransIO a
--- #ifdef BROWSER
--- render  mx = Transient $ do
---        delData RenderExec ; tr "reset RenderExec"
---        idline1@(IdLine level id1')
---              <- getData `onNothing` do
---                     id1 <- genNewId                                -- !> "ONNOTHING"
---                     -- if is being edited or not
---                     top <-  liftIO  $ (elemById "edited") `onNothing` getBody
---                     liftIO $ build (span ! id id1 $ noHtml) top
---                     return $ IdLine 0 id1
-
---        tr("render",id1')
---        let id1= id1'
-
---        id2 <-  genNewId
---        tr ("id2 generated",id2)
-
-
---        needIndent<- liftIO $ newIORef False
-
--- --       r <- runWidgetId' (mx' id1 id2 <++ (span ! id id2 $ noHtml)) id1
---        prevRender <- getData `onNothing` return noHtml
---        delData noHtml
---        r <-runTrans $ norender mx <***
---         (noTrans $ do
---           mtorender    :: Maybe Perch       <- getData 
---           mrenderExec  :: Maybe RenderExec  <- getData 
-
---           tr ("mtorender, mrenderExec ",isNothing mtorender,isJust mrenderExec)
---           if isJust mrenderExec then do 
---                  tr ("second level render" , id2)
---                  liftIO $ writeIORef needIndent True
---                  --alert("creating", id2)
---                  setData $ (fromMaybe noHtml mtorender  <> (span ! id id2 $ noHtml))
---           else if isNothing mtorender then do  setData prevRender;  tr "no HTML" ; return () 
---           else do
---            liftIO $ writeIORef needIndent True
---            let torender = fromMaybe mempty mtorender -- fromJust mtorender
---            tr ("HAY HTML",id1')
-
---            execmode <- getData
-
---            case execmode of
---             Just ExecEvent ->   do
---                 tr "ExecEvent"
---                 tr ("EVENT id1,id2",id1,id2)
---                 meid2 <- liftIO $ elemBySeqDOM id1 id2 >>= fromJSVal  -- elemById id2
---                 -- tr ("isJust id2", isJust meid2)
---                 delData ExecEvent
---                 delData noHtml
---                 setData $ IdLine (level +1) id2
-
---                 when (isJust meid2) $ do
---                    liftIO $ clearChildren $ fromJust meid2
-
-
-
-             
-
---             Just HasEventSet  -> do
-            
---                      delData HasEventSet
---                      tr "render HasEventSet"
---                      --liftIO $ build (torender <> (span ! id id2 $ noHtml)) eid1
-                     
---                      setData $ ((Perch $ \e -> do
---                         build prevRender e
---                         parent <- liftIO $ elemById id1 `onNothing`  error ("not found: " ++ show id1)
---                         build (torender <> (span ! id id2 $ noHtml)) parent >> return e) :: Perch)
---                      delData ExecEvent
---             _ -> do
---                      tr "render noEvent"
---                      liftIO $ writeIORef needIndent False
---                      setData $ ((Perch $ \e -> do
---                         build prevRender e
---                         parent <- liftIO $ elemById id1 `onNothing`  error ("not found: " ++ show id1)
---                         build torender  parent >> return e) :: Perch)
-                     
-              
---            return  ())
---        tr ("ISJUST", isJust r)
---        if isJust r
---           then do 
---             setData RenderExec; tr "set RennderExec"
---             indent <- liftIO $ readIORef needIndent -- interesa rendering producido en esa llamada no el acumulado
---             when indent $ do
---                tr ("SET ID2",id2)
---                setData (IdLine (level +1) id2 )  
---                              --delData $ fromJust mtorender
---             delData (Alternative undefined)-- >> setData (IdLine (level +1) id2 )    --solo cuando ha habido rendering!
---           else do 
---                --delData noHtml
---                cont <- get
---                setData (Alternative cont)  !> "SETDATA ALTERNATIVE"
---        return r
+  -- this is a step of the continuation: it also runs after an event that happens in mx
+  Transient $ do
+       execmode <- getData
+       when (execmode == Just ExecEvent) $ do
+          -- an event has happened. Delete the rendering of all the subsequent renders: they will be built again
+          meid2 <- liftIO $ elemById id2
+          when (isJust meid2) $ liftIO $ do
+             deleteSiblings $ fromJust meid2
+             clearChildren $ fromJust meid2
+          delData ExecEvent
+          delData noHtml
+       setData $ IdLine (level +1) id2
+       return $ Just r
 
 #else
 render (Widget x)= empty
