@@ -603,9 +603,25 @@ class AdditionalOperators m where
   -- | Run @m a@ discarding its result before running @m b@ .
   (**>)  :: m a -> m b -> m b
 
-  -- | Run @m b@ once, discarding its result, after @m a@ is
-  -- executed for the first time and before running other operation after it
+  -- | Run @m a@, then @m b@ (once, discarding its result), and return the result of @m a@.
   --
+  -- If @m b@ has events (a callback that resumes the computation, like the ones of 'react' or 'getMailbox'),
+  -- every time one happens the rest of @m b@ is executed, then @m a@ is __executed again__, and the computation
+  -- that follows @m a \<** m b@ continues with the new result of @m a@. The value of the event is not passed
+  -- on, and neither is the result of @m b@. If @m b@ has no events, @m a@ is executed only once.
+  --
+  -- It is meant for forms, where @m a@ reads the fields and @m b@ is the button that submits them:
+  --
+  -- > (name, age) <- render $ (,) <$> inputString Nothing <*> inputInt Nothing <** inputSubmit "send" `fire` OnClick
+  --
+  -- Each click executes the fields again, which read the content of the page, and continues with their result.
+  --
+  -- __This definition is necessary for @\<**@ to attend to events in its second term__, above all in Axiom (the web
+  -- widgets of the browser). When @m b@ resumes the computation, the continuation that is run is the one of the
+  -- point where the event was set. If @\<**@ did not push @m a@ in that continuation, the code that follows would receive
+  -- the value of the event (the button) instead of the result of @m a@ (the fields), and @m a@ would not read the page
+  -- again. Pushing it is what makes the fields be evaluated again in every event, and only then, with their current
+  -- content. See "GHCJS.HPlay.View" in Axiom, where the widgets are combined with this operator.
   (<**)  :: m a -> m b -> m a
 
   atEnd' :: m a -> m b -> m a
@@ -653,8 +669,19 @@ instance AdditionalOperators TransIO where
   (<**) ma mb =
     Transient $ do
       a <- runTrans ma
-      runTrans  mb
+      fs  <- getContinuations
+      -- an event in mb continues executing ma again; its result is the one of the whole
+      setContinuation (\_ -> ma) fs
+      runTrans mb
+      restoreStack fs
       return a
+      where
+      getContinuations :: StateIO [a -> TransIO b]
+      getContinuations = do
+        TranShip { fcomp = fs } <- get
+        return $ unsafeCoerce fs
+      restoreStack :: TransMonad m => [a -> TransIO a] -> m ()
+      restoreStack fs = modify $ \TranShip {..} -> TranShip { fcomp = fs, .. }
 
 infixl 4 <***, <**, **>
 

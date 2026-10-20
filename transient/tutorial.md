@@ -2008,7 +2008,7 @@ Wait.. What all these operators means?  You should know about the standard Haske
 (<++) :: Widget a -> Perch -> Widget a
 ```
 
-`**>` append a Widget element to another and return the latter.  `<**`  does the same but return the first one.
+`**>` append a Widget element to another and return the latter.  `<**`  does the same but return the first one. If the second one has events (a submit button), each time one happens the first one is executed again and the computation continues with its new result: that is how a form reads its fields (see `<**` in `Transient.LEngine`).
 
 There is also `<<<` that encloses an active element within a "container" perch tag:
 
