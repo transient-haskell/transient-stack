@@ -1,7 +1,9 @@
--- (<**): an event in the second term continues with the result of the first term, which is not executed again.
+-- (<**): an event in the second term executes the first term again and continues with its result.
 -- The mailbox sends "world" to the second term after 0.3 s. Expected, in order:
---   RESULT hello        the first execution
+--   ma                  the first term, first execution
+--   RESULT hello
 --   mb world            the event is received by the second term
+--   ma                  the first term is executed again
 --   RESULT hello        the continuation of (<**) gets "hello", not "world"
 -- usage: aftertest.sh
 import Transient.Base
@@ -17,6 +19,6 @@ main = do
   let say s = appendFile out (s ++ "\n")
   keep $ do
     x <- (abduce >> liftIO (threadDelay 300000) >> putMailbox "world" >> empty)
-         <|> (return "hello" <** (do w <- getMailbox :: TransIO String; liftIO (say ("mb " ++ w))))
+         <|> ((liftIO (say "ma") >> return "hello") <** (do w <- getMailbox :: TransIO String; liftIO (say ("mb " ++ w))))
     liftIO $ say ("RESULT " ++ x)
   return ()

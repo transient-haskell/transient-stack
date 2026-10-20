@@ -653,11 +653,19 @@ instance AdditionalOperators TransIO where
   (<**) ma mb =
     Transient $ do
       a <- runTrans ma
-      case a of
-        Nothing -> void $ runTrans mb
-        -- an event in mb continues with the result of ma, which is not executed again
-        Just r  -> void $ runTrans $ mb >> return r
+      fs <- getContinuations
+      -- an event in mb continues executing ma again; its result is the one of the whole
+      setContinuation (\_ -> ma) fs
+      runTrans mb
+      restoreStack fs
       return a
+      where
+      getContinuations :: StateIO [a -> TransIO b]
+      getContinuations = do
+        TranShip { fcomp = fs } <- get
+        return $ unsafeCoerce fs
+      restoreStack :: TransMonad m => [a -> TransIO a] -> m ()
+      restoreStack fs = modify $ \TranShip {..} -> TranShip { fcomp = fs, .. }
 
 infixl 4 <***, <**, **>
 
