@@ -48,3 +48,16 @@ executable click-test
   if arch(wasm32)
     cpp-options: -DBROWSER
     build-depends: ghc-experimental
+
+executable form-test
+  main-is: Form.hs
+  hs-source-dirs: ., ../../src
+  other-modules: GHCJS.HPlay.View
+                 GHCJS.HPlay.Cell
+  build-depends: base, transformers, containers, mtl, bytestring, directory, transient, transient-universe, ghcjs-perch
+  default-language: Haskell2010
+  ghc-options: -no-hs-main -optl-mexec-model=reactor
+  if arch(wasm32)
+    cpp-options: -DBROWSER
+    build-depends: ghc-experimental
+
