@@ -4,4 +4,4 @@ D=$(cd $(dirname $0) && pwd); W=$D/run-after; rm -rf $W; mkdir -p $W
 cd $D/.. && cabal build lib:transient > $W/build.log 2>&1 || { echo "FAIL (build, $W/build.log)"; exit 1; }
 cabal exec -- ghc -package transient -w -O0 -threaded -outputdir $W/o -o $W/after $D/AfterEvent.hs >> $W/build.log 2>&1 || { echo "FAIL (build, $W/build.log)"; exit 1; }
 (cd $W && sleep 3 | timeout -s KILL 2 ./after $W/out.txt > /dev/null 2>&1)
-printf 'ma\nRESULT hello\nmb world\nma\nRESULT hello\n' | cmp -s - $W/out.txt && echo PASS || { echo FAIL; cat $W/out.txt; }
+printf 'ma2\nRESULT2 y\nma\nRESULT hello\nmb world\nma\nRESULT hello\n' | cmp -s - $W/out.txt && echo PASS || { echo FAIL; cat $W/out.txt; }
