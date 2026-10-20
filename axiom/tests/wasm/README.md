@@ -17,5 +17,5 @@ rendering of the subsequent renders (`deleteSiblings`/`clearChildren` of `id2`) 
 `raiseEvent` works as `react`: the handler of the page resumes the computation with the event (no `cont`/`runCont'`).
 
 The widget that raises the event runs again in the continuation, in `ExecEvent` mode (its HTML is not built), reads the page and
-returns its content. Not covered yet: a form `text box <** button`, where the event is raised by the button and the value is the
-one of the text box (the continuation gets the value of the button).
+returns its content. Not covered: a form `text box <** button`. `<**` is not a construction to fire events in its second term, so those forms
+(`... <** inputSubmit "send" `fire` OnClick`, as in `widgets.hs`) are discarded.
