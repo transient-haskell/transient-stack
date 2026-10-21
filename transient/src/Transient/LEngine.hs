@@ -622,6 +622,10 @@ class AdditionalOperators m where
   -- the value of the event (the button) instead of the result of @m a@ (the fields), and @m a@ would not read the page
   -- again. Pushing it is what makes the fields be evaluated again in every event, and only then, with their current
   -- content. See "GHCJS.HPlay.View" in Axiom, where the widgets are combined with this operator.
+  --
+  -- @m a@ is executed again with the same sequence of identifiers ('genId') that it had the first time. A widget that
+  -- creates an element in the page with an identifier takes the same one and finds it, instead of asking for a new one
+  -- that does not exist.
   (<**)  :: m a -> m b -> m a
 
   atEnd' :: m a -> m b -> m a
@@ -668,14 +672,22 @@ instance AdditionalOperators TransIO where
   (<**) :: TransIO a -> TransIO b -> TransIO a
   (<**) ma mb =
     Transient $ do
+      seq0 <- gets mfSequence
       a <- runTrans ma
       fs  <- getContinuations
       -- an event in mb continues executing ma again; its result is the one of the whole
-      setContinuation (\_ -> ma) fs
+      setContinuation (\_ -> again seq0) fs
       runTrans mb
       restoreStack fs
       return a
       where
+      -- ma is executed with the same sequence of identifiers as the first time, so that it finds again what it created
+      again seq0 = Transient $ do
+        seq1 <- gets mfSequence
+        modify $ \TranShip {..} -> TranShip { mfSequence = seq0, .. }
+        r <- runTrans ma
+        modify $ \TranShip {..} -> TranShip { mfSequence = seq1, .. }
+        return r
       getContinuations :: StateIO [a -> TransIO b]
       getContinuations = do
         TranShip { fcomp = fs } <- get

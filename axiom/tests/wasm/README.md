@@ -8,7 +8,7 @@ The widgets are used as `widgets.hs` does: in `TransIO`, with `render` before ev
 | `calc.sh` (`Calc.hs`) | computations in the `Widget` monad without rendering, with `runBody` | PASS (`Just 20`) |
 | `static.sh` (`Static.hs`) | a `render` in every line, no events | PASS |
 | `click.sh` (`Click.hs`) | `render (wbutton ..)` and a `render` after it; a click draws `clicked` in the gap of the button, the button stays once | PASS |
-| `form.sh` (`Form.hs`) | the form of `widgets.hs`: `render` of a text box `<**` a submit button; writes "Ana", clicks: expects `hello Ana` | FAIL: after the click nothing is drawn |
+| `form.sh` (`Form.hs`) | the form of `widgets.hs`: `render` of a text box `<**` a submit button; writes "Ana", clicks: expects `hello Ana` | PASS |
 | `run.sh` (`Widget.hs`) | `render (inputString .. `fire` OnChange)`; writes "Ana" and fires `change`: expects `hello Ana` | PASS |
 
 `render` builds the DOM directly (as in the 2020 version): its HTML, followed by an empty element (`id2`) where the next render
@@ -21,6 +21,7 @@ The widget that raises the event runs again in the continuation, in `ExecEvent` 
 returns its content.
 
 `<**` (`Transient.LEngine`) executes its first term again when an event happens in the second one, and the computation continues
-with the result of the first term (see its documentation and `transient/tests/aftertest.sh`, which passes). Axiom needs that
-definition for forms (`fields <** button`). In `form.sh` it is not enough yet: with `alert`s in the test, "ma runs" (the box)
-appears only in the first execution, so after the click the continuation does not get to execute the box again.
+with the result of the first term (see its documentation and `transient/tests/aftertest.sh`). Axiom needs that definition for
+forms (`fields <** button`, as in `form.sh`). The first term is executed again with the same sequence of identifiers it had the
+first time (`mfSequence`): without that, the text box asked `genNewId` for a new identifier (`n4`) instead of `n2`, did not find
+its element and the continuation stopped.

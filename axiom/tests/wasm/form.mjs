@@ -21,6 +21,8 @@ let html1 = "";
 if (rendered) {
   const box = q("input[type=text]");
   box.value = "Ana";
+  await new Promise(r => setTimeout(r, 500));
+  console.log("=== CLICK ===");
   q("input[type=submit]").dispatchEvent(new dom.window.Event("click", { bubbles: true }));
   ok = await until(() => document.body.innerHTML.includes("hello Ana"));
   html1 = document.body.innerHTML;
