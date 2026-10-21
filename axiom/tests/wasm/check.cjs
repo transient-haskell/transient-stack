@@ -19,6 +19,14 @@ const steps = {
     await page.dispatchEvent("input[type=text]", "change");
     await texts(page, "hello Ana");
   },
+  // axiom/tests/widgets.hs as it is: the form of a Person (name, age, button "send")
+  widgets: async page => {
+    await page.waitForSelector("input[placeholder='Enter the name']", { timeout: 60000 });
+    await page.fill("input[placeholder='Enter the name']", "Ana");
+    await page.fill("input[placeholder='Enter the age (Int)']", "30");
+    await page.click("input[value=send]");
+    await texts(page, "input boxes returned:", "Person {name = \"Ana\", age = 30}");
+  },
   // text box <** button
   form: async page => {
     await page.waitForSelector("input[type=text]", { timeout: 30000 });

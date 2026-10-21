@@ -31,4 +31,11 @@ its element and the continuation stopped.
 The same tests (`static`, `click`, `widget`, `form`) in Chromium (playwright): a transient node serves the page and the wasm of the test
 (`index.html` loads `file/loader.js`, which fetches `app.wasm`; see `transient-universe/tests/wasm/README.md`), Chromium opens
 `http://localhost:<port>/` and `check.cjs` drives the page with real events (`fill`, `click`) and looks at the text. `browser.sh <port> <app>`
-runs one; `browser-all.sh` runs the four. All pass (2026-10-21), including the form `text box <** button`.
+runs one; `browser-all.sh` runs them all. All pass (2026-10-21), including the form `text box <** button`.
+
+`widgets` is `axiom/tests/widgets.hs` itself, compiled to wasm (`widgets-test` in `axiom-test.cabal`): Chromium writes the name and the
+age, clicks `send` and the page shows `Person {name = "Ana", age = 30}`. For wasm the file got three changes: `jstr` uses `Perch.JS (pack)`
+when `wasm32_HOST_ARCH` (there is no `Data.JSString`), `JavaScriptFFI`, and `hs_start`, the entry point of the reactor
+(`foreign export javascript`, it wraps `main`, which returns `IO (Either String ())`). The node that serves it is `Hello`: the server
+branch of `GHCJS.HPlay.View` (the one that is not for the browser) does not compile any more (`pack` is not in scope), so
+`widgets.hs` cannot be compiled for the server yet.

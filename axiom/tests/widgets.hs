@@ -3,7 +3,7 @@
 -- LIB="/projects/transient-stack" && mkdir -p static && ghcjs   --make   -i${LIB}/transient/src -i${LIB}/transient-universe/src  -i${LIB}/axiom/src   $1 -o static/out && runghc  -w -i${LIB}/transient/src -i${LIB}/transient-universe/src -i${LIB}/axiom/src   $1  $2 $3
 
 
-{-# LANGUAGE DeriveDataTypeable , ExistentialQuantification
+{-# LANGUAGE JavaScriptFFI, DeriveDataTypeable , ExistentialQuantification
     ,ScopedTypeVariables, StandaloneDeriving, RecordWildCards, FlexibleContexts, CPP
     ,GeneralizedNewtypeDeriving #-}
 
@@ -26,8 +26,12 @@ import Control.Monad.IO.Class
 import Data.Monoid
 import Data.String
 
-#ifdef ghcjs_HOST_OS
+#ifdef BROWSER
+#if defined(wasm32_HOST_ARCH)
+import Perch.JS (pack)
+#else
 import qualified Data.JSString  as JS hiding (empty)
+#endif
 #endif
 {-
 Example with different input fields with events and haskell combinators
@@ -55,7 +59,9 @@ Also the <br> tags have been moved to the widgets and the **> has been substitut
 
 -}
 
-#ifdef ghcjs_HOST_OS
+#if defined(wasm32_HOST_ARCH)
+jstr x= pack x
+#elif defined(BROWSER)
 jstr x= JS.pack x 
 #else 
 jstr (x :: String)= undefined
@@ -109,3 +115,10 @@ main= keep $ initNode $ onBrowser $ local $   buttons  <|> linksample
 
            render $ rawHtml $ fromString " returns: " <> b ( show r )
 
+
+#if defined(wasm32_HOST_ARCH)
+foreign export javascript "hs_start" hsStart :: IO ()
+
+hsStart :: IO ()
+hsStart = main >> return ()
+#endif
