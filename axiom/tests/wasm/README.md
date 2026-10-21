@@ -55,8 +55,13 @@ combines the latest value of each term (nothing reads the other terms again). Tw
 the `fmap` of `TransIO`: the previous one applied the function only to the result of the first evaluation and not to the one of an
 event, so the next step of `<*>` applied a value that was not a function (`internal error: stg_ap_p_ret`).
 
-Not covered: the checkboxes inside the whole page of `widgets.hs`. `buttons = ... inputPerson <|> radio <|> checkButton <|> select`: `<|>`
-of `TransIO` runs the next alternative with the state left by the previous one. Now that `checkButton` gives a value in its first
-execution, its `render` leaves `IdLine` pointing to its hole (`id2`) and `select` and the link are rendered inside it; a click in a
-checkbox clears that hole and they disappear. Before, the widgets returned nothing until an event, and the alternatives were
-independent. The alternatives need their own way to start from the `IdLine` where the `<|>` began.
+The alternatives of `Widget` (`instance Alternative Widget` in `GHCJS.HPlay.View`): `a <|> b = Widget $ alternative (norender a) <|> alternative (norender b)`.
+`alternative x` starts `x` from the `IdLine` (the place of the page) where the `<|>` began and leaves it as it was when it ends. `<|>` of
+`TransIO` runs the next alternative with the state that the previous one left, and a `render` that gives a value leaves `IdLine` pointing to
+its hole (`id2`): the next alternative would be rendered inside it and an event in the first one would clear it.
+
+Not covered: the checkboxes inside the whole page of `widgets.hs`. There `buttons = ... inputPerson <|> radio <|> checkButton <|> select`
+are alternatives of `TransIO` (each one is a sequence of `render`), not of `Widget`, so `Alternative Widget` does not reach them: since `checkButton`
+gives a value in its first execution, `select` and the link are rendered inside its hole and a click in a checkbox deletes them. With
+`alternative` in each alternative (`alternative inputPerson <|> alternative radio <|> ...`) that page passes (tried in a copy of
+`widgets.hs`), but `widgets.hs` was not changed.

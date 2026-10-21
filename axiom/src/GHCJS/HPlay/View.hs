@@ -15,6 +15,7 @@ module GHCJS.HPlay.View(
   -- * Running it
   , module Transient.Move.Utils
   , runBody, runWidget, runWidget'
+  , alternative
   , addHeader
   , render,render1
   -- * Widget Combinators and Modifiers
@@ -252,7 +253,23 @@ withElem id f= do
 
 
 type ElemID= JSString
-newtype Widget a=  Widget{ norender :: TransIO a} deriving(MonadIO, Applicative, Alternative, MonadState TranShip,Num)
+-- | An alternative of @\<|>@ (in 'TransIO') that renders. @\<|>@ runs the next alternative with the state that the previous one
+-- left, and the renders of a sequence leave 'IdLine' pointing to their hole: without 'alternative' the next alternative would be
+-- rendered inside the hole of the previous one, and the event of a widget of the previous one would clear it. With it, each
+-- alternative starts from the place of the page where the @\<|>@ began, and when it ends leaves that place as it was.
+--
+-- > main = keep $ initNode $ onBrowser $ local $ alternative inputPerson <|> alternative radio <|> alternative checkButton <|> alternative select
+alternative :: TransIO a -> TransIO a
+alternative x = do
+    mil <- getData
+    x <*** (maybe (return ()) setData (mil :: Maybe IdLine))
+
+newtype Widget a=  Widget{ norender :: TransIO a} deriving(MonadIO, Applicative, MonadState TranShip,Num)
+
+-- | The alternatives are rendered independently: each one starts from the place of the page where the @\<|>@ began (see 'alternative')
+instance Alternative Widget where
+  empty= Widget empty
+  a <|> b= Widget $ alternative (norender a) <|> alternative (norender b)
 
 
   

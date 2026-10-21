@@ -12,7 +12,6 @@ executable widget-test
   if arch(wasm32)
     cpp-options: -DBROWSER
     build-depends: ghc-experimental
-
 executable calc-test
   main-is: Calc.hs
   hs-source-dirs: ., ../../src
@@ -24,7 +23,6 @@ executable calc-test
   if arch(wasm32)
     cpp-options: -DBROWSER
     build-depends: ghc-experimental
-
 executable static-test
   main-is: Static.hs
   hs-source-dirs: ., ../../src
@@ -36,7 +34,6 @@ executable static-test
   if arch(wasm32)
     cpp-options: -DBROWSER
     build-depends: ghc-experimental
-
 executable click-test
   main-is: Click.hs
   hs-source-dirs: ., ../../src
@@ -48,7 +45,6 @@ executable click-test
   if arch(wasm32)
     cpp-options: -DBROWSER
     build-depends: ghc-experimental
-
 executable form-test
   main-is: Form.hs
   hs-source-dirs: ., ../../src
@@ -60,8 +56,6 @@ executable form-test
   if arch(wasm32)
     cpp-options: -DBROWSER
     build-depends: ghc-experimental
-
-
 executable widgets-test
   main-is: widgets.hs
   hs-source-dirs: .., ../../src
@@ -73,26 +67,6 @@ executable widgets-test
   if arch(wasm32)
     cpp-options: -DBROWSER
     build-depends: ghc-experimental
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 executable cb1-test
   main-is: Cb1.hs
   hs-source-dirs: ., ../../src
@@ -104,8 +78,6 @@ executable cb1-test
   if arch(wasm32)
     cpp-options: -DBROWSER
     build-depends: ghc-experimental
-
-
 executable cb2-test
   main-is: Cb2.hs
   hs-source-dirs: ., ../../src
@@ -117,8 +89,6 @@ executable cb2-test
   if arch(wasm32)
     cpp-options: -DBROWSER
     build-depends: ghc-experimental
-
-
 executable cb3-test
   main-is: Cb3.hs
   hs-source-dirs: ., ../../src
@@ -130,4 +100,3 @@ executable cb3-test
   if arch(wasm32)
     cpp-options: -DBROWSER
     build-depends: ghc-experimental
-
