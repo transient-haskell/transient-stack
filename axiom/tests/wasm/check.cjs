@@ -27,6 +27,19 @@ const steps = {
     await page.click("input[value=send]");
     await texts(page, "input boxes returned:", "Person {name = \"Ana\", age = 30}");
   },
+  // the other widgets of widgets.hs, all in the same page: the link, the radio buttons and the select
+  widgetsmore: async page => {
+    await page.waitForSelector("a", { timeout: 60000 });
+    await page.click("a");
+    await texts(page, "returns Hi!");
+    await page.click("input[type=radio][value=red]");
+    await texts(page, "returns: \"red\"");
+    // an event of a widget does not delete the rendering of the others
+    await texts(page, "This link say Hi!", "returns Hi!");
+    await page.selectOption("select", "green");
+    await page.click("select");
+    await texts(page, "returns: \"green\"");
+  },
   // text box <** button
   form: async page => {
     await page.waitForSelector("input[type=text]", { timeout: 30000 });

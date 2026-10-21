@@ -113,6 +113,8 @@ module GHCJS.HPlay.View(
 
 
 import           Transient.Internals     hiding (input, option, parent,genNewId,Callback)
+-- the fields of TranShip that are hidden above (parent) must be in scope for its record wildcards (setEventContW)
+import qualified Transient.Internals as TI
 import           Transient.Move.Logged hiding ((<<))
 import           Transient.Move.Utils
 import qualified Prelude(id,span,div)
@@ -1410,6 +1412,9 @@ data ExecRender= HasEventSet | ExecEvent   deriving (Eq, Read, Show)
 raiseEvent ::  IsEvent event  => Widget a -> event -> Widget a
 #ifdef BROWSER
 raiseEvent w event = Widget $ do
+       -- the identifier of the element that raises the event: getSelect, getCheckBoxes... look for it
+       id <- genNewId
+       setData id
        -- as `react`: the handler that is set in the page resumes the computation, with the event, when the event happens
        ref <- liftIO $ newIORef (const $ return ())
        let iohandler :: EventData -> IO ()
@@ -1428,7 +1433,9 @@ raiseEvent w event = Widget $ do
        -- create an element and add any event handler to it.
    addEvent :: IsEvent a =>   a -> (EventData -> IO()) -> Perch -> Perch
    addEvent event iohandler be= Perch $ \e -> do
-            e' <- build (mspan be) e
+            -- the widget in an element of its own: the handler is set in it and not in the container, where it would
+            -- be triggered by the events of all the widgets
+            e' <- build (nelem "event" `child` be) e
             buildHandler e' event iohandler
             return e
 
@@ -1582,7 +1589,9 @@ render  mx = do
   r <- norender mx <*** noTrans (do
           torender <- getData `onNothing` return noHtml
           eid1 <- liftIO $ elemById id1 `onNothing` error ("not found: " ++ show id1)
-          liftIO $ build (torender <> (span ! id id2 $ noHtml)) eid1
+          -- in an element of its own: the render of the alternatives (<|>) are independent, and an event in one of them
+          -- does not delete the rendering of the others
+          liftIO $ build (span $ torender <> (span ! id id2 $ noHtml)) eid1
           delData torender)
 
   -- this is a step of the continuation: it also runs after an event that happens in mx
