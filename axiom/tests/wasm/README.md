@@ -25,3 +25,10 @@ with the result of the first term (see its documentation and `transient/tests/af
 forms (`fields <** button`, as in `form.sh`). The first term is executed again with the same sequence of identifiers it had the
 first time (`mfSequence`): without that, the text box asked `genNewId` for a new identifier (`n4`) instead of `n2`, did not find
 its element and the continuation stopped.
+
+## In a real browser: `browser.sh`, `browser-all.sh`
+
+The same tests (`static`, `click`, `widget`, `form`) in Chromium (playwright): a transient node serves the page and the wasm of the test
+(`index.html` loads `file/loader.js`, which fetches `app.wasm`; see `transient-universe/tests/wasm/README.md`), Chromium opens
+`http://localhost:<port>/` and `check.cjs` drives the page with real events (`fill`, `click`) and looks at the text. `browser.sh <port> <app>`
+runs one; `browser-all.sh` runs the four. All pass (2026-10-21), including the form `text box <** button`.
