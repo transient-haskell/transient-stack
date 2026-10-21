@@ -39,3 +39,14 @@ when `wasm32_HOST_ARCH` (there is no `Data.JSString`), `JavaScriptFFI`, and `hs_
 (`foreign export javascript`, it wraps `main`, which returns `IO (Either String ())`). The node that serves it is `Hello`: the server
 branch of `GHCJS.HPlay.View` (the one that is not for the browser) does not compile any more (`pack` is not in scope), so
 `widgets.hs` cannot be compiled for the server yet.
+
+`widgetsmore` (same program as `widgets`): the link, the radio buttons and the select of `widgets.hs` in the same page. An event in one
+of them does not touch the others. Three things were needed in `GHCJS.HPlay.View` for several widgets with events to live together:
+`addEvent` puts the widget in an `<event>` element of its own and the handler in it (without it `build` returns the container and
+every handler is triggered by the clicks of all the widgets); `render` builds in a `span` of its own (the alternatives of `<|>` are
+independent, and `deleteSiblings` after an event does not delete the other alternatives); and `raiseEvent` sets again the identifier
+of the element that `getSelect` and `getCheckBoxes` look for.
+
+Not covered: the checkboxes of `widgets.hs` (`getCheckBoxes` over three `setCheckBox ... `fire` OnClick` joined with `<>`). A click in
+one of them shows nothing: `<>` of widgets is `(<>) <$> x <*> y`, an applicative of events, and the other terms are not read again
+from the page when one of them fires (as `<**` does with its first term).
