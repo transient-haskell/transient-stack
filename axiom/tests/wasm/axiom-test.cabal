@@ -92,3 +92,42 @@ executable widgets-test
 
 
 
+
+executable cb1-test
+  main-is: Cb1.hs
+  hs-source-dirs: ., ../../src
+  other-modules: GHCJS.HPlay.View
+                 GHCJS.HPlay.Cell
+  build-depends: base, transformers, containers, mtl, bytestring, directory, transient, transient-universe, ghcjs-perch
+  default-language: Haskell2010
+  ghc-options: -no-hs-main -optl-mexec-model=reactor
+  if arch(wasm32)
+    cpp-options: -DBROWSER
+    build-depends: ghc-experimental
+
+
+executable cb2-test
+  main-is: Cb2.hs
+  hs-source-dirs: ., ../../src
+  other-modules: GHCJS.HPlay.View
+                 GHCJS.HPlay.Cell
+  build-depends: base, transformers, containers, mtl, bytestring, directory, transient, transient-universe, ghcjs-perch
+  default-language: Haskell2010
+  ghc-options: -no-hs-main -optl-mexec-model=reactor
+  if arch(wasm32)
+    cpp-options: -DBROWSER
+    build-depends: ghc-experimental
+
+
+executable cb3-test
+  main-is: Cb3.hs
+  hs-source-dirs: ., ../../src
+  other-modules: GHCJS.HPlay.View
+                 GHCJS.HPlay.Cell
+  build-depends: base, transformers, containers, mtl, bytestring, directory, transient, transient-universe, ghcjs-perch
+  default-language: Haskell2010
+  ghc-options: -no-hs-main -optl-mexec-model=reactor
+  if arch(wasm32)
+    cpp-options: -DBROWSER
+    build-depends: ghc-experimental
+

@@ -400,8 +400,9 @@ si esta lleno con algo id1,
 -}
 
 
+-- the fmap of TransIO: it is part of the continuation, so that the value of an event is also transformed
 instance Functor Widget where
-  fmap f mx=   Widget. Transient $ fmap (fmap f) . runTrans $ norender mx
+  fmap f mx=   Widget $ fmap f (norender mx)
 
 
 
@@ -754,7 +755,8 @@ setCheckBox checked' v= Widget . Transient $ do
   addSData $  ( finput n "checkbox" showv  checked' Nothing :: Perch)
 
   case me of
-       Nothing -> return Nothing
+       -- not in the page yet: its value is the initial state. The applicative combines the latest value of each checkbox
+       Nothing -> return . Just . CheckBoxes $ if checked' then [v] else []
        Just e -> do
             checked <- liftIO $ getProp e "checked"
             return . Just . CheckBoxes $ if  checked=="true"  then [v] else []
