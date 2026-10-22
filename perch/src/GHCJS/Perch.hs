@@ -22,6 +22,8 @@ module GHCJS.Perch
   , Attribute
   , NamedEvent (..)
   , JsEvent (..)
+    -- * Strings of the backend (in the original package the stub of the server defined @pack@ in Internal.Perch)
+  , pack
     -- * Internal API
   , module Internal.API )
   where
@@ -29,3 +31,4 @@ module GHCJS.Perch
 import           Internal.API
 import           Internal.Perch hiding (withPerch, withPerchBuild)
 import           Internal.Type
+import           Perch.JS (pack)

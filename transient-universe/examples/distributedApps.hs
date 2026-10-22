@@ -4,6 +4,7 @@ module Main where
 
 import Prelude hiding (div,id)
 import Transient.Internals
+import Transient.Base (keep')
 
 
 
@@ -17,6 +18,7 @@ import GHCJS.HPlay.View
 
 
 import Transient.Move
+import qualified GHCJS.Perch as Perch (tr)   -- the tr of Transient (trace) hides the one of Perch (row of a table)
 import Transient.EVars
 import Transient.Indeterminism
 
@@ -88,9 +90,9 @@ mapReduce= onBrowser $ do
             <++  br
 
     r <- atRemote $ do
-           lliftIO $ print content
+           localIO $ print content
            r<- reduce  (+) . mapKeyB (\w -> (w, 1 :: Int))  $ distribute $ V.fromList $ words content
-           lliftIO $ putStr "result:" >> print r
+           localIO $ putStr "result:" >> print r
            return   (r :: M.Map String Int)
 
 
@@ -108,7 +110,7 @@ fs= fromString
 -- chat :: Cloud ()
 chat = do
 
-    let chatMessages= fs "chatMessages"
+    let chatMessages= fs "chatMessages" :: String
 
     local . render . rawHtml $ do
             h1 "Federated chat server"
@@ -134,7 +136,7 @@ chat = do
       atRemote $ do
           node <- local getMyNode
 
-          clustered $ local $ putMailbox chatMessages (showPrompt nick node ++ text )  >> empty :: Cloud ()
+          clustered $ local $ putMailbox' chatMessages (showPrompt nick node ++ text )  >> empty :: Cloud ()
           empty
 
       where
@@ -145,7 +147,7 @@ chat = do
   -- waitMessages :: Text -> Cloud ()
   waitMessages chatMessages =   do
 
-      resp <- atRemote . local $ single $   getMailbox chatMessages
+      resp <- atRemote . local $ single $   getMailbox' chatMessages
                                                            -- wait in the server for messages
 
       local . render . at (fs "#chatbox") Append $ rawHtml $ do
@@ -168,7 +170,7 @@ monitorNodes= do
     nodes <- atRemote . local $ single $  sample getNodes 1000000
 
     local . render . at (fs "#nodes") Insert . rawHtml $
-           table $ mconcat[tr $ td h >> td p >> td s | Node h p _ s  <- nodes]
+           table $ mconcat[Perch.tr $ td h >> td p >> td s | Node h p _ s  <- nodes]
     empty
 
 
