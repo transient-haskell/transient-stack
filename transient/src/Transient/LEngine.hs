@@ -19,6 +19,7 @@ import Control.Applicative
 import Data.Typeable
 import qualified Data.Map                               as M
 import Data.IORef
+import Data.Int (Int64)
 import Control.Concurrent
 import Control.Concurrent.MVar
 import Control.Exception
@@ -140,7 +141,9 @@ emptyLog= Log False (LogB []) []  0
 -- | Steps of the hash of the path, combined with 'hashStep': entering a logged statement, finishing it,
 -- an alternative branch (@w\/@), and the end of an applicative.
 hashStep :: Int -> Int -> Int
-hashStep h c = (h * 31 + c) `mod` 2147483647
+-- The names of the closures are computed in all the nodes and must be the same: the arithmetic is of 64 bits whatever the size of 'Int'
+-- (it is of 32 bits in the wasm backend, where the product overflows).
+hashStep h c = fromIntegral ((fromIntegral h * 31 + fromIntegral c) `mod` (2147483647 :: Int64))
 
 hashExec, hashDone, hashWait, hashApp, hashTerm, hashNode :: Int
 hashExec= 1
