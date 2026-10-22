@@ -50,6 +50,37 @@ const steps = {
   // one box: the click unchecks it
   async cb3(page) { await page.waitForSelector("input[type=checkbox]", { timeout: 30000 }); await page.locator("input[type=checkbox]").nth(0).click(); await texts(page, "returns: []"); },
   // the whole page of widgets.hs: a click in a checkbox does not delete the select nor the link
+  // transient-universe/examples/distributedApps.hs: the map-reduce widget runs in the server (atRemote) and the browser shows the result
+  mapreduce: async page => {
+    await page.click("text=map-reduce", { timeout: 25000 });
+    await page.waitForSelector("textarea", { timeout: 30000 });
+    await page.fill("textarea", "a b a");
+    await page.click("input[value=send]");
+    await texts(page, "word a appears 2 times", "word b appears 1 times");
+  },
+  // links with a text after each one: the three stay and the click on one gives its value
+  links: async page => {
+    await texts(page, "link-a", "link-b", "link-c");
+    await page.click("text=link-b");
+    await texts(page, "chose: \"B\"", "link-a", "link-c");
+  },
+  // a text area and a button that gives its content
+  area: async page => {
+    await page.waitForSelector("textarea", { timeout: 30000 });
+    await page.fill("textarea", "a b a");
+    await page.click("input[value=send]");
+    await texts(page, "got: a b a");
+  },
+  // the same, after a menu of links
+  area2: async page => {
+    await page.click("text=link-one", { timeout: 25000 });
+    await page.waitForSelector("textarea", { timeout: 30000 });
+    await page.fill("textarea", "a b a");
+    await page.click("input[value=send]");
+    await texts(page, "got: a b a 5");
+  },
+  // shows the page after the click on the first link (to see the html: HTML=1)
+  show2: async page => { await page.click("text=link-one", { timeout: 25000 }); await page.waitForSelector("textarea", { timeout: 30000 }); await page.waitForTimeout(1500); throw new Error("show"); },
   all: async page => {
     await page.waitForSelector("a", { timeout: 60000 });
     await page.locator("input[type=checkbox]").nth(0).click();
@@ -74,7 +105,8 @@ const steps = {
   await page.goto(`http://localhost:${port}/`);
   let ok = true;
   try { await steps[app](page); } catch (e) { ok = false; console.log(String(e).slice(0, 200)); }
-  if (!ok) errors.slice(-14).forEach(e => console.log("CONSOLE", e));
+  if (!ok) errors.filter(e => e.trim()).slice(-(+process.env.CONSOLE_N || 14)).forEach(e => console.log("CONSOLE", e));
+  if (!ok && process.env.HTML) console.log("HTML", (await page.innerHTML("body")).slice(0, 3000));
   console.log(ok ? "BROWSER ok" : "BROWSER fail: " + JSON.stringify((await page.innerText("body")).replace(/\n+/g, " | ")).slice(0, 700));
   await browser.close();
   process.exit(ok ? 0 : 1);

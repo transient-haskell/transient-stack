@@ -279,6 +279,8 @@ instance Monad Widget where
   x >>= f = Widget $ Transient $ do
        id1 <- genNewId
        setEventContW x  f id1
+       -- the rendering of the previous alternatives (<|>) is kept
+       rest <- getData `onNothing` return noHtml
        delData noHtml
        mk <- runView x
        form1 <- getData `onNothing` return noHtml
@@ -288,10 +290,10 @@ instance Monad Widget where
             delData noHtml
             mk <- runView $ f k
             form2 <- getData `onNothing` return noHtml
-            setData $ form1 <> (span ! id id1 $ form2)
+            setData $ rest <> form1 <> (span ! id id1 $ form2)
             return mk
          Nothing -> do
-            setData  $ form1 <> (span ! id id1 $ noHtml)
+            setData  $ rest <> form1 <> (span ! id id1 $ noHtml)
             return Nothing
 
 
@@ -302,7 +304,10 @@ setEventContW  x f id = modify $ \TranShip {mfSequence = seq, fcomp = fs, .. }
                                      , fcomp = unsafeCoerce (rend f id) :  fs
                                      , .. }   !> "setEventContW"
       where
-      rend f id x= tr "rend" >> runWidgetId ( f x) id
+      rend f id x= do
+         tr "rend"
+         continueIds
+         runWidgetId ( f x) id
 
       strip seq x=  Transient $ do
         alert "strip"
@@ -632,11 +637,24 @@ validate  w val=  do
 
 {-#NOINLINE rprefix #-}
 rprefix= unsafePerformIO $ newIORef 0
+
+-- | The highest sequence number given by 'genNewId'
+{-#NOINLINE highId #-}
+highId= unsafePerformIO $ newIORef (-1 :: Int)
+
+-- | The widgets that follow an event are new: they take their identifiers from the highest one given so far. The identifiers of the
+-- other alternatives of the page (@\<|>@) come from the same sequence, and the continuation of one of them would take the same
+-- identifiers and then 'elemById' would find the elements of the other alternative.
+continueIds :: (MonadState TranShip m, MonadIO m) => m ()
+continueIds= do
+   h <- liftIO $ readIORef highId
+   modify $ \TranShip {..} -> TranShip {mfSequence = max mfSequence (h + 1), ..}
 #ifdef BROWSER
 genNewId ::  (MonadState TranShip m, MonadIO m) => m  JSString
 genNewId=  do
       -- r <- liftIO $ atomicModifyIORef rprefix (\n -> (n+1,n))
       n <- genId
+      liftIO $ modifyIORef' highId (max n)
       alert ("nid",n)
       let nid= toJSString $  ('n':show n) -- ++ ('p':show r)
       nid `seq` return  nid
@@ -847,7 +865,7 @@ getMultilineText :: JSString
                  -> Widget String
 getMultilineText nvalue =  res where
  res= Widget. Transient $ do
-    tolook <- getData `onNothing` error "no event id" -- genNewId   !>  "GETMULTI"
+    tolook <- genNewId   -- !>  "GETMULTI"
     r <- getParam1 True tolook  `asTypeOf` typef res
     case r of
        Validated x        -> do addSData (ftextarea tolook  $ toJSString x :: Perch); return $ Just x     -- !> "VALIDATED"

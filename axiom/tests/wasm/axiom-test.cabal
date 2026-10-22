@@ -101,3 +101,47 @@ executable cb3-test
     cpp-options: -DBROWSER
     build-depends: ghc-experimental
 
+executable dapps-test
+  main-is: distributedApps.hs
+  hs-source-dirs: ../../../transient-universe/examples, ../../src
+  other-modules: GHCJS.HPlay.View
+                 GHCJS.HPlay.Cell
+  build-depends: base, transformers, containers, mtl, bytestring, directory, vector, text, transient, transient-universe, ghcjs-perch
+  default-language: Haskell2010
+  ghc-options: -no-hs-main -optl-mexec-model=reactor
+  if arch(wasm32)
+    cpp-options: -DBROWSER
+    build-depends: ghc-experimental
+executable links-test
+  main-is: Links.hs
+  hs-source-dirs: ., ../../src
+  other-modules: GHCJS.HPlay.View
+                 GHCJS.HPlay.Cell
+  build-depends: base, transformers, containers, mtl, bytestring, directory, transient, transient-universe, ghcjs-perch
+  default-language: Haskell2010
+  ghc-options: -no-hs-main -optl-mexec-model=reactor
+  if arch(wasm32)
+    cpp-options: -DBROWSER
+    build-depends: ghc-experimental
+executable area-test
+  main-is: Area.hs
+  hs-source-dirs: ., ../../src
+  other-modules: GHCJS.HPlay.View
+                 GHCJS.HPlay.Cell
+  build-depends: base, transformers, containers, mtl, bytestring, directory, transient, transient-universe, ghcjs-perch
+  default-language: Haskell2010
+  ghc-options: -no-hs-main -optl-mexec-model=reactor
+  if arch(wasm32)
+    cpp-options: -DBROWSER
+    build-depends: ghc-experimental
+executable area2-test
+  main-is: Area2.hs
+  hs-source-dirs: ., ../../src
+  other-modules: GHCJS.HPlay.View
+                 GHCJS.HPlay.Cell
+  build-depends: base, transformers, containers, mtl, bytestring, directory, transient, transient-universe, ghcjs-perch
+  default-language: Haskell2010
+  ghc-options: -no-hs-main -optl-mexec-model=reactor
+  if arch(wasm32)
+    cpp-options: -DBROWSER
+    build-depends: ghc-experimental

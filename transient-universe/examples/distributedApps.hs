@@ -1,20 +1,15 @@
-{-# LANGUAGE   CPP, NoMonomorphismRestriction, DeriveDataTypeable  #-}
+{-# LANGUAGE   CPP, NoMonomorphismRestriction, DeriveDataTypeable, JavaScriptFFI  #-}
 
 module Main where
 
 import Prelude hiding (div,id)
 import Transient.Internals
-import Transient.Base (keep')
+import Transient.Base (keep)
 
 
 
 import GHCJS.HPlay.Cell
-import GHCJS.HPlay.View
-#ifdef ghcjs_HOST_OS
-   hiding (map, input,option)
-#else
-   hiding (map, option,input)
-#endif
+import GHCJS.HPlay.View hiding (map, option,input)
 
 
 import Transient.Move
@@ -30,8 +25,12 @@ import Control.Monad.IO.Class
 import Data.String
 import qualified Data.Text as T
 
-#ifdef ghcjs_HOST_OS
+#ifdef BROWSER
+#if defined(wasm32_HOST_ARCH)
+import Perch.JS (JSString(..), pack)
+#else
 import qualified Data.JSString as JS hiding (span,empty,strip,words)
+#endif
 #endif
 
 import Data.Typeable
@@ -42,7 +41,13 @@ import Data.Typeable
 
 data Options= MapReduce | Chat | MonitorNodes | AllThree deriving (Typeable, Read, Show)
 
-main =  keep' $  initNode  $ inputNodes <|> menuApp  <|> thelink
+main :: IO ()
+main =  keep (initNode  $ inputNodes <|> menuApp  <|> thelink) >> return ()
+
+#if defined(wasm32_HOST_ARCH)
+-- the wasm is a reactor: main does not run, JS calls hs_start
+foreign export javascript "hs_start" main :: IO ()
+#endif
 
 -- thelink :: Cloud ()
 thelink=   do
@@ -152,13 +157,17 @@ chat = do
 
       local . render . at (fs "#chatbox") Append $ rawHtml $ do
                                           p (resp :: String)    -- display the response
-#ifdef ghcjs_HOST_OS
+#ifdef BROWSER
                                           liftIO $ scrollBottom $ fs "chatbox"
 
 
 foreign import javascript unsafe
   "var el= document.getElementById($1);el.scrollTop=  el.scrollHeight"
+#if defined(wasm32_HOST_ARCH)
+  scrollBottom  :: JSString -> IO()
+#else
   scrollBottom  :: JS.JSString -> IO()
+#endif
 #endif
 
 -- monitorNodes :: Cloud ()
