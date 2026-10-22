@@ -25,7 +25,7 @@
 {-# LANGUAGE InstanceSigs #-}
 {-# LANGUAGE NamedFieldPuns #-}
 module Transient.Move.Logged(Cloud(..),
-Loggable(..), logged, endpoint, received, param, getLog, exec,wait, emptyLog,
+Loggable(..), logged, logged', endpoint, received, param, getLog, exec,wait, emptyLog,
  Log(..),hashExec,genPersistId,persistDBRef,firstCont,
   firstEndpoint,dbClos0, noExState, setLastClosureForConnection,getLastClosureForConnection,updateLastClosureForConnection,setLog,
   processMessage, sendToClosure, getClosureLog, getClosureLogFrom) where
@@ -448,7 +448,14 @@ noExState s= error $ s <> ": no execution state. Use initNode to init the Cloud 
 
 
 logged :: Loggable a => TransIO a -> TransIO a
-logged mx =  sandboxDataCond handle $ do
+logged = logged' False
+
+-- | 'logged' with the compaction as a parameter. With @compact= True@ the log of the statement is always substituted by its result,
+-- even if the statement went through endpoints (teleports). It is for the transitions between nodes that have not the same code
+-- (e.g. from the browser to the server) since the node that receives the result could not replay the path inside. With
+-- @compact= False@ ('logged') the endpoints inside decide it ('preservePath').
+logged' :: Loggable a => Bool -> TransIO a -> TransIO a
+logged' compact mx =  sandboxDataCond handle $ do
 
     -- Jesuschrist loves you
 
@@ -467,6 +474,7 @@ logged mx =  sandboxDataCond handle $ do
     -- relative to the closure previous to the term (see logit): its internal closures are not part of the path
     handle (Just mnow) (Just mprev)
       | isApplicativ mnow && not (isApplicativ mprev) = Just mprev
+      | compact = Just mprev
     handle (Just mnow) (Just mprev) = Just (PrevClos (prevDBRef mnow) (pnewSession mnow)
                                            ( preservePath mnow || preservePath mprev)
                                            (isApplicativ mprev)  -- set by logit only within an applicative term
@@ -511,7 +519,7 @@ logged mx =  sandboxDataCond handle $ do
           ttr ("PREVCLOS LOGGED AFTER",prevc)
           -- an applicative term is always compacted to its value, even if it went through endpoints (e.g. runAt):
           -- a node that replays its internal path would follow its teleports and could not complete the applicative
-          if preservePath prevc && not app
+          if preservePath prevc && not app && not compact
             then do
               -- the internal path is kept in the log, so a replay goes through mx again and adds the same hashes.
               -- Continue from the final hash so that later endpoints do not collide with the internal ones (e.g. runAt)
@@ -547,7 +555,7 @@ logged mx =  sandboxDataCond handle $ do
           let recov= not $ (BS.null rest && null (restLog initialLog))
           tr ("addWait: HADTELEPORT", preservePath prevc,recov)
 
-          if preservePath prevc
+          if preservePath prevc && not compact
             then do
               ttr "PRESERVEPATH  addWait"
               modifyLog  (\finalLog -> finalLog{recover=recov

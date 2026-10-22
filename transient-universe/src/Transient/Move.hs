@@ -72,7 +72,7 @@ local, localIO,Loggable(..),onAll, onAllDeep, logged,loggedc,
 wormhole, teleport,
 
 -- * Running at a Remote Node
- beamTo, forkTo,runAt, atRemote, setSynchronous, syncStream,
+ beamTo, forkTo,runAt, runAt', atRemote, atRemote', setSynchronous, syncStream,
 
 -- * Running at Multiple Nodes
 clustered, mclustered, foldNodes, foldNodes', foldNet, exploreNet, exploreNetUntil, liftCloud,

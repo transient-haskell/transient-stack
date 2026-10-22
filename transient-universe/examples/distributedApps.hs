@@ -94,7 +94,7 @@ mapReduce= onBrowser $ do
             <**  inputSubmit "send"  `fire` OnClick
             <++  br
 
-    r <- atRemote $ do
+    r <- atRemote' True $ do
            localIO $ print content
            r<- reduce  (+) . mapKeyB (\w -> (w, 1 :: Int))  $ distribute $ V.fromList $ words content
            localIO $ putStr "result:" >> print r
