@@ -1,4 +1,4 @@
 #!/bin/bash
 # the Axiom tests in a real browser (usage: browser-all.sh), sharing one build directory
 D=$(cd $(dirname $0) && pwd); export AXIOM_DIST=${AXIOM_DIST:-$D/dist-all}
-i=0; for t in static click widget form widgets widgetsmore cb1 cb2 cb3; do x=$t; [ $t = widgetsmore ] && x=widgets; echo "$t: $($D/browser.sh $((8780+i)) $t $x 2>&1 | grep -a -E "^(PASS|FAIL)" | tail -1)"; i=$((i+1)); done
+i=0; for t in static click widget form widgets widgetsmore all cb1 cb2 cb3; do x=$t; case $t in widgetsmore|all) x=widgets;; esac; echo "$t: $($D/browser.sh $((8780+i)) $t $x 2>&1 | grep -a -E "^(PASS|FAIL)" | tail -1)"; i=$((i+1)); done

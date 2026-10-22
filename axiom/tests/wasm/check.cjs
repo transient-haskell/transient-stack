@@ -40,15 +40,22 @@ const steps = {
     await page.click("select");
     await texts(page, "returns: \"green\"");
   },
-  // checkboxes: the initial state and the latest value after a click
+  // checkboxes: nothing until the first event, then the latest value of each box
   cb: async page => {
-    await texts(page, 'returns: ["Green"]');
+    await page.waitForSelector("input[type=checkbox]", { timeout: 30000 });
+    await page.locator("input[type=checkbox]").nth(0).click();
+    await texts(page, 'returns: ["Red","Green"]');
   },
+  get cb1() { return this.cb; }, get cb2() { return this.cb; },
   // one box: the click unchecks it
-  async cb3(page) { await this.cb(page); await page.locator("input[type=checkbox]").nth(0).click(); await texts(page, "returns: []"); },
-  // two boxes: a click in the first one gives the latest value of each one
-  async cb1(page) { await this.cb(page); await page.locator("input[type=checkbox]").nth(0).click(); await texts(page, 'returns: ["Red","Green"]'); },
-  async cb2(page) { await this.cb(page); await page.locator("input[type=checkbox]").nth(0).click(); await texts(page, 'returns: ["Red","Green"]'); },
+  async cb3(page) { await page.waitForSelector("input[type=checkbox]", { timeout: 30000 }); await page.locator("input[type=checkbox]").nth(0).click(); await texts(page, "returns: []"); },
+  // the whole page of widgets.hs: a click in a checkbox does not delete the select nor the link
+  all: async page => {
+    await page.waitForSelector("a", { timeout: 60000 });
+    await page.locator("input[type=checkbox]").nth(0).click();
+    await texts(page, 'returns: ["Red","Green"]', "This link say Hi!");
+    if ((await page.locator("select").count()) !== 1) throw new Error("the select is not there");
+  },
   // text box <** button
   form: async page => {
     await page.waitForSelector("input[type=text]", { timeout: 30000 });

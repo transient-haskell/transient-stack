@@ -782,7 +782,10 @@ setCheckBox checked' v= Widget . Transient $ do
 getCheckBoxes ::  Show a => Widget  (CheckBoxes a) ->  Widget  [a]
 getCheckBoxes w =  do
   CheckBoxes rs <-  w
-  return rs
+  -- the boxes give their initial state to the applicative, but the group gives no value until an event happens (as setCheckBox
+  -- did before): a render that gives a value leaves IdLine pointing to its hole, and the next alternative of a <|> would be inside it
+  execmode <- getData
+  if execmode == Just ExecEvent then return rs else empty
  
 
 whidden :: (Read a, Show a, Typeable a) => a -> Widget a

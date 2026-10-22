@@ -100,3 +100,4 @@ executable cb3-test
   if arch(wasm32)
     cpp-options: -DBROWSER
     build-depends: ghc-experimental
+

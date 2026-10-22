@@ -47,21 +47,20 @@ every handler is triggered by the clicks of all the widgets); `render` builds in
 independent, and `deleteSiblings` after an event does not delete the other alternatives); and `raiseEvent` sets again the identifier
 of the element that `getSelect` and `getCheckBoxes` look for.
 
-Checkboxes (`cb1`, `cb2`, `cb3`): `getCheckBoxes` over two or one `setCheckBox ... `fire` OnClick` joined with `<>`, outside `widgets.hs`:
-the initial state is shown without any event (`returns: ["Green"]`) and a click gives the latest value of each box (`["Red","Green"]`).
-It is the applicative of `transient` as it is: each term gives its initial value and a new value in each event, and the applicative
-combines the latest value of each term (nothing reads the other terms again). Two things in `GHCJS.HPlay.View` were needed:
-`setCheckBox` returns its initial state when its element is not in the page yet (before it returned nothing), and `Functor Widget` is
-the `fmap` of `TransIO`: the previous one applied the function only to the result of the first evaluation and not to the one of an
-event, so the next step of `<*>` applied a value that was not a function (`internal error: stg_ap_p_ret`).
+Checkboxes (`cb1`, `cb2`, `cb3`): `getCheckBoxes` over two or one `setCheckBox ... `fire` OnClick` joined with `<>`. The applicative of `transient` is
+used as it is: each box gives its initial state when it is executed and a new value in each event, and the applicative combines the
+latest value of each box (nothing reads the other terms again). A click in one box gives `["Red","Green"]`. Three things in
+`GHCJS.HPlay.View` were needed:
+* `setCheckBox` returns its initial state when its element is not in the page yet (before it returned nothing);
+* `Functor Widget` is the `fmap` of `TransIO`: the previous one applied the function only to the result of the first evaluation and
+  not to the one of an event, so the next step of `<*>` applied a value that was not a function (`internal error: stg_ap_p_ret`);
+* `getCheckBoxes` gives no value until the first event (it looks for `ExecEvent`, left by `raiseEvent`), as the whole group did in the
+  2020 version, where the boxes returned nothing before an event. A `render` that gives a value leaves `IdLine` pointing to its
+  hole, and the next alternative of a `<|>` (`select`, the link) would be rendered inside it and deleted by the click.
+
+`all` is the whole page of `widgets.hs`, as it is (`<|>` of `TransIO`, without `alternative`): a click in a checkbox does not delete the select
+nor the link.
 
 The alternatives of `Widget` (`instance Alternative Widget` in `GHCJS.HPlay.View`): `a <|> b = Widget $ alternative (norender a) <|> alternative (norender b)`.
-`alternative x` starts `x` from the `IdLine` (the place of the page) where the `<|>` began and leaves it as it was when it ends. `<|>` of
-`TransIO` runs the next alternative with the state that the previous one left, and a `render` that gives a value leaves `IdLine` pointing to
-its hole (`id2`): the next alternative would be rendered inside it and an event in the first one would clear it.
-
-Not covered: the checkboxes inside the whole page of `widgets.hs`. There `buttons = ... inputPerson <|> radio <|> checkButton <|> select`
-are alternatives of `TransIO` (each one is a sequence of `render`), not of `Widget`, so `Alternative Widget` does not reach them: since `checkButton`
-gives a value in its first execution, `select` and the link are rendered inside its hole and a click in a checkbox deletes them. With
-`alternative` in each alternative (`alternative inputPerson <|> alternative radio <|> ...`) that page passes (tried in a copy of
-`widgets.hs`), but `widgets.hs` was not changed.
+`alternative x` starts `x` from the `IdLine` where the `<|>` began and leaves it as it was when it ends. It is also exported to be used
+in the `<|>` of `TransIO` whose alternatives give a value and then end with `empty`.
