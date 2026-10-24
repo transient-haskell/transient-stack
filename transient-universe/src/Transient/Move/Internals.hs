@@ -2959,7 +2959,7 @@ onServer x = do
 atBrowser :: Loggable a => Cloud a -> Cloud a
 atBrowser x = do
   r <- local $ return isBrowserInstance
-  if r then x else atRemote x
+  if r then x else atRemote' True x
 
 -- | If the computation is running in the browser, translates i to the server and return back.
 -- If it is already in the server, just execute it
@@ -2967,7 +2967,7 @@ atServer :: Loggable a => Cloud a -> Cloud a
 atServer x = do
   r <- local $ return isBrowserInstance
   tr ("AT SERVER", r)
-  if not r then x else atRemote x
+  if not r then x else atRemote' True x
 
 ------------------- timeouts -----------------------
 -- delete connections.
