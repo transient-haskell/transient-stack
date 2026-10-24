@@ -52,6 +52,7 @@ import Data.TCache.IndexQuery
 
 import System.Time
 import System.IO
+import System.Directory (doesFileExist)
 import Data.ByteString.Builder
 
 import GHC.Generics
@@ -1834,6 +1835,12 @@ listenNew port conn' = do
 
   -- wait for connections. One thread per connection
   liftIO $ do putStr "Connected to port: "; print port
+  -- if the program has a browser side (compiled to wasm, in ./static, see servePage) the URL to run it is offered
+  liftIO $ do
+    hasWasm <- doesFileExist "./static/app.wasm"
+    when hasWasm $ do
+      Node host _ _ _ <- readIORef (myNode conn')
+      putStrLn $ "The browser side of this program is available. Open it with a browser: http://" ++ host ++ ":" ++ port ++ "/"
 
   -- onException $ \(e :: SomeException) -> empty -- do get >>= liftIO . killBranch; empty
 
