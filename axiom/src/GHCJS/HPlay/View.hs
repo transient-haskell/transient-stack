@@ -310,7 +310,6 @@ setEventContW  x f id = modify $ \TranShip {mfSequence = seq, fcomp = fs, .. }
          runWidgetId ( f x) id
 
       strip seq x=  Transient $ do
-        alert "strip"
         -- seq' <- gets mfSequence
         -- modify $ \ s -> s{mfSequence = seq}
         
@@ -655,7 +654,6 @@ genNewId=  do
       -- r <- liftIO $ atomicModifyIORef rprefix (\n -> (n+1,n))
       n <- genId
       liftIO $ modifyIORef' highId (max n)
-      alert ("nid",n)
       let nid= toJSString $  ('n':show n) -- ++ ('p':show r)
       nid `seq` return  nid
 
@@ -842,7 +840,6 @@ getParamS look type1 mvalue= do
     tolook <- case look of
        Nothing  -> genNewId -- getData `onNothing` error "no event id" -- genNewId
        Just n -> return n
-    alert tolook
     let nvalue x =  case x of
           Nothing -> mempty
           Just v  ->
