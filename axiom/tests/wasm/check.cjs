@@ -95,6 +95,29 @@ const steps = {
     await texts(page, "Nodes connected", "localhost");
     if ((await page.locator("table tr").count()) < 1) throw new Error("no nodes in the table");
   },
+  // the name has a default value: only the message changes; the field of the name is on the page
+  chat1b: async page => {
+    await page.waitForSelector("input[size='60']", { timeout: 30000 });
+    if ((await page.locator("input[size='10']").count()) !== 1) throw new Error("the field of the name is not on the page");
+    await page.fill("input[size='60']", "hello chat");
+    await page.dispatchEvent("input[size='60']", "change");
+    await texts(page, "anonymous> hello chat");
+  },
+  // the name is edited (its change event) and then the message changes
+  chat1e: async page => {
+    await page.waitForSelector("input[size='60']", { timeout: 30000 });
+    await page.fill("input[size='10']", "Ana");
+    await page.dispatchEvent("input[size='10']", "change");
+    await page.fill("input[size='60']", "hello chat");
+    await page.dispatchEvent("input[size='60']", "change");
+    await texts(page, "Ana> hello chat");
+  },
+  chat2: async page => {
+    await page.waitForSelector("input[size='60']", { timeout: 30000 });
+    await page.fill("input[size='60']", "hello chat");
+    await page.dispatchEvent("input[size='60']", "change");
+    await texts(page, "anonymous> hello chat");
+  },
   all: async page => {
     await page.waitForSelector("a", { timeout: 60000 });
     await page.locator("input[type=checkbox]").nth(0).click();

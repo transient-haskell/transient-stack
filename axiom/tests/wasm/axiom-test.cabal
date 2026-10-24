@@ -145,3 +145,25 @@ executable area2-test
   if arch(wasm32)
     cpp-options: -DBROWSER
     build-depends: ghc-experimental
+executable chat1-test
+  main-is: Chat1.hs
+  hs-source-dirs: ., ../../src
+  other-modules: GHCJS.HPlay.View
+                 GHCJS.HPlay.Cell
+  build-depends: base, transformers, containers, mtl, bytestring, directory, transient, transient-universe, ghcjs-perch
+  default-language: Haskell2010
+  ghc-options: -no-hs-main -optl-mexec-model=reactor
+  if arch(wasm32)
+    cpp-options: -DBROWSER
+    build-depends: ghc-experimental
+executable chat2-test
+  main-is: Chat2.hs
+  hs-source-dirs: ., ../../src
+  other-modules: GHCJS.HPlay.View
+                 GHCJS.HPlay.Cell
+  build-depends: base, transformers, containers, mtl, bytestring, directory, transient, transient-universe, ghcjs-perch
+  default-language: Haskell2010
+  ghc-options: -no-hs-main -optl-mexec-model=reactor
+  if arch(wasm32)
+    cpp-options: -DBROWSER
+    build-depends: ghc-experimental

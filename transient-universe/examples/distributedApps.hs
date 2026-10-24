@@ -135,7 +135,8 @@ chat = do
   sendMessages  chatMessages = do
 --      node <- atRemote $ local getMyNode
       let entry= boxCell (fs "msg") ! atr "size"  (fs "60")
-      (nick,text) <- local . render $  (,) <$> getString (Just "anonymous") ! size (fs "10")
+      -- the name has a default value (<|> return): a term that has not had its event is as if it did not exist for the applicative
+      (nick,text) <- local . render $  (,) <$> ((getString (Just "anonymous") ! size (fs "10")) `fire` OnChange <|> return "anonymous")
                                            <*> mk entry Nothing  `fire` OnChange
                                            <** inputSubmit "send"
                                            <++ br
