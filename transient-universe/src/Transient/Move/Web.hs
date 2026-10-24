@@ -170,7 +170,6 @@ instance Semigroup HTTPReq where
 -- one if absent.  Returns the (possibly updated) session ID and 'PrevClos' DBRef.
 initSession :: BC.ByteString -> TransIO ()
 initSession idSession = when (idSession == "0") $ do
-  ttr "INITSESSION"
   session <-  getSessionFromCookieAndLog 
   setSession session
  <|> return()
@@ -194,7 +193,6 @@ minput (ident :: String) msg' = onAll $ sandboxData (ofType :: ClosToRespond) $ 
   where
     msg= encode msg'
     response = do
-      ttr ("MINPUT", ident)
       delState (ofType :: ClosToRespond)
       modify $ \s -> s {execMode = if execMode s == Remote then Remote else Parallel}
       local $ do
@@ -203,7 +201,6 @@ minput (ident :: String) msg' = onAll $ sandboxData (ofType :: ClosToRespond) $ 
         let closLocal = hashClosure log
         mynode <- getMyNode
         PrevClos dbprevclos mn _ _ _ :: PrevClos <- getData `onNothing` noExState "minput"
-        ttr ("prevclos",dbprevclos, keyObjDBRef dbprevclos)
         let SessionId idSession = fromMaybe (fst $ getSessClosure dbprevclos) mn
         let urlbase =
               str "http://" <> str (nodeHost mynode) <> str ":" <> intt (nodePort mynode)
@@ -215,7 +212,6 @@ minput (ident :: String) msg' = onAll $ sandboxData (ofType :: ClosToRespond) $ 
                 -- BS.ByteString
 
         params <- toHTTPReq $ type1 response
-        ttr ("params",params)
         let httpreq = mempty {requrl = urlbase} <> params :: HTTPReq
             httpreqsess= mempty {requrl = urlbase  </> "S" <> BS.fromStrict idSession} <> params :: HTTPReq
             -- msgdat must be valid JSON. `msg = encode msg'` already covers all cases:
@@ -235,9 +231,7 @@ minput (ident :: String) msg' = onAll $ sandboxData (ofType :: ClosToRespond) $ 
       cdata <- liftIO $ readIORef $ connData conn
 
       Endpoints endpts <- getEndpoints
-      ttr ("insert endpoint",ident)
       setRState $ Endpoints  $ M.insert (str ident) httpreq endpts
-      ttr ("ADDED ENDPOINT",ident,httpreq, "previous endpoints:", M.keys endpts)
       result <- do -- (idcontext' :: BC.ByteString, result) <- do
         pstring <- giveParseString
         if not (recover log) || BS.null pstring
@@ -256,7 +250,6 @@ minput (ident :: String) msg' = onAll $ sandboxData (ofType :: ClosToRespond) $ 
 
               _ -> do
                 sendCookies conn
-                ttr ("sendIT? visibe, recovrer?",visible, recover log)
                 when (visible && not (recover log)) $ do
                   let tosend = str "{ \"msg\":" <>  msg <> str ", \"req\":" <> encode httpreq <> str "}"
                   let l = fromIntegral $ BS.length tosend
@@ -278,7 +271,6 @@ minput (ident :: String) msg' = onAll $ sandboxData (ofType :: ClosToRespond) $ 
             return r
 
             
-      ttr ("MINPUT RESULT",result)
       delRState InitSendSequence
       delState IsCommand
       return result `asTypeOf` return (type1 response)
@@ -295,7 +287,6 @@ minput (ident :: String) msg' = onAll $ sandboxData (ofType :: ClosToRespond) $ 
         mmfdata <- getSessionData
       
         when (isJust mmfdata) $ do
-          ttr ("mmfdata",mmfdata)
           let mfdata= fromJust mmfdata
 
           -- merge the state of the computation that created the encpoint with the state of the coming computation
@@ -341,7 +332,6 @@ publish visible k i= publishn visible [k] i
 -- | Like 'publish' but registers the endpoint under multiple keys simultaneously.
 publishn :: ShowIt -> [String] -> Cloud a -> Cloud a
 publishn visible keys inp= do
-  ttr ("publish",keys)
   job  -- to force the execution so that the endpoint is in rpublished 
   Cloud $ sandboxData (ofType :: Publishing) $ do
     setState $ Publishing visible keys
@@ -356,7 +346,6 @@ published k=  local $ do
     log <- getLog
     when (not $ recover log) $ do
       inputdatas <- ( liftIO (readIORef rpublished) >>= return . M.lookup k) `onNothing` return []
-      ttr ("PUBLISHED", inputdatas)
       foldr ((<>) . (\(InputData id msg url ) ->  sendOption msg url)) mempty inputdatas
     empty
 
@@ -403,7 +392,6 @@ getURL = do
 -- | menu to show info about the endpoints available
 optionEndpoints :: Loggable a => Cloud a
 optionEndpoints = do
-    ttr ("optionEndpoints")
     onAllDeep $ newRState $ Endpoints M.empty
     local $ do
       option ("endpt" :: String) "info about a endpoint"
@@ -411,7 +399,6 @@ optionEndpoints = do
 
       liftIO $ do putStr "endpoints available: "; print $ M.keys endpts
       ident:: BS.ByteString <- input' "" (const True) "enter the endpoint for which you want to know the interface"
-      ttr ("endpt ident",ident)
       let murl = M.lookup ident  endpts
       case murl of
         Nothing ->  liftIO $ do putStr  "No such endpoint: " ; print ident
@@ -426,7 +413,6 @@ optionEndpoints = do
 sendCookies :: Connection -> TransIO ()
 sendCookies conn= do
       cookies <- getCookiesStr
-      ttr ("COOKIES",cookies)
       when (not $ BS.null cookies) $ msend conn cookies
   where
   getCookies= tryState <|> return (Cookies [])
@@ -468,7 +454,6 @@ timeoutOk now created = diffUTCTime now created < 3600  -- 1h timeout
 setSessionData ::  PolyMap -> TransIO ()
 setSessionData val = do
   SessionId sessionId <- (tryState >>= return . fst . getSessClosure . prevDBRef) <|> return  sessionId0
-  ttr ("setSessionData",sessionId)
   liftIO $ do
     now <- getCurrentTime
     sp <- newStablePtr $ M.delete (typeOf (ofType :: HTTPHeaders)) val
@@ -479,7 +464,6 @@ setSessionData val = do
               freeStablePtr sp'
               return $ M.delete sessionId v
              Nothing -> return v
-      ttr ("sessionId",sessionId)
       return $ M.insert sessionId (Entry sp now)  v'
 
 
@@ -494,10 +478,8 @@ getSessionData = do
   case midxStr of
     Nothing -> return Nothing
     Just key -> liftIO $  modifyMVar storeSessionData $ \v -> do
-        ttr ("LENGHT V",M.size v,"KEY",key,M.keys v)
         case M.lookup key v of
           Just (Entry sp _) -> do
-            ttr ("sp for",key)
             val <- deRefStablePtr sp
             freeStablePtr sp
             return (M.delete key  v, Just val)
@@ -569,9 +551,7 @@ moutput = local . output
 sendFragment :: BS.ByteString -> TransIO ()
 sendFragment tosend = do
   conn <- tryState
-  ttr ("sendFragment conn", idConn conn, "remoteNode", unsafePerformIO $ readIORef $ remoteNode conn)
   let l = fromIntegral $ BS.length tosend
-  ttr ("TOSEND",tosend,l)
   conn' <- ensureWebConn conn
   msend conn' $ toHex l <> "\r\n" <> tosend <> "\r\n"
 
@@ -584,7 +564,6 @@ class  Typeable a => ToHTTPReq a where
   toHTTPReq :: a -> TransIO HTTPReq
   toHTTPReq x= do
       v <- varunique $ lowertype x
-      ttr ("varunique",v)
       return $ mempty{requrl= "/" <> v}
 
 lowertype x = "$" <> BS.pack (map toLower (typeOfR x))

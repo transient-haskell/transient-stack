@@ -427,7 +427,6 @@ rconsumed = unsafePerformIO $ newIORef Nothing
 -- | execute a set of console commands separated by '/', ':' or space that are consumed by the console input primitives
 processLine line' = liftIO $ do
   let line= subst line'
-  ttr ("processline",line)
 
   mbs <- consoleCallbacks
   process  mbs (if null line then " " else line)
@@ -688,7 +687,6 @@ readFromFile= do
               file <- input (const True ) "file: "
               ls <- liftIO $ readFile file
               let l= concatMap homogenize $ words ls
-              ttr ("LINE",ls,l)
               processLine l
               empty
 
@@ -768,7 +766,6 @@ execCommandLine = do
       path <- thereIsArgPath
       when(not$ null path) $ do
         putStr "Executing: " >> print  path
-        ttr ("path",path)
         threadDelay 10000
         processLine    path
 
@@ -791,11 +788,9 @@ whyNot= unsafePerformIO
 
 thereIsArgPath=  do
   args <- getArgs
-  ttr ("args",args)
 
 
   let r = concatMap homogenize args
-  ttr ("argpath",r)
   return r
 
 homogenize "-p" = ""
@@ -825,6 +820,5 @@ inputParse parse message = r
       -- liftIO $ putStrLn str
       liftIO $ print str
       (r, rest) <- withParseString (BSL.pack str) $ (,) <$> parse <*> giveParseString
-      ttr ("REST",rest)
       liftIO $ do writeIORef rconsumed $ Just  $ BSL.unpack rest
       return r

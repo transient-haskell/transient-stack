@@ -686,8 +686,6 @@ getIndexData :: (MonadState TranShip m, Typeable k, Typeable a, Ord k) =>
      k -> m (Maybe a)
 getIndexData n= do
   clsmap <- getData `onNothing` return M.empty
-  ttr ("getIndexData",typeOf clsmap)
-  ttr ("len indexdata", M.size clsmap)
   return $ M.lookup n clsmap
 
 -- | Look up a value at key @k@ in the mutable indexed map stored via 'setIndexRData'.
@@ -753,7 +751,6 @@ newtype Ref a = Ref (IORef  (Maybe a))
 -- It return the associated IORef, so it can be updated in the IO monad
 newRState:: (MonadIO m,TransMonad m, Typeable a) => a -> m (IORef (Maybe a))
 newRState x= do
-    ttr ("CREATING REF",typeOf x)
     ref@(Ref rx) <- Ref <$> liftIO (newIORef $ Just x)
     setData  ref
     return rx
@@ -2181,9 +2178,7 @@ onWaitThreads   mx= do
 
     onBack1 $   \(Finish reason) -> do
                 -- topState >>= showThreads
-                ttr ("onWaitThreads cont",threadId cont)
                 noactive <- liftIO $ noactiveth cont
-                ttr ("noactive",noactive)
                 -- dead <- isDead cont
                 this <- get
                 let isthis = threadId this == threadId cont
@@ -2551,7 +2546,6 @@ delReadEVarPoint (EVar ref) id =liftIO $ do
 writeEVar :: MonadIO m => EVar a -> a -> m ()
 writeEVar (EVar ref) x = do
        conts <- liftIO $ readIORef ref
-       ttr ("WRITE EVAR subscriptions",map fst conts)
        -- freThreads to detach the forked thread from the calling context tree. 
        -- it will be atached to the called context. Glory to God
       --  freeThreads $ fork $  <-- the threads should'nt be free and run in the same thread to allow synchronous execution if wanted

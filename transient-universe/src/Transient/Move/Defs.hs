@@ -513,7 +513,6 @@ newtype Cookies= Cookies  [(BL.ByteString,BL.ByteString)]
 -- See https://developer.mozilla.org/es/docs/Web/HTTP/Headers/Set-Cookie for cookie options
 setCookie :: BL.ByteString -> BL.ByteString -> TransIO ()
 setCookie name valueandparams= do
-  ttr "setCookie"
   Cookies cs <- getCookies
   setState $ Cookies $ (name,valueandparams):cs
   where

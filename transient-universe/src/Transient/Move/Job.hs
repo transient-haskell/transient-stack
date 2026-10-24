@@ -106,12 +106,10 @@ jobWith scoped mname  =  local  $ sandboxData (ofType:: PrevClos) $ do
   mprev :: Maybe Job <- getData
   when (isJust mprev) $ jobRemove $ fromJust mprev
 
-  ttr "save"
   liftIO $ writeIORef save True
   -- p@(PrevClos thisclos ms _ isapp isCollect) :: PrevClos <- getData `onNothing` error "no job state 2"
 
   endpoint (fmap BC.pack mname) <|> return ()  
-  ttr ("AFTER ENDPOINT job",mname)
   PrevClos thisclos ms _ isapp isCollect :: PrevClos <- getData `onNothing` error "no job state 2"
 
   -- -- false to force the log Not to reconstruct the computation with this endpoint after replaying
@@ -125,18 +123,15 @@ jobWith scoped mname  =  local  $ sandboxData (ofType:: PrevClos) $ do
 
   setData  this
   onException $ \(e :: SomeException) -> do
-    ttr ("job exception", e,"adding this to the list of tasks to retry")
      -- distinguish connection errors to reschedule jobs when nodes recover   
     case fromException e of
       Just (ConnectionError _ node) -> liftIO $ atomically $ writeDBRef (getDBRef $ keyResource this)  this{jobNode=node, jobError= Just $ show e}
       Nothing ->                       liftIO $ atomically $ writeDBRef (getDBRef $ keyResource this)  this{jobError= Just $ show e}
-  ttr "END JOB"
   return()
 
 -- | Remove a job from TCache and clear it from the current state.
 jobRemove :: Job -> TransIO ()
 jobRemove job= do
-      ttr ("jobRemove", job)
       liftIO $ atomically $ delDBRef  (getDBRef $ keyResource job :: DBRef Job)
       delState job
 
@@ -160,7 +155,6 @@ runJobs= forkCloud $ do
     node <- for nodes
     onException  $ \(SomeException e) -> do lockOut $ putStrLn $ "no jobs to send to node: " <> show node;  empty -- if the index o jobs does not exist, do nothing
     dbrjobs <- liftIO $ atomically $  jobNode .==. node :: TransIO [DBRef Job] 
-    ttr dbrjobs
     rjob <- for dbrjobs
     liftIO $ atomically $ delDBRef  rjob
     lockOut $ putStrLn "jobs removed"
@@ -197,7 +191,6 @@ runJobs= forkCloud $ do
   launchJobsForNode :: Node -> TransIO ()
   launchJobsForNode node= do
     dbrjobs <- liftIO $ atomically $  jobNode .==. node :: TransIO [DBRef Job]
-    ttr ("runJobs(commJobs): jobs found",  dbrjobs, node)
     j <- for $ reverse dbrjobs
     job@(Job dbr _ _ _) <- (liftIO $  atomically $ readDBRef j) `onNothing` error ("runJobs(commJobs): job not found " ++ show j)
 
@@ -207,7 +200,6 @@ runJobs= forkCloud $ do
     -- conn :: Connection <- getData `onNothing` error "runJobs(commJobs): conn not found"
     map <- gets mfData
     setState job
-    ttr ("JOB LOG",logs,"send to closure",localClos clos',isJust $ localEvar clos',isJust $ localCont clos',TC.key clos',dbr)
 
     noTrans $ sendToClosure logs s closureId0 map False clos' False
     empty
@@ -265,7 +257,6 @@ collectc n delta action= Cloud $ sandboxDataCond preserveCollectFlag $ unCloud $
 
   t <- onAll $ fromIntegral <$> getMicroSeconds
   let timeleft= let t'= tfin - t in max t' 0
-  ttr ("TIMELEFT",timeleft)
   initState <- gets withLog
   states <- onAll $ liftIO $ newIORef M.empty
   onAll $ newRState $ CollectJobs []
@@ -300,7 +291,6 @@ collectc n delta action= Cloud $ sandboxDataCond preserveCollectFlag $ unCloud $
 
   -- remove all the jobs inside  collectc
   CollectJobs js <- onAll $ getRState <|> return (CollectJobs []) 
-  ttr ("JOBS TO DELETE",js)
   onAll $ mapM_ jobRemove js
 
   return r
