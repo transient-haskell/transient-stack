@@ -1,3 +1,6 @@
+#!/usr/bin/env ../tests/execthirdline.sh
+-- compiles the server with ghc and the browser side with wasm, and runs the node. Open http://localhost:8000/ with a browser. usage: ./distributedApps.hs -p start/localhost/8000
+-- $(dirname $0)/wasm/runapp.sh
 {-# LANGUAGE   CPP, NoMonomorphismRestriction, DeriveDataTypeable, JavaScriptFFI  #-}
 
 module Main where

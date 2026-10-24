@@ -18,3 +18,12 @@ connects back to the node through the websocket, asks for the string and gets it
 
 Chromium for playwright is not installed by the toolchain: `playwright install chromium` (it goes to `/root/pw-browsers`) and the system
 libraries `libnss3 libnspr4 libgbm1 libasound2`.
+
+## An example from its source: `runapp.sh`
+
+`runapp.sh <source.hs> [node arguments]` compiles the server with GHC and the browser side with the wasm backend from the same source,
+prepares `static/` and runs the node; open `http://localhost:<port>/` with a browser. The work directory is `./.runapp-<name>`.
+The source exports the entry point of the wasm (`foreign export javascript "hs_start"`, inside `#if defined(wasm32_HOST_ARCH)`).
+Run from the source like the other examples (`execthirdline.sh` runs the command of the third line of the file):
+
+    cd examples && ./distributedApps.hs -p start/localhost/8000
