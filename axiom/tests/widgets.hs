@@ -1,4 +1,7 @@
-#!/usr/bin/env execthirdlinedocker.sh
+#!/usr/bin/env ../../transient-universe/tests/execthirdline.sh
+-- compiles the server with ghc and the browser side with wasm, and runs the node. Open http://localhost:8000/ with a browser. usage: ./widgets.hs -p start/localhost/8000
+-- $(dirname $0)/wasm/runapp.sh
+-- the previous way, with ghcjs:
 --  info: use sed -i 's/\r//g' file if report "/usr/bin/env: ‘execthirdlinedocker.sh\r’: No such file or directory"
 -- LIB="/projects/transient-stack" && mkdir -p static && ghcjs   --make   -i${LIB}/transient/src -i${LIB}/transient-universe/src  -i${LIB}/axiom/src   $1 -o static/out && runghc  -w -i${LIB}/transient/src -i${LIB}/transient-universe/src -i${LIB}/axiom/src   $1  $2 $3
 
