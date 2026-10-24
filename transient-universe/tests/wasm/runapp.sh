@@ -24,6 +24,8 @@ if [ -z "$IN_NIX_SHELL" ]; then
 fi
 NAME=$(basename $SRC .hs); SRCDIR=$(dirname $SRC)
 W=${WORK:-$PWD/.runapp-$NAME}; mkdir -p $W/srv/static/shim $W/app
+# two runs in the same work directory would break each other's compilation
+exec 9>$W/lock; flock -n 9 || { echo "another runapp is running in $W: wait for it or stop it"; exit 1; }
 ARGS=("$@"); [ ${#ARGS[@]} -eq 0 ] && ARGS=(-p start/localhost/8000)
 
 # --- the server, with GHC
@@ -34,7 +36,7 @@ echo "== server (ghc)"
    -outputdir $W/build-srv -o $W/node $SRC > $W/srv-build.log 2>&1) || { echo "FAIL (server, $W/srv-build.log)"; exit 1; }
 
 # --- the browser side, with the wasm backend
-echo "== browser (wasm)"
+echo "== browser (wasm)   (the first time, or after a change of the libraries, it takes several minutes)"
 MODS=""; grep -q "import.*GHCJS.HPlay.View" $SRC && MODS="GHCJS.HPlay.View"; grep -q "import.*GHCJS.HPlay.Cell" $SRC && MODS="$MODS, GHCJS.HPlay.Cell"
 OTHER=""; [ -n "$MODS" ] && OTHER="other-modules: ${MODS#, }"
 cat > $W/app/app.cabal <<EOC
