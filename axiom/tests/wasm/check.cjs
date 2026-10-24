@@ -81,6 +81,20 @@ const steps = {
   },
   // shows the page after the click on the first link (to see the html: HTML=1)
   show2: async page => { await page.click("text=link-one", { timeout: 25000 }); await page.waitForSelector("textarea", { timeout: 30000 }); await page.waitForTimeout(1500); throw new Error("show"); },
+  // the chat of distributedApps: the message goes to the server, which sends it to the chatbox of the page
+  chat: async page => {
+    await page.click("a:has-text('chat')", { timeout: 25000 });
+    await page.waitForSelector("input[size='60']", { timeout: 30000 });
+    await page.fill("input[size='60']", "hello chat");
+    await page.dispatchEvent("input[size='60']", "change");     // the change of the box sends the message
+    await texts(page, "anonymous@localhost:", "hello chat");
+  },
+  // the monitor of nodes of distributedApps: the table of the nodes of the server
+  monitor: async page => {
+    await page.click("a:has-text('monitor nodes')", { timeout: 25000 });
+    await texts(page, "Nodes connected", "localhost");
+    if ((await page.locator("table tr").count()) < 1) throw new Error("no nodes in the table");
+  },
   all: async page => {
     await page.waitForSelector("a", { timeout: 60000 });
     await page.locator("input[type=checkbox]").nth(0).click();

@@ -94,7 +94,7 @@ mapReduce= onBrowser $ do
             <**  inputSubmit "send"  `fire` OnClick
             <++  br
 
-    r <- atRemote' True $ do
+    r <- atServer $ do
            localIO $ print content
            r<- reduce  (+) . mapKeyB (\w -> (w, 1 :: Int))  $ distribute $ V.fromList $ words content
            localIO $ putStr "result:" >> print r
@@ -138,7 +138,7 @@ chat = do
                                            <++ br
       local $ entry .= ""
 
-      atRemote $ do
+      atServer $ do
           node <- local getMyNode
 
           clustered $ local $ putMailbox' chatMessages (showPrompt nick node ++ text )  >> empty :: Cloud ()
@@ -152,7 +152,7 @@ chat = do
   -- waitMessages :: Text -> Cloud ()
   waitMessages chatMessages =   do
 
-      resp <- atRemote . local $ single $   getMailbox' chatMessages
+      resp <- atServer . local $ single $   getMailbox' chatMessages
                                                            -- wait in the server for messages
 
       local . render . at (fs "#chatbox") Append $ rawHtml $ do
@@ -176,7 +176,7 @@ monitorNodes= do
          h1 "Nodes connected"
          div ! atr (fs "id") (fs "nodes") $ noHtml
 
-    nodes <- atRemote . local $ single $  sample getNodes 1000000
+    nodes <- atServer . local $ single $  sample getNodes 1000000
 
     local . render . at (fs "#nodes") Insert . rawHtml $
            table $ mconcat[Perch.tr $ td h >> td p >> td s | Node h p _ s  <- nodes]
