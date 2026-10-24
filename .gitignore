@@ -67,3 +67,7 @@ tramp
 *.key
 _darcs
 darcs*
+
+# work directories of runapp.sh and of the browser tests
+.runapp-*/
+run-browser/

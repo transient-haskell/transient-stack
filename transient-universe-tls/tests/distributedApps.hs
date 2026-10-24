@@ -44,7 +44,7 @@ import Data.Typeable
 import Data.Monoid
 
 import qualified Data.ByteString.Lazy.Char8 as BS
-import Transient.Logged
+import Transient.Move.Logged
 
 
 import Transient.Internals
@@ -113,9 +113,9 @@ mapReduce= onBrowser $ do
     let entry= boxCell msg ! size  (fs "60")
 
     r <- atRemote $ do
-           lliftIO $ print content
+           localIO $ print content
            r<- reduce  (+) . mapKeyB (\w -> (w, 1 :: Int))  $ distribute $ V.fromList $ words content
-           lliftIO $ putStr "result:" >> print r
+           localIO $ putStr "result:" >> print r
            return   (r :: M.Map String Int)
 
 
@@ -193,5 +193,5 @@ monitorNodes= onBrowser $ do
     nodes <- atRemote . local  . single $  sample getNodes 1000000
 
     local . render . at (fs "#nodes") Insert . rawHtml $
-           table $ mconcat[tr $ td h >> td p >> td s | Node h p _ s  <- nodes]
+           table $ mconcat[Perch.tr $ td h >> td p >> td s | Node h p _ s  <- nodes]
     empty

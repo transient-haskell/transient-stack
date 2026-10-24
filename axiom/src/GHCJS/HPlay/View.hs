@@ -254,9 +254,9 @@ withElem id f= do
 
 type ElemID= JSString
 -- | An alternative of @\<|>@ (in 'TransIO') that renders. @\<|>@ runs the next alternative with the state that the previous one
--- left, and the renders of a sequence leave 'IdLine' pointing to their hole: without 'alternative' the next alternative would be
--- rendered inside the hole of the previous one, and the event of a widget of the previous one would clear it. With it, each
--- alternative starts from the place of the page where the @\<|>@ began, and when it ends leaves that place as it was.
+-- left, and the renders of a sequence leave 'IdLine' pointing to their hole: without 'alternative' the next alternative would be rendered
+-- inside the hole of the previous one, and the event of a widget of the previous one would clear it. With it, each alternative starts
+-- from the place of the page where the @\<|>@ began, and when it ends leaves that place as it was.
 --
 -- > main = keep $ initNode $ onBrowser $ local $ alternative inputPerson <|> alternative radio <|> alternative checkButton <|> alternative select
 alternative :: TransIO a -> TransIO a
@@ -458,16 +458,6 @@ mappendw x y=  (<>) <$> x  <*> y
 
 instance AdditionalOperators Widget where
 
-    -- Widget (Transient x) <** Widget (Transient y)= Widget . Transient $ do
-    --             getData `onNothing` do 
-    --               cont <- get
-    --               let al= Alternative cont
-    --               setData $ Alternative cont
-    --               return al
-                 
-    --             mx <- x
-    --             y
-    --             return mx
     (<**) x y= Widget $  norender x <** norender y
 
     (<***) x y= Widget $  norender x <*** norender y
