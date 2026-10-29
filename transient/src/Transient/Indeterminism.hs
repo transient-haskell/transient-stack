@@ -65,7 +65,9 @@ collect n = collect' n 0
 burst :: Int -> TransIO a -> TransIO (StreamData a)
 burst timeout comp= do
      r <- oneThread comp
-     return (SMore r) <|> (async (threadDelay timeout) >> return SDone)
+     -- `<->` and not `<|>`: the second alternative has to run even though the first gives a result. The next result
+     -- terminates it (`oneThread`), so it only fires when no result arrives within the timeout
+     return (SMore r) <-> (async (threadDelay timeout) >> return SDone)
 
 -- | Collect the results of a task set, grouping all results received within
 -- every time interval specified by the first parameter as `diffUTCTime`. 

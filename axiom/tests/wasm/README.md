@@ -36,9 +36,10 @@ runs one; `browser-all.sh` runs them all. All pass (2026-10-21), including the f
 `widgets` is `axiom/tests/widgets.hs` itself, compiled to wasm (`widgets-test` in `axiom-test.cabal`): Chromium writes the name and the
 age, clicks `send` and the page shows `Person {name = "Ana", age = 30}`. For wasm the file got three changes: `jstr` uses `Perch.JS (pack)`
 when `wasm32_HOST_ARCH` (there is no `Data.JSString`), `JavaScriptFFI`, and `hs_start`, the entry point of the reactor
-(`foreign export javascript`, it wraps `main`, which returns `IO (Either String ())`). The node that serves it is `Hello`: the server
-branch of `GHCJS.HPlay.View` (the one that is not for the browser) does not compile any more (`pack` is not in scope), so
-`widgets.hs` cannot be compiled for the server yet.
+(`foreign export javascript`, it wraps `main`, which returns `IO (Either String ())`). `GHCJS.HPlay.View` also compiles with GHC (the
+server branch, without `BROWSER`), and so does `widgets.hs` as the node that serves it (checked 2026-10-29 with
+`ghc --make -iaxiom/src -iperch/src axiom/tests/widgets.hs`; `transient-universe/tests/wasm/runapp.sh` does the same). `browser.sh` still
+uses `Hello` as the node.
 
 `widgetsmore` (same program as `widgets`): the link, the radio buttons and the select of `widgets.hs` in the same page. An event in one
 of them does not touch the others. Three things were needed in `GHCJS.HPlay.View` for several widgets with events to live together:

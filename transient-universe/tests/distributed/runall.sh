@@ -57,7 +57,7 @@ expect "multiuser: restart, invoked without session"      'GUESS alice \(7,7\).*
 expect "multiuser: restart, invoked by the same session"  'GUESS alice \(7,7\).*result msg: 1.*errors: 0' ./mur.sh mua 9440 multiuser alice
 expect "multiuser: restart, invoked by another session"   'GUESS alice \(7,7\).*result msg: 1.*errors: 0' ./mur.sh mub 9450 multiuser bob
 expect "minput: two sessions invoke the endpoint of a third"  'GUESS alice \(7,3\);;GUESS alice \(7,7\);;errors: 0' ./mu2.sh mu 9430 multiuser
-expect "collectc: restart"                               'inputs=2 resultsEndpoint=1;;MINPUT RESULT' ./runcol.sh col collecttest 9960
+expect "collectc: restart"                               'collected: \["[ab]","[ab]"\] results: 1 called: 1' ./runcol.sh col collecttest 9960
 
 # --- jobs and calls to other nodes (AppJob). The summary line says: the result and the number of BACK arrived
 job() { AJ_SLOW=$1 ./runajob.sh "$2" "$3" "$4" ajob "$5"; }

@@ -274,50 +274,85 @@ instance Alternative Widget where
 
   
 
+-- | The bind of 'Widget' in the style of "Transient.CEngine": the continuation @k@ is the one of the continuation monad.
+--
+-- The value of @x@ has two ways to arrive. If it is given now, the page is rendered inline: @f a@ is run and its rendering goes
+-- inside the hole @id1@ (a @span@). If it comes later, from an event of @x@ (a click, a field...), the rendering of @f a@
+-- replaces the content of the hole @id1@ ('rend') and the rest of the program goes on with @k@. 'runWith' sets that
+-- continuation for the events of @x@. The previous bind pushed it on the @fcomp@ stack and popped it ('setEventContW').
 instance Monad Widget where
   return x=  Widget $ return x
-  x >>= f = Widget $ Transient $ do
+  x >>= f = Widget $ TransC $ \k -> do
        id1 <- genNewId
-       setEventContW x  f id1
        -- the rendering of the previous alternatives (<|>) is kept
        rest <- getData `onNothing` return noHtml
        delData noHtml
-       mk <- runView x
+       mk <- runWith (\a -> runContT (rend f id1 a) k) (norender x)
        form1 <- getData `onNothing` return noHtml
-       resetEventCont
        case mk of
-         Just k  -> do
+         Just a  -> do
             delData noHtml
-            mk <- runView $ f k
+            mk2 <- runWith k (norender (f a))
             form2 <- getData `onNothing` return noHtml
             setData $ rest <> form1 <> (span ! id id1 $ form2)
-            return mk
+            maybe (return Nothing) k mk2
          Nothing -> do
             setData  $ rest <> form1 <> (span ! id id1 $ noHtml)
             return Nothing
 
+-- | The continuation of an event of the left side of a bind: it renders @f x@ again inside the hole @id@
+rend :: (a -> Widget b) -> JSString -> a -> TransIO b
+rend f id x= do
+   tr "rend"
+   continueIds
+   runWidgetId ( f x) id
+
+-- The previous bind. It manipulates the stack @fcomp@ of "Transient.LEngine", which "Transient.CEngine" does not have:
+--
+-- instance Monad Widget where
+--   return x=  Widget $ return x
+--   x >>= f = Widget $ Transient $ do
+--        id1 <- genNewId
+--        setEventContW x  f id1
+--        -- the rendering of the previous alternatives (<|>) is kept
+--        rest <- getData `onNothing` return noHtml
+--        delData noHtml
+--        mk <- runView x
+--        form1 <- getData `onNothing` return noHtml
+--        resetEventCont
+--        case mk of
+--          Just k  -> do
+--             delData noHtml
+--             mk <- runView $ f k
+--             form2 <- getData `onNothing` return noHtml
+--             setData $ rest <> form1 <> (span ! id id1 $ form2)
+--             return mk
+--          Nothing -> do
+--             setData  $ rest <> form1 <> (span ! id id1 $ noHtml)
+--             return Nothing
 
 
-setEventContW :: Widget a -> (a -> Widget b) -> JSString -> StateIO ()
-setEventContW  x f id = modify $ \TranShip {mfSequence = seq, fcomp = fs, .. }
-                           -> TranShip {mfSequence = seq
-                                     , fcomp = unsafeCoerce (rend f id) :  fs
-                                     , .. }   !> "setEventContW"
-      where
-      rend f id x= do
-         tr "rend"
-         continueIds
-         runWidgetId ( f x) id
 
-      strip seq x=  Transient $ do
-        -- seq' <- gets mfSequence
-        -- modify $ \ s -> s{mfSequence = seq}
+-- setEventContW :: Widget a -> (a -> Widget b) -> JSString -> StateIO ()
+-- setEventContW  x f id = modify $ \TranShip {mfSequence = seq, fcomp = fs, .. }
+--                            -> TranShip {mfSequence = seq
+--                                      , fcomp = unsafeCoerce (rend f id) :  fs
+--                                      , .. }   !> "setEventContW"
+--       where
+--       rend f id x= do
+--          tr "rend"
+--          continueIds
+--          runWidgetId ( f x) id
+
+--       strip seq x=  Transient $ do
+--         -- seq' <- gets mfSequence
+--         -- modify $ \ s -> s{mfSequence = seq}
         
-        r <- runView x
-        -- modify $ \ s -> s{mfSequence = seq'}
+--         r <- runView x
+--         -- modify $ \ s -> s{mfSequence = seq'}
 
-        delData noHtml
-        return r
+--         delData noHtml
+--         return r
 
 -- instance Monad Widget where
 --   return x=  Widget $ return x

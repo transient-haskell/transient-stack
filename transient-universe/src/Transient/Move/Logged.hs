@@ -181,15 +181,10 @@ transfer ks from to = foldr ins to ks
   where ins k acc = maybe acc (\v -> M.insert k v acc) $ M.lookup k from
 {-# INLINE transfer #-}
 
--- | Consume the first fragment of a log list.  A 'Jump' teleports execution
--- to the referenced closure; 'Fragment' and 'Collect' return the builder
--- directly.
+-- | Consume the first fragment of a log list: a 'Fragment' is replayed as it is and the paths of a 'Collect'
+-- are replayed one after the other, the oldest first.
 firstFragment :: [FragmentType] -> TransIO Builder
 firstFragment logs = if null logs then mempty else case head logs of
-  Jump key   -> do
-    let (s,c) = getSessClosure (getDBRef key)
-    noTrans $ processMessage s c sessionId0 closureId0 (Right $ tail logs) False
-    empty
   Fragment x -> return $ renderLog x
   Collect xs -> for $ map renderLog $ reverse xs
 
@@ -288,7 +283,8 @@ endpoint1  maybeName = do
                     localEvar = Just ev,
                     localMvar = mv,
                     localCont = Just cont,
-                    localCaller = mcaller
+                    localCaller = mcaller,
+                    localSource = Nothing
                   }
 
 
@@ -385,7 +381,8 @@ firstCont =  do
             localEvar = Just ev,
             localMvar = mv,
             localCont = Just cont,
-            localCaller = Nothing
+            localCaller = Nothing,
+            localSource = Nothing
           }
 
   liftIO $ atomically $ writeDBRef dbClos0 this
@@ -640,7 +637,7 @@ processMessage s1@(SessionId ss1) closl s2 closr mlog deleteClosure = do
           -- create a new closure copy of the endpoint referenced but with the new session id
           cl <- (atomically $ readDBRef contref) `onNothing` errClosure conn (SessionId s) closl
 
-          let cl'= cl{localSession=SessionId s'} -- ,localEvar = Just ev} --,prevClos= prevclos} --,localCont=Nothing}
+          let cl'= cl{localSession=SessionId s', localSource= Just (kLocalClos (SessionId s) closl)} -- ,localEvar = Just ev} --,prevClos= prevclos} --,localCont=Nothing}
           atomically $ writeDBRef contref'  cl'
           return $ prevClos cl
         -- send to this new closure
@@ -653,43 +650,55 @@ processMessage s1@(SessionId ss1) closl s2 closr mlog deleteClosure = do
           mcont <- liftIO $ atomically $
               readDBRef (getDBRef (kLocalClos s1 closl) :: DBRef LocalClosure)
 
+          -- a copy made by a jump that is not alive (the node was restarted) while its source is: the session goes on in
+          -- the execution of the source, which holds the state shared with the others (a 'collectc')
+          msource <- case mcont of
+            Just LocalClosure {localCont = Nothing, localSource = Just src} -> liftIO $ do
+              ms <- atomically $ readDBRef (getDBRef src :: DBRef LocalClosure)
+              return $ case ms of
+                Just LocalClosure {localCont = Just _} -> Just $ fst $ getSessClosure (getDBRef src :: DBRef LocalClosure)
+                _ -> Nothing
+            _ -> return Nothing
+
           tr ("mcont", isJust mcont)
-          case mcont of
-            Nothing -> do
-              errClosure conn s1 closl
-              return Nothing
+          case msource of
+            Just (SessionId ssrc) -> processMessage (SessionId $ BSS.concat [BSS.pack "#", ssrc, BSS.pack "-", ss1]) closl s2 closr mlog deleteClosure
+            Nothing -> case mcont of
+                Nothing -> do
+                  errClosure conn s1 closl
+                  return Nothing
 
-            Just LocalClosure {localCont = Nothing} -> do
-              tr "RESTORECLOSuRE"
-              (log', closreg) <- getClosureLog s1 closl
-              tr "AFTER RESTORECLOS"
-              case mlog of
-                Right log -> do
-                  setState $ ClosToRespond $ getDBRef $ kLocalClos s2 closr
+                Just LocalClosure {localCont = Nothing} -> do
+                  tr "RESTORECLOSuRE"
+                  (log', closreg) <- getClosureLog s1 closl
+                  tr "AFTER RESTORECLOS"
+                  case mlog of
+                    Right log -> do
+                      setState $ ClosToRespond $ getDBRef $ kLocalClos s2 closr
 
 
-                  mfdata <- gets mfData
-                  sendToClosure ((log' :: [FragmentType]) <> log) s2 closr mfdata deleteClosure closreg True
-                Left except -> do
-                  tr ("receive:", except)
-                  runTrans $ writeEVar (fromJust $ localEvar closreg) $ Left except
-                  return()
-              return Nothing
+                      mfdata <- gets mfData
+                      sendToClosure ((log' :: [FragmentType]) <> log) s2 closr mfdata deleteClosure closreg True
+                    Left except -> do
+                      tr ("receive:", except)
+                      runTrans $ writeEVar (fromJust $ localEvar closreg) $ Left except
+                      return()
+                  return Nothing
 
-            Just closreg@LocalClosure {localEvar = Just ev, localCont = Just cont} -> do
-              tr "localcont found"
+                Just closreg@LocalClosure {localEvar = Just ev, localCont = Just cont} -> do
+                  tr "localcont found"
 
-              when (synchronous conn) $ liftIO $ void (tryPutMVar (localMvar closreg) ())
-              case mlog of
-                Right log -> do
-                  setState $ ClosToRespond $ getDBRef $ kLocalClos s2 closr
-                  mfdata <- gets mfData
-                  sendToClosure log s2 closr mfdata deleteClosure closreg True
-                Left except -> do
-                  tr ("receive:", except)
-                  runTrans $ writeEVar ev $ Left except
-                  return()
-              return Nothing
+                  when (synchronous conn) $ liftIO $ void (tryPutMVar (localMvar closreg) ())
+                  case mlog of
+                    Right log -> do
+                      setState $ ClosToRespond $ getDBRef $ kLocalClos s2 closr
+                      mfdata <- gets mfData
+                      sendToClosure log s2 closr mfdata deleteClosure closreg True
+                    Left except -> do
+                      tr ("receive:", except)
+                      runTrans $ writeEVar ev $ Left except
+                      return()
+                  return Nothing
 
 errClosure conn s clos = do
   node <- liftIO $ readIORef (remoteNode conn) `onNothing` error "mconnect: no remote node?"

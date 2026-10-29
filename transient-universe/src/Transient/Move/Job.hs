@@ -256,7 +256,8 @@ collectc n delta action= Cloud $ sandboxDataCond preserveCollectFlag $ unCloud $
   let tfin= tinit +  delta
 
   t <- onAll $ fromIntegral <$> getMicroSeconds
-  let timeleft= let t'= tfin - t in max t' 0
+  -- 0 means no limit for collect': a time that has already run out (e.g. across a restart) must not become it
+  let timeleft= if delta == 0 then 0 else max (tfin - t) 1
   initState <- gets withLog
   states <- onAll $ liftIO $ newIORef M.empty
   onAll $ newRState $ CollectJobs []
@@ -286,8 +287,15 @@ collectc n delta action= Cloud $ sandboxDataCond preserveCollectFlag $ unCloud $
 
   s <- onAll $ liftIO $ readIORef states
   let merged= merge initState s
-  modify $ \st -> st{mfData= M.delete (typeOf emptyLog) merged
-                    , mfLog= maybe (mfLog st) unsafeCoerce $ M.lookup (typeOf emptyLog) merged}
+  -- The closure that follows is reached from the one before the collection (the session of the last call stays), with the log
+  -- that has the result of the collection (written when 'local' returned): not from the last branch, whose path is inside
+  -- the collection. Only the fragments that remain to be replayed are joined.
+  let prevClos m= unsafeCoerce <$> M.lookup (typeOf (undefined :: PrevClos)) m :: Maybe PrevClos
+      mergedPrev= case (prevClos initState, prevClos merged) of
+        (Just before, Just lastp) -> M.insert (typeOf lastp) (unsafeCoerce lastp{prevDBRef= prevDBRef before}) merged
+        _ -> merged
+  modify $ \st -> st{mfData= M.delete (typeOf emptyLog) mergedPrev
+                    , mfLog= (mfLog st){restLog= maybe (restLog $ mfLog st) (restLog . unsafeCoerce) $ M.lookup (typeOf emptyLog) merged}}
 
   -- remove all the jobs inside  collectc
   CollectJobs js <- onAll $ getRState <|> return (CollectJobs []) 

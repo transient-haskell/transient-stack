@@ -38,7 +38,7 @@ import           Transient.Console
 import           Transient.Indeterminism
 import           Transient.EVars
 import           Transient.Mailboxes
-import           Transient.Move.Internals
+import           Transient.Move.Internals hiding (atRemote')
 import           Transient.Move.Utils
 import           Transient.MapReduce hiding (Ref)
 import           Transient.Move.Web

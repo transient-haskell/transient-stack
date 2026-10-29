@@ -27,7 +27,12 @@ import Unsafe.Coerce
 import Control.Monad
 import Control.Monad.IO.Class
 import Data.Text(Text)
+import qualified Data.Text as T
 import Data.Text.Encoding as TE
+import Data.Text.Encoding.Error (lenientDecode)
+import Data.Char (ord, chr)
+import Data.List (intersperse)
+import Data.Proxy
 
 {- | Values that can be serialised to\/from the Transient log format.
 
@@ -114,44 +119,126 @@ instance Loggable Int
 instance Loggable Integer
 
 
+-- | Lists are written as a JSON array whose elements are written with their own 'serialize' (the strings, as JSON
+-- strings), so @[Int]@ is @[1,2,3]@ and @[String]@ is @["a","b//c"]@. A @String@ is not a list of characters here:
+-- it is a JSON string (see 'jsonString').
 instance   (Typeable a, Loggable a) => Loggable [a]  where
-    serialize []= byteString "[]"
-    serialize s@(x:xs)
-              | typeOf x== typeOf (ofType :: Char) = serialize $ BS.pack (unsafeCoerce s)
-              | otherwise = byteString "[" <> serializeNoString x <> serialize' xs
-          where
-          serialize' []= byteString "]"
-          serialize' (x:xs)= byteString "," <> serializeNoString x <>  serialize' xs
-
-          serializeNoString x
-            | typeOf x== typeOf (ofType :: String) =
-                        byteString "\""
-                        <> serialize (BS.pack (unsafeCoerce x))
-                        <> byteString "\""
-            | otherwise = serialize x
-
-    deserialize= r
+    serialize xs
+      | isChar    = jsonString $ T.pack (unsafeCoerce xs)
+      | otherwise = byteString "[" <> mconcat (intersperse (byteString ",") (map serialize xs)) <> byteString "]"
       where
-      -- ty :: TransIO [a] -> [a]
-      -- ty = undefined
-      r= if typeOf r /= typeOf (ofType :: TransIO String)
-              then (tChar '[' *> commaSep deserialize <* tChar ']')
-              else
-                  
-                -- do sandbox(tChar ']') ; empty -- return  (unsafeCoerce "")
-                --  <|> 
-                 do
-                  -- either is a string in with " "
-                        sandbox' $ tChar '\"'
-                        -- s <- getParseBuffer
-                        withGetParseString $ \s -> maybe empty return (deserializePure s)
-                 <|> 
-                  (unsafeCoerce . BS.unpack <$> deserialize)
+      isChar = typeRep (Proxy :: Proxy a) == typeRep (Proxy :: Proxy Char)
+
+    deserialize
+      | isChar    = unsafeCoerce . T.unpack <$> (deserialize :: TransIO Text)
+      | otherwise = tChar '[' *> commaSep deserialize <* tChar ']'
+      where
+      isChar = typeRep (Proxy :: Proxy a) == typeRep (Proxy :: Proxy Char)
+
+-- | A text as a JSON string literal (standard escapes, UTF-8) in which every @/@ is doubled, so that it can not be
+-- taken for the separator of the log. The empty text is @""@, not confusable with the text @[]@.
+jsonString :: Text -> Builder
+jsonString t = char7 '"' <> T.foldr (\c b -> esc c <> b) mempty t <> char7 '"'
+  where
+  esc '"'  = byteString "\\\""
+  esc '\\' = byteString "\\\\"
+  esc '/'  = byteString "//"
+  esc '\n' = byteString "\\n"
+  esc '\r' = byteString "\\r"
+  esc '\t' = byteString "\\t"
+  esc '\b' = byteString "\\b"
+  esc '\f' = byteString "\\f"
+  esc c | c < ' '   = byteString "\\u" <> word16HexFixed (fromIntegral (ord c))
+        | otherwise = charUtf8 c
+
+-- | Read a JSON string literal with doubled slashes, or, if the text does not begin with a quote, the old raw format
+-- (the text up to the next single @/@, with @//@ read as @/@). The raw format is read so that texts typed by hand
+-- (console, URLs) and logs written before keep working; it is never written.
+deserializeText :: TransIO Text
+deserializeText = withGetParseString $ \s ->
+    case parseJsonString s of
+      Just r  -> return r
+      Nothing -> let (raw, rest) = undupRaw s in return (TE.decodeUtf8With lenientDecode (BS.toStrict raw), rest)
+
+-- | The raw format: up to the first single @/@, with @//@ read as @/@
+undupRaw :: BS.ByteString -> (BS.ByteString, BS.ByteString)
+undupRaw s =
+    let (a, r) = BS.break (== '/') s
+    in case BS.unpack (BS.take 2 r) of
+         "//" -> let (b, r') = undupRaw (BS.drop 2 r) in (a <> BS.pack "/" <> b, r')
+         _    -> (a, r)
+
+parseJsonString :: BS.ByteString -> Maybe (Text, BS.ByteString)
+parseJsonString s = case BS.uncons s of
+    Just ('"', r) -> go r mempty
+    _             -> Nothing
+  where
+  go r acc = case BS.uncons r of
+    Nothing          -> Nothing
+    Just ('"', rest) -> either (const Nothing) (\t -> Just (t, rest)) (TE.decodeUtf8' (BS.toStrict (toLazyByteString acc)))
+    Just ('/', rest) -> case BS.uncons rest of          -- inside a string every slash is doubled
+                          Just ('/', rest') -> go rest' (acc <> char7 '/')
+                          _                 -> Nothing
+    Just ('\\', rest) -> escape rest acc
+    Just (c, rest)   -> go rest (acc <> word8 (fromIntegral (ord c)))   -- the bytes of a UTF-8 text go through
+
+  escape r acc = case BS.uncons r of
+    Just ('"', rest)  -> go rest (acc <> char7 '"')
+    Just ('\\', rest) -> go rest (acc <> char7 '\\')
+    Just ('/', rest)  -> go rest (acc <> char7 '/')
+    Just ('b', rest)  -> go rest (acc <> char7 '\b')
+    Just ('f', rest)  -> go rest (acc <> char7 '\f')
+    Just ('n', rest)  -> go rest (acc <> char7 '\n')
+    Just ('r', rest)  -> go rest (acc <> char7 '\r')
+    Just ('t', rest)  -> go rest (acc <> char7 '\t')
+    Just ('u', rest)  -> do
+        (hi, rest') <- hex4 rest
+        unicode hi rest' acc
+    _ -> Nothing
+
+  -- a code unit; a high surrogate has to be followed by the low half of its pair
+  unicode hi rest acc
+    | hi >= 0xD800 && hi < 0xDC00 =
+        case BS.unpack (BS.take 2 rest) of
+          "\\u" -> do
+            (lo, rest') <- hex4 (BS.drop 2 rest)
+            if lo >= 0xDC00 && lo < 0xE000
+              then go rest' (acc <> charUtf8 (chr (0x10000 + (hi - 0xD800) * 0x400 + (lo - 0xDC00))))
+              else Nothing
+          _ -> Nothing
+    | hi >= 0xDC00 && hi < 0xE000 = Nothing
+    | otherwise = go rest (acc <> charUtf8 (chr hi))
+
+  hex4 r = let (h, rest) = BS.splitAt 4 r
+           in if BS.length h == 4 && BS.all (`elem` ("0123456789abcdefABCDEF" :: String)) h
+                then Just (read ("0x" ++ BS.unpack h), rest) else Nothing
 
 -- | Consume a @/@ separator (or skip leading spaces) between fields.
 sspace= tChar '/' <|> (many (tChar ' ') >> return ' ')
 
-instance Loggable Char
+-- | The character as a Haskell literal. The slash is written @'\\47'@: the separator of the log would cut @'/'@.
+instance Loggable Char where
+    serialize '/' = byteString "'\\47'"
+    serialize c   = byteString . BSS.pack $ show c
+
+    -- the generic reader cuts the text at the first @/@ and takes a @"@ for the start of a quoted string, so it
+    -- could not read @'"'@ (it failed with an error): the literal is delimited here by its own quotes
+    deserialize = withGetParseString $ \s -> case charLiteral s of
+        Just (lit, rest) | [(c, "")] <- reads lit -> return (c, rest)
+        _                                         -> empty
+      where
+      charLiteral s = do
+          ('\'', r) <- BS.uncons s
+          case BS.uncons r of
+            Just ('\\', r1) -> do
+                (c, r2) <- BS.uncons r1
+                if c == '\''
+                  then closing "\\'" r2                          -- the escaped quote: @'\''@
+                  else let (body, r3) = BS.break (== '\'') r2 in closing ('\\' : c : BS.unpack body) r3
+            _ -> let (body, r3) = BS.break (== '\'') r in closing (BS.unpack body) r3
+      closing body r = do
+          ('\'', rest) <- BS.uncons r
+          return ("'" ++ body ++ "'", rest)
 instance Loggable Float
 instance Loggable Double
 instance Loggable a => Loggable (Maybe a)
@@ -228,13 +315,10 @@ newtype QuotedBS= Quoted Builder deriving (Read,Show,Typeable)
 
 instance Loggable QuotedBS
 
+-- | A text is a JSON string ('jsonString').
 instance Loggable Text where
-    serialize =  byteString . TE.encodeUtf8 
-    deserialize= do
-       bs <- deserialize
-       case TE.decodeUtf8' bs of
-            Left err  -> throwt err
-            Right txt -> return txt
+    serialize   = jsonString
+    deserialize = deserializeText
 
 instance Loggable BSS.ByteString where
         serialize str = serialize $ BS.fromStrict str

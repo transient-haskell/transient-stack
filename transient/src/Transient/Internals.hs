@@ -1,9 +1,9 @@
--- | Compatibility shim: re-exports 'Transient.LEngine' and 'Transient.Core' under the original
+-- | Compatibility shim: re-exports 'Transient.CEngine' and 'Transient.Core' under the original
 -- @Transient.Internals@ name so existing code does not need to be updated.
 module Transient.Internals (
-  module Transient.LEngine,
+  module Transient.CEngine,
   module Transient.Core
 )
 where
-import Transient.LEngine
+import Transient.CEngine
 import Transient.Core

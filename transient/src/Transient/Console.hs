@@ -96,7 +96,12 @@ optionf remove ret message =  do
       let sret = if typeOf ret == typeOf "" then unsafeCoerce ret else show ret
           msg = "Enter\t" ++ "\x1b[1;31m" ++ sret ++ "\x1b[0m" ++ "\t\tto: " ++ message ++ "\n"
 
-      inputf remove sret msg Nothing (== sret)
+      -- the option looks for itself in the command line (@-name@ or @--name@) when it is executed, and once its listener is
+      -- registered it gives its arguments to the console as if they had been typed: the inputs that follow find their values
+      -- (after a short wait: the threads that the program forked are still registering their endpoints and listeners, as when
+      -- the command line was given to the console at the start; the jobs that @exec@ resumes must not run before that)
+      margs <- liftIO $ optionArgs sret
+      inputf' (forM_ margs $ \args -> void $ forkIO $ do threadDelay 100000; withMVar injecting $ \_ -> processLine $ unwords $ sret : map quoteArg args) remove sret msg Nothing (== sret)
       liftIO $ putStrLn message -- "\noption: " >> putStrLn sret
       return ret
 
@@ -110,8 +115,12 @@ newInput= unsafePerformIO $ newIORef False
 --      <Maybe default value> <validation proc>
 -- when ident== "input", if there is a default value and the input do not match, the default value is returned and the input is processed by the active  options . if there is no default value (Nothing) the input string is deleted and prompts for a new input. There is at most one single active input. The next active input in an alternative composition disables the previous.
 inputf ::  (Loggable a, Typeable a) => Bool -> String -> String -> Maybe a -> (a -> Bool) -> TransIO a
-inputf remove ident message mv cond = do
-   er <- inputfm remove ident message mv cond
+inputf = inputf' (return ())
+
+-- | Like 'inputf' with an action that is executed once the listener is registered
+inputf' ::  (Loggable a, Typeable a) => IO () -> Bool -> String -> String -> Maybe a -> (a -> Bool) -> TransIO a
+inputf' onRegister remove ident message mv cond = do
+   er <- inputfm' onRegister remove ident message mv cond
    case er of
     Right r -> return r
     _ ->  empty
@@ -122,7 +131,11 @@ inputf remove ident message mv cond = do
 --
 -- No se puede hacer nada sin caridad, excepto destruir. Y Cristo es el amor. "Sin mi no podéis hacer nada" Jn 15:5
 inputfm :: (Loggable a, Typeable a) => Bool -> String -> String -> Maybe a -> (a -> Bool) -> TransIO (Either String a)
-inputfm remove ident message mv cond = do
+inputfm = inputfm' (return ())
+
+-- | Like 'inputfm' with an action that is executed once the listener is registered
+inputfm' :: (Loggable a, Typeable a) => IO () -> Bool -> String -> String -> Maybe a -> (a -> Bool) -> TransIO (Either String a)
+inputfm' onRegister remove ident message mv cond = do
   -- when remove $ void hang
   -- labelState $ BS.pack ident
   liftIO $ do
@@ -140,7 +153,7 @@ inputfm remove ident message mv cond = do
   liftIO $ writeIORef newInput True
   liftIO $ delListener ident     -- if the same action has been registered, deregister it
 
-  str <- reactId True ident ConsoleCallback message  (const $ return ()) (return ())
+  str <- reactId True ident ConsoleCallback message  (const onRegister) (return ())
               
   case str of
     '\ESC':_ -> do
@@ -488,10 +501,14 @@ processLine line' = liftIO $ do
 --
 -- entering @options y@ show the available options
 ----
--- The program's command line is scanned for @-p@ or @--path@ command line
--- options.  The arguments to these options are injected into the async input
--- channel as keyboard input to the program. Each line of input is separated by
--- a @/@. For example:
+-- The command line gives values to the options and inputs of the program, in two notations:
+--
+-- * the options: @--start localhost:8000 --cookie abc@. Each 'option' looks for @-name@ or @--name@ in the command line when
+-- it is executed, and gives to the console the arguments that follow it, up to the next one that starts with @-@, as if
+-- they had been typed. The inputs that the program executes after the option find their values there. The options may be
+-- in any order in the command line, and executed at any time.
+-- * the old notation: what follows @-p@ or @--path@, with the fields separated by @/@, is given to the console when the
+-- program starts. For example:
 --
 -- >  foo  -p  ps/end
 
@@ -786,18 +803,44 @@ subst = subst1
 (=:) = writeIORef
 whyNot= unsafePerformIO
 
+-- | The legacy notation of the command line: what follows @-p@ or @--path@ up to the next argument that starts with @-@ is
+-- given to the console when the program starts. The options (@--start localhost:8000@) are not transformed: each one is
+-- looked for in the command line by the 'option' that is executed, see 'optionArgs'.
 thereIsArgPath=  do
   args <- getArgs
+  return $ concatMap homogenize $ legacyPath args
+  where
+  legacyPath (a:rest) | a `elem` ["-p", "--path"] = let (ps, rest')= span (not . isOptionArg) rest in ps ++ legacyPath rest'
+                      | otherwise = legacyPath rest
+  legacyPath [] = []
 
+isOptionArg s= take 1 s == "-"
 
-  let r = concatMap homogenize args
-  return r
+-- the console lines are processed one at a time: the options that are executed together give their arguments one after the other
+{-# NOINLINE injecting #-}
+injecting :: MVar ()
+injecting= unsafePerformIO $ newMVar ()
 
-homogenize "-p" = ""
-homogenize s=
-    let sc= dropWhile (=='-') s
-        scq= if not ("start" `isPrefixOf` s )  && '/' `elem` sc then '\"':sc <> "\"" else sc
-    in scq <> "/"
+-- the occurrences of the options of the command line that have been given to their option
+{-# NOINLINE usedArgs #-}
+usedArgs :: IORef [Int]
+usedArgs= unsafePerformIO $ newIORef []
+
+-- | The arguments of the option @name@ in the command line: the ones that follow @-name@ or @--name@ up to the next one
+-- that starts with @-@. Nothing if it is not there. Each occurrence is given once, in order, to the executions of the option.
+optionArgs :: String -> IO (Maybe [String])
+optionArgs name= do
+  args <- getArgs
+  atomicModifyIORef' usedArgs $ \used ->
+    case [i | (i, a) <- zip [0..] args, i `notElem` used, a == '-':name || a == "--" <> name] of
+      []    -> (used, Nothing)
+      (i:_) -> (i:used, Just $ takeWhile (not . isOptionArg) $ drop (i + 1) args)
+
+-- An argument is quoted, to pass it as a single value, if it is a URL or has spaces. (Before it was quoted if it had a @/@ and
+-- did not start with @start@, so @--start localhost/8080@ gave the host @"localhost@.)
+quoteArg s= if "://" `isInfixOf` s || ' ' `elem` s then '\"':s <> "\"" else s
+
+homogenize s= quoteArg (dropWhile (=='-') s) <> "/"
 
 {-
 searchOption op= do

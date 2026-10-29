@@ -147,28 +147,32 @@ int= withGetParseString $ \str ->
                               else  maybe empty return i
           --  maybe empty return (BS.readInt str)
 
--- | read a double in floating point/scientific notation
+-- | read a double in floating point/scientific notation: an optional sign, the integer part (required), and an optional
+-- @.fraction@ and @e@\/@E@ exponent (which may have a sign). What follows is not consumed: @3.@ reads @3@ and leaves the dot.
 double :: TransIO Double
-double= do
-    ent  <- integer  -- takes the sign too
-    frac <- fracf
-    exp <- expf
-
-    return $ (fromIntegral  ent * 10 ^ exp) +- (( fromIntegral $ fst $ fromJust $ BS.readInteger frac)
-                       /10 ^ (fromIntegral (BS.length frac) - exp))
-    where
-    (+-) a b= if a >= 0 then a + b else a - b
-
-    fracf= do
-       tChar '.'
-       tTakeWhile isDigit
-      <|> return "0"
-
-    expf= do
-        tChar 'e' <|> tChar 'E'
-        int
-      <|> return 0
-
+double= withGetParseString $ \s -> maybe empty return (parseDouble s)
+  where
+  parseDouble s =
+    let (neg, s1)  = case BS.uncons s of
+                       Just ('-', r) -> (True, r)
+                       Just ('+', r) -> (False, r)
+                       _             -> (False, s)
+        (ip, s2)   = BS.span isDigit s1
+        (fp, s3)   = case BS.uncons s2 of
+                       Just ('.', r) | (f, r') <- BS.span isDigit r, not (BS.null f) -> ('.' `BS.cons` f, r')
+                       _                                                             -> (mempty, s2)
+        (ep, s4)   = case BS.uncons s3 of
+                       Just (e, r) | e `elem` ("eE" :: String)
+                                   , (sg, r1) <- sign r
+                                   , (ds, r2) <- BS.span isDigit r1
+                                   , not (BS.null ds)                                -> ('e' `BS.cons` (sg <> ds), r2)
+                       _                                                             -> (mempty, s3)
+        sign r     = case BS.uncons r of
+                       Just (c, r') | c `elem` ("+-" :: String) -> (BS.singleton c, r')
+                       _                                        -> (mempty, r)
+        txt        = BS.unpack (ip <> fp <> ep)
+    in if BS.null ip then Nothing
+         else Just ((if neg then negate else id) (read txt), s4)
 
 -- | read many results with a parser (at least one) until a `end` parser succeed. The end IS consumed
 manyTill :: TransIO a -> TransIO b -> TransIO [a]

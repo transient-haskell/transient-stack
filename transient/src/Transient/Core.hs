@@ -53,7 +53,7 @@
 
 module Transient.Core where
 
-import           Transient.LEngine
+import           Transient.CEngine
 import           Control.Applicative
 import           Control.Monad.State
 import qualified Data.Map               as M
@@ -199,20 +199,42 @@ removeChild st= do
 -- | for a streaming function comp, it terminates all the child threads generated in every previous result of comp and
 -- execution in the current thread. Useful to reap the children when a task is
 -- done, restart a task when a new event happens etc.
+--
+-- The thread that produces the stream (for example the one of 'waitEvents' or 'parallel') is not terminated: it is on the
+-- path from the thread of the current result up to the state of 'oneThread', and only the branches off that path are.
+-- Whatever the current thread launches after 'oneThread' hangs from the same state, so the next result terminates it
+-- too unless it is launched with 'freeThreads'.
 oneThread :: TransIO a -> TransIO a
 oneThread comp = do
     st <- transient $ Just <$>  hang
 
-    let rchs= children st
     liftIO $ writeIORef (labelth st) (LF Dead [],mempty)
     x   <- comp
-    th  <- liftIO myThreadId
-    chs <- liftIO $ readMVar rchs
-    tr (th,map threadId chs)
-    liftIO $ killChildren1 th st
-    -- liftIO $ mapM_ (killChildren1 th) chs
+    cur <- get
+    liftIO $ killOffPath cur st
 
     return x
+
+-- | kill what hangs from @st@ but is not on the path from the state @cur@ up to @st@: the branches of the previous results
+killOffPath :: TranShip -> TranShip -> IO ()
+killOffPath cur st = do
+  mpath <- pathUp cur
+  let path = fromMaybe [cur] mpath          -- if cur does not hang from st nothing is above it to spare or to kill
+      same a b = children a == children b
+      onPath s = any (same s) path
+  forM_ (filter (not . same cur) path) $ \p -> do
+    chs <- readMVarChildren p
+    let off = filter (not . onPath) chs
+    killChilds off
+    mapM_ killChildren off
+  where
+  pathUp s
+    | children s == children st = return $ Just [s]
+    | otherwise = do
+        mp <- readIORef (parent s)
+        case mp of
+          Nothing -> return Nothing
+          Just p  -> fmap (s :) <$> pathUp p
 
 -- kill all the children except one
 killChildren1 :: ThreadId  ->  TranShip -> IO ()
@@ -2197,9 +2219,10 @@ onWaitThreads   mx= do
 -- aunque tenga event handlers. Gloria a Dios
 {-# NOINLINE noactiveth #-}
 noactiveth st=
-    return $ all (\st' -> null (childs st') || lazy (noactiveth st')) (childs st)
+    return $ all (\st' -> not (alive st') && lazy (noactiveth st')) (childs st)
     where
     childs=  lazy . readMVar . children
+    alive st'= case fst (lazy $ readIORef $ labelth st') of LF Alive _ -> True; _ -> False
     -- listeners st=  let LF _ ls= fst $ lazy $ readIORef $ labelth st
     --                in  ls
     -- label = lazy . readIORef . labelth
@@ -2380,7 +2403,16 @@ continue = forward (ofType :: SomeException)   -- !> "CONTINUE"
 --
 -- The semantic is the same than `catch` but the computation and the exception handler can be multirhreaded
 catcht :: Exception e => TransIO b -> (e -> TransIO b) -> TransIO b
-catcht mx exc= localExceptions $ onException' mx  $ \e  ->  continue >> exc e
+catcht mx exc= localExceptions $ onException' (guardFirst mx)  $ \e  ->  continue >> exc e
+  where
+  -- `onException'` only guards what comes AFTER its first argument, so an exception that mx throws before it completes
+  -- escaped from catcht. mx is run here under a `catch` that starts the backtracking with the state in which the handler
+  -- is already registered.
+  guardFirst mx= transient $ do
+      st <- get
+      (r, st') <- liftIO $ runStateT (runTrans mx) st `catch` backExceptIO st
+      put st'
+      return r
 
 -- old version
 -- catcht' :: Exception e => TransIO b -> (e -> TransIO b) -> TransIO b

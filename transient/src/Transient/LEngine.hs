@@ -128,8 +128,8 @@ newtype LogB = LogB [LogSeg]
 
 type ClosureKey = String
 
--- | A single element of the execution log: a serialised value, a set of parallel branches, or a cross-session link.
-data FragmentType= Fragment{unFragment :: LogB} | Collect [LogB] | Jump ClosureKey
+-- | A single element of the execution log: a serialised value or a set of parallel branches (the paths gathered by a @collectc@).
+data FragmentType= Fragment{unFragment :: LogB} | Collect [LogB]
 
 -- | The log of the execution: whether it is being recovered, the part written since the last closure, the
 -- segments that remain to be replayed and the hash of the path ('hashClosure').

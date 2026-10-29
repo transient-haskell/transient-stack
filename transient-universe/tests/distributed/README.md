@@ -54,6 +54,13 @@ counted, not read by eye.
 
 ## Things to know
 
+* The checks of `multiuser` (`mur.sh`) and `collectc` (`runcol.sh`) do not read traces: `mur.sh` reads the messages that the
+  program sends to the client in the HTTP responses of `curl` (it kept them in `curl.out`), and `CollectTest` writes what it
+  collects to `collected.txt` and `reached-results.txt`. They used to grep trace lines (`MSEND`, `ADDED ENDPOINT`,
+  `MINPUT RESULT`) that the library no longer emits, and they failed even though the programs worked. The console output of
+  several threads gets mixed up character by character (`keep` leaves stdout unbuffered), so grepping the program's own
+  `putStrLn` is not reliable either.
+
 * The terms start about 100 ms apart, not together: delays closer than that give ties. The scripts that take
   delays expect them in microseconds and separated by 1.5 s or more.
 * `curl` does not read everything these endpoints send (the cookie goes inside the chunked stream): the

@@ -358,11 +358,12 @@ showURL= getURL >>= liftIO . print
 -- | Get the URL string for the current point in the computation
 getURL :: TransIO String
 getURL = do
-  mprev <- tryState
+  -- ('tryState' gives the value or stops; with a 'Maybe' it would look for a 'Maybe PrevClos' in the state, that is never there)
+  mprev <- getData :: TransIO (Maybe PrevClos)
   (SessionId sess, ClosureId clos) <- case mprev of
     Nothing -> return (sessionId0, closureId0)
     Just prev -> liftIO $ do
-      mprevClos <- atomically $ readDBRef prev
+      mprevClos <- atomically $ readDBRef (prevDBRef prev)
       case mprevClos of
         Just prevClos -> return (localSession prevClos, localClos prevClos)
         Nothing -> return (sessionId0,closureId0)
@@ -378,7 +379,7 @@ getURL = do
     , "/"
     , BC.unpack clos
     , "/S"
-    , show sess
+    , BC.unpack sess
     , "/"
     , BC.unpack (BL.toStrict logBytes)
     ]
@@ -413,7 +414,10 @@ optionEndpoints = do
 sendCookies :: Connection -> TransIO ()
 sendCookies conn= do
       cookies <- getCookiesStr
-      when (not $ BS.null cookies) $ msend conn cookies
+      when (not $ BS.null cookies) $ do
+        msend conn cookies
+        -- the cookies are the last of the headers if nothing else is sent: the response may have no body yet
+        closeHeaders conn
   where
   getCookies= tryState <|> return (Cookies [])
 

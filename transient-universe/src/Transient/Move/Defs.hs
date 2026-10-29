@@ -32,6 +32,7 @@ import Transient.Move.Browser (WebSocket)
 
 import Data.CaseInsensitive (CI)
 import Data.Typeable
+import Data.Maybe (fromMaybe)
 import Data.Default
 import Control.Exception
 import System.IO.Unsafe
@@ -272,7 +273,11 @@ data LocalClosure = LocalClosure
     -- of a runAt, in the called side). It is persisted. When this node is recovered by a job after a restart, the
     -- connection to the caller does not exist: the second teleport opens it with this node. The closure to respond to
     -- ('ClosToRespond') has the same key as this closure, since the names of the endpoints are the same in all the nodes.
-    localCaller   :: Maybe Node
+    localCaller   :: Maybe Node,
+    -- | The key of the closure this one is a copy of, when it was made by a jump to another session (@#source-new@).
+    -- It is persisted: after a restart, a message for a copy that is not alive goes to its source if the source is
+    -- alive, which is where the state shared by the sessions lives (a 'Transient.Move.Job.collectc').
+    localSource   :: Maybe String
   }
 
 instance Show LocalClosure where show lc= keyResource lc
@@ -337,7 +342,32 @@ deriving instance Show Log
 deriving instance Show FragmentType
 deriving instance Read FragmentType
 
-instance Loggable FragmentType
+-- | A fragment in JSON, with the conventions of the log (a @\/@ inside a string is doubled):
+--
+-- > Fragment "u/1/"    ->  "u//1//"                  a JSON string
+-- > Collect ["a","bc"] ->  ["a","bc"]                a JSON array of strings
+--
+-- A list of fragments is the generic list of 'Loggable': @["u\/\/1\/\/","e\/\/"]@.
+instance Loggable FragmentType where
+  serialize (Fragment l) = serialize (logText l)
+  serialize (Collect ls) = serialize (map logText ls)
+  deserialize = frag <|> coll
+    where
+    frag = Fragment . textLog <$> (deserialize :: TransIO TE.Text)
+    coll = Collect . map textLog <$> (deserialize :: TransIO [TE.Text])
+
+logText :: LogB -> TE.Text
+logText = TE.decodeUtf8 . BC.concat . BL.toChunks . toLazyByteString . renderLog
+
+textLog :: TE.Text -> LogB
+textLog = fixed . byteString . TE.encodeUtf8
+
+-- | The fragment in a string, for the files of the closures.
+fragmentToString :: FragmentType -> String
+fragmentToString = BL.unpack . toLazyByteString . serialize
+
+fragmentFromString :: String -> FragmentType
+fragmentFromString str = fromMaybe (error $ "bad fragment: " <> str) $ fst $ lazy $ runTransient $ withParseString (BL.pack str) deserialize
 
 -- | Get the current log data.
 getLog :: TransMonad m => m Log
@@ -384,11 +414,12 @@ instance {-# OVERLAPPABLE #-}  (Show a, Read a) => TC.Serializable a where
   deserialize = read . BL.unpack
 
 instance TC.Serializable LocalClosure where
-  serialize LocalClosure {localClos=ClosureId c,localSession=SessionId s,..} = TC.serialize (c,s, prevClos, localLog, localCaller)
+  serialize LocalClosure {localClos=ClosureId c,localSession=SessionId s,..} = TC.serialize (c,s, prevClos, fragmentToString localLog, localCaller, localSource)
   deserialize str =
-    let (localClos,localSession, prevClos, localLog, localCaller) = TC.deserialize str
+    let (localClos,localSession, prevClos, logstr, localCaller, localSource) = TC.deserialize str
+        localLog = fragmentFromString logstr
         block = unsafePerformIO $ newMVar ()
-     in LocalClosure (ClosureId localClos) (SessionId localSession)   prevClos  localLog  block Nothing Nothing localCaller
+     in LocalClosure (ClosureId localClos) (SessionId localSession)   prevClos  localLog  block Nothing Nothing localCaller localSource
 
 dbClos0= getDBRef $ kLocalClos sessionId0 closureId0 :: DBRef LocalClosure
 

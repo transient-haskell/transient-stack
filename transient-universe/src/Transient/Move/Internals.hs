@@ -99,6 +99,7 @@ import Control.Concurrent.MVar
 
 import Data.Monoid
 import qualified Data.Map as M
+import qualified Data.Set as Set
 import Data.List (partition, nub, union,(\\),length, nubBy,isPrefixOf)
 import Data.IORef
 
@@ -1050,6 +1051,8 @@ msend con bs = do
       -- Just (HTTPS2Node {}) -> webSend con bs
       Just (HTTP2Node _ sock _ _) -> liftIO $ modifyMVar_ blocked (const $ do
             tr "HTTP2NODE SEND"
+            -- the headers of the response are still open: they are closed by the first thing that is not a header
+            closeHeadersUnless (BS.isPrefixOf "Set-Cookie:" bs) (idConn con') sock
             SBSL.sendAll sock $ bs -- <> "\r\n"
             TOD time _ <- getClockTime
             return $ Just time)
@@ -2091,7 +2094,10 @@ listenNew port conn' = do
               
 
 
-              liftIO $ SBSL.sendAll sock $ "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nTransfer-Encoding: chunked\r\n\r\n"
+              -- the headers are left open (without the blank line that ends them) so that the cookies that the program sets
+              -- go inside them: the first thing sent that is not a header (or 'closeHeaders') ends them
+              liftIO $ SBSL.sendAll sock $ "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nTransfer-Encoding: chunked\r\n"
+              liftIO $ atomicModifyIORef' openHeaders $ \hs -> (Set.insert (idConn conn) hs, ())
               return $ SMore $ ClosureData (ClosureId remoteClosure)  (SessionId s1)  (ClosureId thisClosure)  (SessionId s2)  [Fragment $ fixed $ lazyByteString requestString]
   where
 
@@ -2233,6 +2239,26 @@ listenNew port conn' = do
         liftIO $ writeIORef rsetHost False -- !> "HOSt SET"
 
 rcookies= unsafePerformIO $ newIORef []  -- HTTP cookies
+
+{-# NOINLINE openHeaders #-}
+-- | The connections whose HTTP response has sent its headers but not the blank line that ends them: the program can still
+-- add headers (cookies) to the response of the request that it is serving.
+openHeaders :: IORef (Set.Set Int)
+openHeaders= unsafePerformIO $ newIORef Set.empty
+
+-- | Sends the blank line that ends the headers of the response of an HTTP connection, if it is not sent yet.
+closeHeaders :: Connection -> TransIO ()
+closeHeaders con= do
+  c <- liftIO $ readIORef $ connData con
+  case c of
+    Just (HTTP2Node _ sock _ _) -> liftIO $ closeHeadersUnless False (idConn con) sock
+    _ -> return ()
+
+-- | If the headers of the response are open and the data to send is not a header (@isHeader@), ends them.
+closeHeadersUnless :: Bool -> Int -> NS.Socket -> IO ()
+closeHeadersUnless isHeader cid sock= do
+  wasOpen <- atomicModifyIORef' openHeaders $ \hs -> (if isHeader then hs else Set.delete cid hs, Set.member cid hs)
+  when (wasOpen && not isHeader) $ SBSL.sendAll sock "\r\n"
 
 header200Chunked= BS.pack "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nTransfer-Encoding: chunked\r\n"
 

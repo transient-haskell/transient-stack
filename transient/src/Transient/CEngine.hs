@@ -1,22 +1,31 @@
-{-# LANGUAGE CPP,RecordWildCards,UndecidableInstances,ScopedTypeVariables,FlexibleContexts,MultiParamTypeClasses,
-ExistentialQuantification,FlexibleInstances, InstanceSigs #-}
+{-# LANGUAGE CPP,PatternSynonyms,ViewPatterns,RecordWildCards,UndecidableInstances,ScopedTypeVariables,FlexibleContexts,MultiParamTypeClasses,
+ExistentialQuantification,FlexibleInstances,InstanceSigs,RankNTypes #-}
 
 {- |
-Continuation-passing engine for the Transient monad (experimental).
+The continuation-passing engine for the Transient monad. A drop-in replacement of "Transient.LEngine".
 
-Based on <https://gist.github.com/agocorona/2c9149c4d2035f21952fc1d1691b7bde>.
-Uses a single type-erased continuation @a -> TransIO b@ (the @t@\/@r@
-parameter is erased); the 'Monad' bind operator guarantees type safety by
-construction.
+'TransIO' is the standard continuation monad over 'StateIO' with the answer type universally quantified
+(@forall r. (a -> StateIO (Maybe r)) -> StateIO (Maybe r)@): @x >>= f@ is the composition of continuations and
+no list of fragments is kept in the state.
+
+The primitives of "Transient.Core" capture the continuation of the point where they are with 'getCont' (@abduce@,
+@react@, @for@, @onBack@...). So 'transient' stores in the state ('fcont') the continuation of the primitive that is
+going to execute, which is what @fcomp@ was in "Transient.LEngine".
+
+* A computation that is run as a part of another one ('runTrans') returns its value to the caller. If its value
+  arrives later, from an event, the continuation of the caller is executed instead ('inEvent').
+* @x \<|\> y@ executes @y@ only if @x@ did not reach, in the same flow, its own continuation (see 'Alternative'):
+  the failure of the rest of the program does not backtrack into @y@.
 -}
 module Transient.CEngine where
 
 import Control.Monad
-import Control.Monad.State hiding(lift)
+import Control.Monad.State
 import Control.Applicative
 import Data.Typeable
 import qualified Data.Map                               as M
 import Data.IORef
+import Data.Int (Int64)
 import Control.Concurrent
 import Control.Concurrent.MVar
 import Control.Exception
@@ -24,6 +33,7 @@ import Control.Exception
 import qualified Data.ByteString.Char8                  as BS
 import qualified Data.ByteString.Lazy.Char8             as BSL
 import Data.String
+import Data.ByteString.Builder (Builder, string7)
 
 import System.IO.Unsafe
 import Data.Time.Clock
@@ -32,30 +42,33 @@ import Data.Time.Clock
 import Data.Functor ( (<&>) )
 
 import Unsafe.Coerce
+import GHC.Exts (Any)
 import qualified Debug.Trace                as Debug
 
-
-
-
-
+#ifdef DEBUG
+trace= Debug.trace
+trace1= Debug.trace
+#else
 
 trace _= id
 trace1= Debug.trace
-
+#endif
 
 
 -- | Increase the trace indentation level by 2.
-indent, outdent :: MonadIO m => m ()
-
+indent :: MonadIO m => m ()
 -- | Decrease the trace indentation level by 2.
+outdent :: MonadIO m => m ()
+
 indent =  liftIO $ modifyIORef rindent $ \n -> n+2
 outdent=  liftIO $ modifyIORef rindent $ \n -> n-2
 
 
 {-# NOINLINE rindent #-}
--- | Global IORef tracking the current trace indentation level.
+-- | Global indentation counter used by the trace helpers.
 rindent= unsafePerformIO $ newIORef 0
--- | Format a value with a timestamp, thread-id colour, and current indentation.
+
+-- | Format a value for coloured terminal trace output, prefixed with timestamp and thread id.
 color :: Show a => a -> String
 color x= unsafePerformIO $ do
     t <- getCurrentTime
@@ -75,43 +88,70 @@ tttr :: (MonadIO m, Show a) => a -> m ()
 tttr x = liftIO $ putStrLn $ "\x1b[34mINFO\x1b[0m " <> color x
 
 
--- | Conditionally trace @x@ (only when -DDEBUG is set) while returning @f@.
+-- | Always-on coloured trace (same as 'Debug.trace' but with 'color' formatting).
 tracec x f= Debug.trace (color x) f
 
 type StateIO = StateT TranShip IO
 
-newtype Transient r m a = Transient { runContT :: (Maybe a -> m  (Maybe r)) -> m  (Maybe r) }
+-- | The continuation monad. The answer type is universally quantified: each combinator instantiates it as it needs.
+newtype TransIO a = TransC { runContT :: forall r. (a -> StateIO (Maybe r)) -> StateIO (Maybe r) }
 
-type TransIO a= Transient a StateIO a
+-- | The same constructor and field that "Transient.LEngine" has: a computation in the state monad that returns a value or none.
+pattern Transient :: StateIO (Maybe a) -> TransIO a
+pattern Transient {runTrans} <- (runTrans' -> runTrans) where Transient = transient
 
-{-
-Expected: Transient a StateIO (Either String a)
-    Actual: Transient a StateIO (Either String a)
--}
-
+-- | A primitive: an action in the state monad that returns a value, or none (it stops the computation). The
+-- continuation is stored in the state ('fcont') so that the action can get it with 'getCont'.
 transient :: StateIO (Maybe a) -> TransIO a
-transient= Transient . const
+transient mx = TransC $ \c -> do
+  modify $ \s -> s{fcont= unsafeCoerce c}
+  mx >>= maybe (return Nothing) c
 
-runTrans :: TransIO a -> StateIO (Maybe a)
-runTrans t=   runContT  t  return
+-- | Run a computation inside a state action. If it produces its value in the current thread, before it returns,
+-- the value is the result. If it is produced later, by an event, the continuation that was in the state
+-- when 'runTrans' was called is executed with it, like the rest of the list of continuations did in "Transient.LEngine".
+runTrans' :: TransIO a -> StateIO (Maybe a)
+runTrans' t = do
+  TranShip{fcont= cur, ftail= tl, inEvent= ev} <- get
+  -- if the value arrives later, from an event, the computation goes on with the continuation of the caller: what follows
+  -- the primitive that is executing. It is pushed in the state, so that a state set with 'put' changes it
+  modify $ \s -> s{ftail= cur : tl, inEvent= False}
+  r <- runContT t $ \a -> do
+         later <- gets inEvent
+         if not later then return $ Just a else do
+           ts <- gets ftail
+           case ts of
+             []      -> return Nothing
+             (k:ks)  -> do modify $ \s -> s{ftail= ks}; unsafeCoerce <$> k (unsafeCoerce a)
+  -- pop only what was pushed: a state set with 'put' inside the computation keeps its own stack, as in LEngine
+  modify $ \s -> s{fcont= cur, ftail= drop 1 (ftail s), inEvent= ev}
+  return r
 
-
+-- | Like 'runTrans', but the value of an event of @x@ continues with @k@ and not with the continuation in the state.
+runWith :: (a -> StateIO (Maybe r)) -> TransIO b -> StateIO (Maybe b)
+runWith k x = do
+  prev <- gets fcont
+  modify $ \s -> s{fcont= unsafeCoerce k}
+  r <- runTrans x
+  modify $ \s -> s{fcont= prev}
+  return r
 
 type SData = ()
 
+type EventId = Int
 
-data ExecMode = Remote | Parallel | Serial
+type TransientIO = TransIO
+
+
+data ExecMode = Remote | Parallel | Serial 
   deriving (Typeable, Eq, Show)
 
 
 type PolyMap = M.Map TypeRep SData
 
 
-data Status = Dead                   -- killed waiting to be eliminated
-              --  | DeadParent             -- Dead with some childs active
-               | Alive                  -- working
-              --  | Parent                 -- with some childs
-              --  | Listener [IdCallback]  -- The number of callbacks inside react ans a MVarS.
+data Status = Dead                   -- Finished waiting to be eliminated
+            | Alive                  -- working
 
   deriving (Eq, Show,Ord)
 
@@ -119,13 +159,60 @@ type Listener= String
 
 data LifeCycle =LF Status [Listener] deriving Show
 
+-- | A segment of the log of the execution of a distributed computation ('Log'). The instances, the renderer and the
+-- operations are in "Transient.Move.Defs": here are only the declarations that the state and the applicative need.
+data LogSeg
+  = Fixed Builder
+    -- ^ immutable segment
+  | Wait (IORef Builder)
+    -- ^ written by @addWait@ in an applicative term that is asynchronous; it contains @w\/@ until the term is resolved
+  | Pending (IO LogB)
+    -- ^ the log of a term of an applicative that may not be resolved yet: it is read when the log is serialised
+
+-- | Log builder made of immutable and mutable segments.
+newtype LogB = LogB [LogSeg]
+
+type ClosureKey = String
+
+-- | A single element of the execution log: a serialised value or a set of parallel branches (the paths gathered by a @collectc@).
+data FragmentType= Fragment{unFragment :: LogB} | Collect [LogB]
+
+-- | The log of the execution: whether it is being recovered, the part written since the last closure, the
+-- segments that remain to be replayed and the hash of the path ('hashClosure').
+data Log  = Log{ recover :: Bool , partLog :: LogB, restLog :: [FragmentType],  hashClosure :: Int}
+
+emptyLog :: Log
+emptyLog= Log False (LogB []) []  0
+
+-- | Steps of the hash of the path, combined with 'hashStep': entering a logged statement, finishing it,
+-- an alternative branch (@w\/@), and the end of an applicative.
+hashStep :: Int -> Int -> Int
+-- The names of the closures are computed in all the nodes and must be the same: the arithmetic is of 64 bits whatever the size of 'Int'
+-- (it is of 32 bits in the wasm backend, where the product overflows).
+hashStep h c = fromIntegral ((fromIntegral h * 31 + fromIntegral c) `mod` (2147483647 :: Int64))
+
+hashExec, hashDone, hashWait, hashApp, hashTerm, hashNode :: Int
+hashExec= 1
+hashDone= 2
+hashWait= 3
+hashApp= 4
+hashNode= 6   -- entering a node of an applicative: nested nodes start at different points of the path
+hashTerm= 5   -- the first term of an applicative, whatever its steps: it can not coincide with the path inside the term
+
 -- | TranShip describes the context of a TransientIO computation:
 data TranShip = forall a b. TranShip
   {
-    -- fcomp       :: a -> TransIO b
-    -- ^ List of continuations
+    fcont       :: Any -> StateIO (Maybe Any)
+    -- ^ The continuation (type erased) of the primitive that is executing. Set by 'transient'
 
-    mfData      :: PolyMap
+  , ftail       :: [Any -> StateIO (Maybe Any)]
+    -- ^ What follows each of the computations that are being run with 'runTrans', if their value arrives from an event
+
+  , inEvent     :: Bool
+    -- ^ 'True' while a continuation is being run from an event ('runCont'): the computations that were
+    -- called with 'runTrans' do not return their value to the caller, but go on with the continuation of the caller
+
+  , mfData      :: PolyMap
     -- ^ State data accessed with get/set/Data/State/RState etc operations
 
   , mfSequence  :: Int
@@ -146,11 +233,17 @@ data TranShip = forall a b. TranShip
     -- ^ Label the thread with its lifecycle state and a label string
   , parseContext :: ParseContext
   , execMode :: ExecMode
+  , isApplicative :: Bool
+  , mfLog :: Log
+    -- ^ the log of the execution of a distributed computation. A field and not an entry of 'mfData': it is used in every step
   } deriving Typeable
+
+-- data IsApplicative= NoApp | AppFirst | AppSecond deriving Eq
 
 lazy= unsafePerformIO
 
 threadId s= lazy $ readIORef $ rThreadId s
+
 
 instance Read SomeException where
   readsPrec n str  = [(SomeException $ ErrorCall str,"")] -- $ "attempting to deserialize  error: <"<> str <> ">"
@@ -184,28 +277,29 @@ class MonadState TranShip m => TransMonad m
 
 instance  MonadState TranShip m => TransMonad m
 
--- instance MonadTrans TransIO  where
 
---     lift m = Transient ((ety m) >>=)
-
-instance  MonadState  TranShip (Transient r StateIO) where
-    get= lift get
-    put= lift . put
-
+instance MonadState TranShip TransIO where
+  get     = TransC $ \c -> get >>= c
+  put x   = TransC $ \c -> put x >> c ()
+  state f =  TransC $ \c -> do
+    s <- get
+    case f s of
+      (a, s') -> s' `seq` (put s' >> c a)
 
 -- | Run a computation in the underlying state monad. it is a little lighter and
 -- performant and it should not contain advanced effects beyond state.
 noTrans :: StateIO x -> TransIO  x
-noTrans x = transient $ Just <$> x
+noTrans x = transient (x <&> Just)
 
 
 
--- emptyEventF :: ThreadId -> IORef (LifeCycle, BS.ByteString) -> MVar [TranShip] -> TranShip
-emptyEventF th label par childs =
-  TranShip { -- event      = mempty
-        --  , xcomp      = empty
-          --  fcomp      = const empty
-           mfData     = mempty
+-- emptyTranShip :: ThreadId -> IORef (LifeCycle, BS.ByteString) -> MVar [TranShip] -> TranShip
+emptyTranShip th label par childs =
+  TranShip {
+           fcont      = const $ return Nothing    -- like @compose []@ in LEngine: nothing follows
+         , ftail      = []
+         , inEvent    = False
+         , mfData     = mempty
          , mfSequence = 0
          , rThreadId   = lazy $ newIORef th -- unsafePerformIO $ newIORef th
          , freeTh     = False
@@ -214,7 +308,9 @@ emptyEventF th label par childs =
          , maxThread  = Nothing
          , labelth    = label
          , parseContext = ParseContext (return SDone) mempty (unsafePerformIO $ newIORef True)
-         , execMode = Serial}
+         , execMode = Serial
+         , isApplicative= False
+         , mfLog= emptyLog}
 
 -- | Run a transient computation with a default initial state. This is for basic testing. This does NOT support effects
 runTransient :: TransIO a -> IO (Maybe a, TranShip)
@@ -223,22 +319,22 @@ runTransient t = do
   label  <- newIORef  (LF Alive [], mempty)
   childs <- newMVar []
   par    <- newIORef Nothing
-  let topState = emptyEventF th label par childs
+  let topState = emptyTranShip th label par childs
   runStateT (runTrans t) topState
 
--- | only used by keep* primitives
+-- | Like 'runTransient' but also writes the top state to 'rtopState'. Used by the @keep*@ primitives.
 runTransient1 :: TransIO a -> IO (Maybe a, TranShip)
 runTransient1 t = do
   th     <- myThreadId
   label  <- newIORef  (LF Alive [], mempty)
   childs <- newMVar []
   par    <- newIORef Nothing
-  let topState = emptyEventF th label par childs
+  let topState = emptyTranShip th label par childs
   writeIORef rtopState topState
   runStateT (runTrans t) topState
 
 {-#NOINLINE rtopState#-}
--- | Global IORef holding the top-level 'TranShip' state (set by 'runTransient1').
+-- | Global reference to the root 'TranShip' state. Initialised by 'runTransient1'.
 rtopState= unsafePerformIO $ newIORef $ error "no top state defined"
 
 -- | Run a transient computation with a given initial state. This is for basic testing. This does NOT support effects
@@ -247,68 +343,51 @@ runTransState st x = runStateT (runTrans x) st
 
 
 
--- | Get the current continuation (constructed via 'callCC' over the state monad transformer).
+-- | Lift a 'Maybe' into 'TransIO': 'Just' succeeds, 'Nothing' stops with 'empty'.
+emptyIfNothing :: Maybe a -> TransIO a
+emptyIfNothing =  transient . return
+
+
+-- | Get the continuation context: the rest of the computation after the primitive that is executing. It is
+-- executed as if it were resumed by an event: the result of the rest of the program is what the action returns.
 getCont :: StateIO (a -> TransIO b)
-getCont= do
-  let f x = callCC (\k ->   k $ unsafeCoerce  x)
-  return $ unsafeCoerce f
+getCont = do
+  TranShip{fcont= f, ftail= tl} <- get
+  return $ \x -> TransC $ \_ -> do
+    TranShip{ftail= tl0, inEvent= ev} <- get
+    modify $ \s -> s{ftail= tl, inEvent= True}
+    _ <- f (unsafeCoerce x)
+    modify $ \s -> s{ftail= tl0, inEvent= ev}
+    -- like @compose@ in LEngine, whose list ends in @const empty@: the whole continuation has been run
+    return Nothing
 
 -- | Run the continuation included in the state
-runCont :: p -> TranShip ->  StateT TranShip IO (Maybe a)
-runCont x _ = do
-  k <- getCont
-  runTrans $ k x
-
-callCC :: ((a -> Transient r m b) -> Transient r m a) -> Transient r m a
-callCC f = Transient $ \ c -> runContT (f (\ x -> Transient $ \ _ ->  c $ Just x)) c
-
+runCont :: p -> TranShip -> StateT TranShip IO (Maybe a)
+runCont x TranShip { fcont = f } = do
+  TranShip{ftail= tl, inEvent= ev} <- get
+  -- the continuation travels in the closure @f@; the thread has nothing else to continue with
+  modify $ \s -> s{inEvent= True, fcont= const $ return Nothing}
+  _ <- f (unsafeCoerce x)
+  -- the returned state may be set with 'put' by the caller: it must not keep the stack popped by the event
+  modify $ \s -> s{fcont= const $ return Nothing, ftail= tl, inEvent= ev}
+  -- the result of the continuation is not the one of the rest of the program (the alternatives wrap it): like in
+  -- LEngine, whose list ends in @const empty@, it is ever 'Nothing'
+  return Nothing
 
 
 -- | Run the continuation included in the state. The result in the IO monad.
 runContIO :: p -> TranShip -> IO (Maybe a, TranShip)
 runContIO x cont = runStateT (runCont x cont) cont
 
--- | Compose a list of continuations.
-{-# INLINE compose #-}
-compose :: (a -> TransIO b) -> (a -> TransIO b)
--- compose []     = const empty
-compose =  id -- (f:fs) = \x -> f x >>= compose fs
 
--- -- | Run the closure  (the 'x' in 'x >>= f') of the current bind operation.
--- -- runClosure :: TranShip -> StateIO (Maybe a)
--- runClosure x   = unsafeCoerce (runTrans x)
-
-
-
--- -- | Save a closure and a continuation ('x' and 'f' in 'x >>= f').
--- setContinuation ::  (a -> TransIO b) -> (c -> TransIO d) -> StateIO ()
--- setContinuation   c fs = modify $ \TranShip{..} -> TranShip {fcomp = c >=> unsafeCoerce fs ,   .. }
-
--- -- | Save a closure and continuation, run the closure, restore the old continuation.
--- -- | NOTE: The old closure is discarded.
--- withContinuation :: b -> TransIO a -> TransIO a
--- withContinuation c mx = do
---   TranShip { fcomp = fs, .. } <- get
---   put $ TranShip { fcomp = unsafeCoerce c >=> fs, .. }
---   r <- mx
---   restoreStack fs
---   return r
-
--- | Restore the continuations to the provided ones.
--- | NOTE: Events are also cleared out.
--- restoreStack :: TransMonad m => (a -> TransIO b) -> m ()
--- restoreStack _= return ()
 
 
 
 -- Instances for Transient Monad
 
-
-instance (Monad m) => Functor (Transient r m) where
-    fmap f m = Transient $ \c -> runContT m $ \ mx->
-             case mx of
-                 Just x ->  c $ Just $ f x
-                 Nothing ->  return Nothing
+instance Functor TransIO where
+  -- Alabado sea Dios y Jesucristo su Hijo
+  fmap f mx = TransC $ \c -> runContT mx (c . f)
 
 
 -- | the applicative instance executes both terms in parallel if the first term executes in a different thread.
@@ -319,52 +398,125 @@ instance (Monad m) => Functor (Transient r m) where
 -- by the other term is not buffered and it is ignored.
 --
 -- It has also a Serial execution mode used for parsing. 
-instance  Applicative (Transient r StateIO) where
-  pure a  = Transient ($ Just a)
+instance Applicative TransIO where
+  pure :: a -> TransIO a
+  pure a  = TransC ($ a)
 
-  mf <*> mx = do
+  (<*>) :: TransIO (a -> b) -> TransIO a -> TransIO b
+  mf <*> mx = apTransIO mf mx
 
-    r1 <- liftIO $ newIORef Nothing
-    r2 <- liftIO $ newIORef Nothing
-    fparallel r1 r2 <|> xparallel r1 r2
+-- | The applicative of 'TransIO'. Each @<*>@ is a node with two sides, the left term L and the right term R, that
+-- can be other nodes, so it works with any number of terms.
+--
+-- == The log of the applicative
+--
+-- If the first term is asynchronous, L and R run in parallel in different threads. The thread that completes
+-- the node is the one that gets the last result, and its log would have only its own side: a remote node (or a
+-- restart) that replays it could not complete the applicative. The two 'IORef' of the node, that hold the result
+-- of each term, hold also what the term added to the log ('mfLog'):
+--
+--  * At the end of L, in whatever thread, @r1@ gets the value of L and the segments that L added to the log.
+--  * R starts with the log of the start of the node followed by a 'Pending' hole that reads @r1@: the log of L if
+--    it is known when the log is serialised, @w\/@ if it is not. The partial steps of L that its thread left in the
+--    log (e.g. its first endpoint) are not part of the log of R. At the end of R, @r2@ gets its value and its
+--    segments.
+--  * The thread that sees both results completes the node with the log of the start followed by the segments of L and
+--    of R, in whichever order they arrived.
+--
+-- Hash: L counts as one step (@hashTerm@), the same in every thread and in the replay of a log with @w\/@, whatever
+-- the number of statements of L. At the end of the node the hash advances with @hashApp@, also in the thread that
+-- gets no result from the node.
+--
+-- When L finishes in the same thread as R (an applicative of synchronous terms) nothing is added to the log.
+apTransIO :: TransIO (a -> b) -> TransIO a -> TransIO b
+apTransIO mf mx =  do
 
-    where
+    isapp <- gets isApplicative
+    modify $ \s ->s{isApplicative= True}
 
-    fparallel r1 r2= do
-      tr "fparallel"
-      f <- mf
-      liftIO $ writeIORef r1 (Just f)
-      mr <- liftIO (readIORef r2)
-      case mr of
-            Nothing -> empty
-            Just x  -> return $ f x
+    -- the log and the hash at the start of the node. Entering the node advances the hash, so the nodes nested in the
+    -- first term do not repeat the path of this one
+    Log{partLog= LogB seg0, hashClosure= hc} <- gets mfLog
+    let h0= hashStep hc hashNode
+    modify $ \s -> s{mfLog= (mfLog s){hashClosure= h0}}
+    let n0   = length seg0
+        hL   = hashStep h0 hashTerm     -- after the first term, whatever its steps
+        hEnd = hashStep h0 hashApp      -- after the node
 
-    xparallel r1 r2 = do
-      tr "xparallel"
-      mr <- liftIO (readIORef r1)
-      case mr of
-            Nothing -> do
+    r1 <- liftIO $ newIORef Nothing     -- value of the first term, the segments that it added to the log, and the thread that got it
+    r2 <- liftIO $ newIORef Nothing     -- the same for the second one
 
-              p <- gets execMode
-              tr ("EXECMODE",p)
-              if p== Serial then empty else do
+    let restoreflag= modify $ \s -> s{isApplicative= isapp}
+        setLog segs h= modify $ \s -> s{mfLog= (mfLog s){partLog= LogB segs, hashClosure= h}}
+        setHash h= modify $ \s -> s{mfLog= (mfLog s){hashClosure= h}}
+        addedSince n= gets $ \s -> let LogB segs= partLog (mfLog s) in drop n segs
 
-                       -- the first term may be being executed in parallel and will give his result later
-                       x <- mx
-                       liftIO (writeIORef r2 $ Just x)
+        -- the thread that sees both results completes the node
+        join ld rd= setLog (seg0 ++ ld ++ rd) hEnd
 
-                       mr <- liftIO (readIORef r1)
-                      --  tr ("XPARALELL",isJust mr)
-                       case mr of
-                         Nothing -> empty
-                         Just f  -> return $ f x
+        fparallel= do
+          tr "fparallel"
+          f <- mf
+          ld <- addedSince n0
+          me <- liftIO myThreadId
+          liftIO $ writeIORef r1 (Just (f, ld, me))
+          setHash hL
+          mr <- liftIO (readIORef r2)
+          case mr of
+                Nothing      -> empty
+                Just (x, rd) -> do join ld rd; return $ f x
 
+        xparallel= do
+          tr "xparallel"
+          mr <- liftIO (readIORef r1)
+          case mr of
+                Nothing -> do
+                  p <- gets execMode
+                  tr ("EXECMODE",p)
+                  -- the first term may be being executed in parallel and will give its result later
+                  if p== Serial then empty else runR
+                Just (_, ld, t) -> do
+                  me <- liftIO myThreadId
+                  -- the first term finished in this thread: its segments are already in the log, the second term goes
+                  -- on after them and only the hash is normalised. Otherwise (it finished in another thread while this
+                  -- one was starting) the log of this thread has to be rebuilt.
+                  if t == me then runSync ld else runR
 
-            Just f -> do
-              x <- mx
-              liftIO $ writeIORef r2 (Just x)
-              return $ f x
+        runSync ld= do
+          x <- mx
+          rd <- addedSince (n0 + length ld)
+          liftIO $ writeIORef r2 (Just (x, rd))
+          mr <- liftIO (readIORef r1)
+          case mr of
+            Nothing          -> empty
+            Just (f, _, _)   -> do setHash hEnd; return $ f x
 
+        runR= do
+          -- the log of the second term: the start of the node followed by a hole for the first term. If the first
+          -- term is not resolved when the log is serialised, the hole is what the first term has left in this thread
+          -- (the tokens @w\/@ of the terms that are pending, so a replay skips them), without the values that the
+          -- statements of the term get later: the term may go on after them. When it is resolved, the hole is
+          -- all that the term added.
+          pending <- addedSince n0
+          let frozen (Wait _)= Fixed $ string7 "w/"
+              frozen sg      = sg
+              hole= Pending $ do
+                      m <- readIORef r1
+                      return $ case m of
+                         Just (_, ld, _) -> LogB ld
+                         Nothing      -> LogB (map frozen pending)
+          setLog (seg0 ++ [hole]) hL
+          x <- mx
+          rd <- addedSince (n0 + 1)
+          liftIO $ writeIORef r2 (Just (x, rd))
+          mr <- liftIO (readIORef r1)
+          case mr of
+            Nothing      -> empty
+            Just (f, ld, _) -> do join ld rd; return $ f x
+
+    r <-  (fparallel <|> xparallel) <|> (restoreflag >> setHash hEnd >> empty)
+    restoreflag
+    return r
 
 
 
@@ -373,63 +525,57 @@ fullStop :: TransIO stop
 fullStop= do modify $ \s ->s{execMode= Remote} ; stop
 
 -- #ifndef BROWSER11
-instance   Monad (Transient r StateIO) where
-    return  = pure
-    m >>= k  = Transient $ \c -> runContT m (\a -> runContT (mayb k a) c)
-     where
-     mayb k (Just x)= k x
-     mayb _ Nothing =  empty
+instance Monad TransIO where
+  return   = pure
+  x >>= f  = TransC $ \c -> runContT x $ \a -> runContT (f a) c
 
 
 
+instance MonadIO TransIO where
+  liftIO x = TransC $ \c -> liftIO x >>= c
 
-lift m = Transient ((Just <$> m) >>=)
-
-instance  MonadIO (Transient r StateIO) where
-    liftIO = lift . liftIO
-
-instance (Monoid a) => Monoid (Transient r StateIO a) where
-    -- mappend x y = mappend <$> x <*> y
+instance Monoid a => Monoid (TransIO a) where
   mempty      = return mempty
 
 
-  -- mappend  = (<>)
+  mappend  = (<>)
 
-instance Monoid a => Semigroup (Transient r StateIO a) where
-    (<>)=  mappendt
+instance (Monoid a) => Semigroup (TransIO a) where
+  (<>)=  mappendt
 
--- | Lift 'mappend' into the 'Transient' monad: run both branches and combine their results.
+
+instance (Monoid a,Monad m) => Semigroup (StateT s m a) where
+  (<>)=  mappendt
+
+-- | Lift 'mappend' through the applicative, combining two monoidal computations.
 mappendt x y = mappend <$> x <*> y
 
 
-instance  Alternative (Transient r StateIO) where
-    empty=  Transient ( $  Nothing)
-    f <|> g= Transient $ \ k ->do
-              mr <- runContT f k
-              was <- gets execMode
-              if was == Remote
-                then return Nothing
-                else case mr of
-                  Nothing  -> runContT g k
-                  justr -> return justr
+-- | @x \<|\> y@ executes @y@ if @x@ does not produce a value for its continuation in this flow: it stops
+-- ('empty'), or its value is produced by other thread or event. If @x@ produced a value and the rest of the program
+-- stops, @y@ is not executed: the alternative is not a backtracking point.
+instance Alternative TransIO where
+    empty = TransC $ \_ -> return Nothing
+    (<|>) x y = TransC $ \k -> do
+                -- the continuation of x returns Just when it is reached by the flow of x. The events of x
+                -- run it in other flows (with other state) and the returned value is never seen here
+                mr  <- runContT x $ \a -> Just <$> k a
+                was <- gets execMode
+                if was == Remote
+                  then return Nothing
+                  else case mr of
+                        Nothing -> runContT y k
+                        Just r  -> return r
 
 
 
 
 
 
-
-
-instance MonadFail (Transient r StateIO) where
+instance MonadFail TransIO where
   fail = error
 
--- readWithErr :: (Typeable a, Read a) => Int -> String -> IO [(a, String)]
--- readWithErr n line =
---   (v `seq` return [(v, left)])
---      `catch` (\(_ :: SomeException) ->
---                 throw $ ParseError $ "read error trying to read type: \"" ++ show (typeOf v)
---                      ++ "\" in:  " ++ " <" ++ show line ++ "> ")
---   where (v, left):_ = readsPrec n line
+
 
 newtype ParseError= ParseError String
 
@@ -438,14 +584,12 @@ instance Show ParseError where
 
 instance Exception ParseError
 
--- | Like 'read' but throws 'ParseError' with type information on failure.
+-- | Total 'read': throws 'ParseError' instead of raising an impure error on parse failure.
 read' s= case readsPrec' 0 s of
     [(x,"")] -> x
-
     _  -> throw $ ParseError $ "reading " ++ s
 
-
--- | Like 'readsPrec' but wraps IO exceptions as 'ParseError'.
+-- | 'readsPrec' lifted to IO so that parse errors can be caught and re-thrown as 'ParseError'.
 readsPrec' n = unsafePerformIO . readWithErr n
 
   where
@@ -486,9 +630,29 @@ class AdditionalOperators m where
   -- | Run @m a@ discarding its result before running @m b@ .
   (**>)  :: m a -> m b -> m b
 
-  -- | Run @m b@ once, discarding its result, after @m a@ is
-  -- executed for the first time and before running other operation after it
+  -- | Run @m a@, then @m b@ (once, discarding its result), and return the result of @m a@.
   --
+  -- If @m b@ has events (a callback that resumes the computation, like the ones of 'react' or 'getMailbox'),
+  -- every time one happens the rest of @m b@ is executed, then @m a@ is __executed again__, and the computation
+  -- that follows @m a \<** m b@ continues with the new result of @m a@. The value of the event is not passed
+  -- on, and neither is the result of @m b@. If @m b@ has no events, @m a@ is executed only once.
+  --
+  -- It is meant for forms, where @m a@ reads the fields and @m b@ is the button that submits them:
+  --
+  -- > (name, age) <- render $ (,) <$> inputString Nothing <*> inputInt Nothing <** inputSubmit "send" `fire` OnClick
+  --
+  -- Each click executes the fields again, which read the content of the page, and continues with their result.
+  --
+  -- __This definition is necessary for @\<**@ to attend to events in its second term__, above all in Axiom (the web
+  -- widgets of the browser). When @m b@ resumes the computation, the continuation that is run is the one of the
+  -- point where the event was set. If @\<**@ did not push @m a@ in that continuation, the code that follows would receive
+  -- the value of the event (the button) instead of the result of @m a@ (the fields), and @m a@ would not read the page
+  -- again. Pushing it is what makes the fields be evaluated again in every event, and only then, with their current
+  -- content. See "GHCJS.HPlay.View" in Axiom, where the widgets are combined with this operator.
+  --
+  -- @m a@ is executed again with the same sequence of identifiers ('genId') that it had the first time. A widget that
+  -- creates an element in the page with an identifier takes the same one and finds it, instead of asking for a new one
+  -- that does not exist.
   (<**)  :: m a -> m b -> m a
 
   atEnd' :: m a -> m b -> m a
@@ -503,30 +667,44 @@ class AdditionalOperators m where
 
 
 
-instance AdditionalOperators (Transient  r StateIO) where
+instance AdditionalOperators TransIO where
 
-  (**>) f g =
-      Transient $ \k ->  runContT f $ \x -> runContT g  k
+  -- the events of x continue with the rest of the program, as in "Transient.LEngine": y is executed only once
+  (**>) :: TransIO a -> TransIO b -> TransIO b
+  (**>) x y = TransC $ \k -> do
+      runWith k x
+      runContT y k
 
-  (<***) f g =
-      Transient $ \k -> runContT f $ \mx -> do
-             case mx of
-                 Nothing -> return Nothing
-                 _ -> runContT g (const $ return Nothing) >>  k mx
+  -- an event in ma runs mb before the rest of the program
+  (<***) :: TransIO a -> TransIO b -> TransIO a
+  (<***) ma mb = TransC $ \k -> do
+      let again x = runContT (mb >> return x) k
+      a <- runWith again ma
+      runWith again mb
+      maybe (return Nothing) k a
 
-  (<**) f g =
-      Transient $ \k ->  runContT f $ \mx -> do
-             case mx of
-                 Nothing -> return Nothing
-                 _ -> runContT g (const $ return Nothing) >>  k mx
-
+  (<**) :: TransIO a -> TransIO b -> TransIO a
+  (<**) ma mb = TransC $ \k -> do
+      seq0 <- gets mfSequence
+      a <- runWith k ma
+      -- an event in mb continues executing ma again; its result is the one of the whole
+      runWith (\_ -> runContT (again seq0) k) mb
+      maybe (return Nothing) k a
+      where
+      -- ma is executed with the same sequence of identifiers as the first time, so that it finds again what it created
+      again seq0 = TransC $ \k -> do
+        seq1 <- gets mfSequence
+        modify $ \TranShip {..} -> TranShip { mfSequence = seq0, .. }
+        r <- runWith k ma
+        modify $ \TranShip {..} -> TranShip { mfSequence = seq1, .. }
+        maybe (return Nothing) k r
 infixl 4 <***, <**, **>
 
 
 
--- | Run @b@ once, discarding its result when the first task in task set @a@
--- has finished. Useful to start a singleton task after the first task has been
--- setup.
+-- -- | Run @b@ once, discarding its result when the first task in task set @a@
+-- -- has finished. Useful to start a singleton task after the first task has been
+-- -- setup.
 -- (<|) :: TransIO a -> TransIO b -> TransIO a
 -- (<|) ma mb = Transient $ do
 --   fs  <- getContinuations
@@ -544,8 +722,3 @@ infixl 4 <***, <**, **>
 --                     return $ Just x
 
 
-
-
-
-
--- * Threads
