@@ -1313,7 +1313,7 @@ testFinishInRemote= keep $ initNode $ inputNodes <|> do
           
   ttr("after teleport",r')
   r <- runAt (nodes !! 1) $ return "BACK"
-  ttr("after teleport",r)
+  ttr("after BACK",r)
 
  
 testCollectApplicativecut= keep $ do

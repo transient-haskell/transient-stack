@@ -307,3 +307,20 @@ executable assert-tests
             old-time
         ghc-options: -w -O0
         default-language: Haskell2010
+
+-- The distributed tests of assert-tests, each one in four nodes of the same machine. See tests/distributed/RunDistributed.hs
+--
+--   cabal test distributed
+--   DISTRIBUTED_ONLY="3 9" cabal test distributed
+test-suite distributed
+        type: exitcode-stdio-1.0
+        hs-source-dirs: tests/distributed
+        main-is: RunDistributed.hs
+        build-depends:
+            base > 4 && < 5,
+            process,
+            directory,
+            filepath
+        build-tool-depends: transient-universe:assert-tests
+        ghc-options: -w
+        default-language: Haskell2010

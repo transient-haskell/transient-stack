@@ -100,6 +100,9 @@ tests =
   , checkKeyedMailbox
   , checkRunAtSelfInCalledNode
   , checkOnNodesFromCalledNode
+  , checkChainOfThreeNodes
+  , checkAlternativeOfTwoRunAtToTheSameNode
+  , checkFiveSequentialCalls
   ]
 
 -- | The tests to run: all of them, or only those whose indices (positions in 'tests', starting at 0, separated
@@ -158,7 +161,7 @@ checkApplicativeWithRemote = loggedc $ do
 checkAlternativesWithAtRemote = loggedc $ do
       (node0:node1:_) <- local getNodes
       ttr "------checking alternatives  with atRemote --------"
-      r <- liftCloud (collect 2) $ wormhole node1 $ do
+      r <- liftCloud (collect 0) $ wormhole node1 $ do
                 let remoteReturn x = atRemote $ do
                         shouldRunIn node1
                         local $ return x
@@ -193,7 +196,7 @@ checkEmptyInRemoteNodeWhenTheRemoteCallbackToTheCaller = loggedc $ do
 checkAlternativeDistributed = loggedc $ do
       (node0:node1:node2:node3:_) <- local getNodes
       ttr "------checking Alternative distributed: distributed parallelism --------"
-      r <- liftCloud (collect 2) $
+      r <- liftCloud (collect 0) $
                           runAt node1 (shouldRunIn (node1) >> return "hello") <|>
                           runAt node2 (shouldRunIn (node2) >> return "world")
       onAll $ liftIO $ assert (sort r == ["hello", "world"]) $ print ("OK: alternative distributed", r)
@@ -236,6 +239,46 @@ checkReentrantDistributed = loggedc $ do
                     return r
       onAll $ liftIO $ assert (r == (("HELLO", "WORLD"), "WORLD2")) $ print ("OK: reentrant distributed", r)
       return "checkReentrantDistributed"
+
+-- | like 'checkReentrantDistributed', but each call goes to a node that has not been used before
+checkChainOfThreeNodes = loggedc $ do
+      (node0:node1:node2:node3:_) <- local getNodes
+      ttr "------------- checking a chain of three nodes ----------------"
+      r <- runAt node1 $ do
+              shouldRunIn (node1)
+              r <- local $ return "HELLO"
+              runAt node2 $ do
+                shouldRunIn (node2)
+                r <- local $ return (r, "WORLD")
+                runAt node3 $ do
+                  shouldRunIn (node3)
+                  return (r, "WORLD3")
+      onAll $ liftIO $ assert (r == (("HELLO", "WORLD"), "WORLD3")) $ print ("OK: chain of three nodes", r)
+      return "checkChainOfThreeNodes"
+
+-- | the alternative of two calls to the same node: each one has its own wormhole, and each one answers with its value
+checkAlternativeOfTwoRunAtToTheSameNode = loggedc $ do
+      (node0:node1:_) <- local getNodes
+      ttr "------------- checking the alternative of two runAt to the same node ----------------"
+      let remoteReturn x = runAt node1 $ do
+                shouldRunIn node1
+                local $ return x
+      r <- liftCloud (collect 0) $ remoteReturn "ALTER" <|> remoteReturn "NATIVE"
+      onAll $ liftIO $ assert (sort r == ["ALTER", "NATIVE"]) $ print ("OK: alternative of two runAt to the same node", r)
+      return "checkAlternativeOfTwoRunAtToTheSameNode"
+
+-- | five calls in sequence to the same node: the fifth one used to not come back
+checkFiveSequentialCalls = loggedc $ do
+      (node0:node1:_) <- local getNodes
+      ttr "------------- checking five sequential calls ----------------"
+      -- foldM, not forM: the applicative of Cloud would run the calls in parallel
+      rs <- foldM (\acc i -> do
+                r <- runAt node1 $ do
+                        shouldRunIn node1
+                        local $ return (i * 2)
+                return (acc ++ [r])) [] [1 .. 5 :: Int]
+      onAll $ liftIO $ assert (rs == [2, 4, 6, 8, 10]) $ print ("OK: five sequential calls", rs)
+      return "checkFiveSequentialCalls"
 
 checkNonSerializableMutableVariables = loggedc $ do
       (node0:node1:node2:node3:_) <- local getNodes
@@ -497,7 +540,16 @@ testFinishInRemote = keep $ initNode $ inputNodes <|> do
 
 -- | Start on each node, connect them with `inputNodes`, then type `go` on the
 -- leader to run every assert test in sequence. Each test asserts internally.
-main = keep $ initNode $ inputNodes <|> do
+--
+-- With the environment variable @ASSERT_COUNT@ set it only prints the number of tests: the driver of the cabal test-suite
+-- @distributed@ uses it to know which tests to run
+main = do
+  count <- lookupEnv "ASSERT_COUNT"
+  case count of
+    Just _  -> print (length tests) >> return (Right ())
+    Nothing -> mainNodes
+
+mainNodes = keep $ initNode $ inputNodes <|> do
     local $ option ("go" :: String) "run the assertion test suite"
     nodes <- local getNodes
     localIO $ putStrLn $ "nodes connected: " ++ show nodes

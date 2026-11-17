@@ -1783,7 +1783,8 @@ collectSignal saveOnSignal  number time proc'= localBack (Finish "") $ do
                 c <- liftIO $ fromJust <$> readIORef (parent cont)
 
                 -- localBack finish to preserve the current stack of finalizations
-                localBack (Finish "") $ put c{mfData= mfData cont} -- set the state of the inital thread. Glory to our Savior Jesus Christ
+                -- the path goes on with a fixed step, the same in all the nodes and whatever thread finishes the collect
+                localBack (Finish "") $ put c{mfData= mfData cont, mfLog= (mfLog cont){hashClosure= hashStep (hashClosure (mfLog cont)) hashTerm}} -- set the state of the inital thread. Glory to our Savior Jesus Christ
                 
                 forward (Finish "");
 
@@ -2110,7 +2111,7 @@ newtype Finish= Finish String deriving Show
 -- >  r <- collect 2 $ do
 -- >      r <- liftIO $ randomRIO(1,10:: Int)
 -- >      onFinish $ const $ tr ("1FINISH",r )
--- >      x <-  for [i.. i+10 ::Int]
+-- >      x <-  for [1.. 10 ::Int]
 -- >      liftIO $ threadDelay 10000
 -- >      onFinish $ const $ tr ("2FINISH",x )
 -- >      tr ("RS",x)
@@ -2136,11 +2137,16 @@ newtype Finish= Finish String deriving Show
 --
 
 onFinish :: (String -> TransIO ()) -> TransIO ()
-onFinish mx= hookedThreads $ do
+onFinish = onFinish' True
+
+-- | 'onFinish' with a parameter that tells whether the thread of the continuation is abduced. With 'False' the handler is
+-- registered without changing the thread that goes on after it.
+onFinish' :: Bool -> (String -> TransIO ()) -> TransIO ()
+onFinish' abd mx= hookedThreads $ do
     -- id' <-  show <$> genNewId
     -- let id = "finish" <> id'
 
-    anyThreads abduce    -- needed when mx has threads 0
+    when abd $ anyThreads abduce    -- needed when mx has threads 0
     cont <- get
 
     done <- liftIO $ newIORef False  --finalization already executed?

@@ -330,13 +330,6 @@ concurrentCloud cl=   do
 
 
 
--- NOTE: erroneous since it deletes the data before the return of a remote invocation it must be after it
--- concurrent= error "CONCURRENT: pending"
-
--- -- | used for lifting primitives that are concurrent in the TransIO monad to perform
--- -- concurrent distributed computations like `collect`
--- liftConcurrent :: Loggable b => (TransIO a -> TransIO b) -> Cloud a -> Cloud b
--- liftConcurrent f x= concurrentCloud $ liftCloud f x
 
 -- | Run @x@ aside and go on with the computation (the 'Cloud' version of a fork). 'abduce' is logged: the log of the
 -- branch of @x@ has its result and the log of the other branch has the @w\/@ of the alternative, so a replay knows
@@ -346,10 +339,13 @@ forkCloud x= (local abduce >> x >> empty) <|> return ()
 
 -- | lift a TransIO computation which accept a TransIO parameter, like, for example, `threads` etc, to the Cloud monad. Just in case this ope
 liftCloud :: Loggable b => (TransIO a -> TransIO b) -> Cloud a -> Cloud b
-liftCloud f (Cloud x) = Cloud $  f x
---  do
---     log <- getLog
---     if not $ recover log then f x else x >> empty
+liftCloud f (Cloud x) = local $ do
+   r <- f x
+   -- only the calling node goes on: in the called node the computation lifted ends with the response of its endpoint
+   -- (nothing has been collected there) and must not go on with the code that follows
+   c <- tryState
+   guard $ calling c
+   return r
     -- do NOT work without concurrent in concurrent since any furter invocation to any endpoint in the remote node will be sliently stopped
     -- because the emptyu after x. it is necessary to filter any endpoint withing the expression.
 
@@ -599,10 +595,10 @@ getSession= do
   A second teleport in the same wormhole brings back the execution to the original node. and so on
 -}
 
-refff= lazy $ newIORef 0
-stopAt n = do
-  r <- liftIO $ atomicModifyIORef refff $ \r ->(r+1,r)
-  when (r>=n) $ exit ()
+-- refff= lazy $ newIORef 0
+-- stopAt n = do
+--   r <- liftIO $ atomicModifyIORef refff $ \r ->(r+1,r)
+--   when (r>=n) $ exit ()
 
 teleport :: Cloud ()
 teleport =  do 
@@ -622,7 +618,18 @@ teleport =  do
   -- ttr ("teleport app",app)
   -- when (not app) $ 
     -- endpoint must be here even with applicative since it return the remote response of each remote app term
-  onAll $ endpoint Nothing <|> guard (not $ recover log)
+  -- the finish of the call is registered before the endpoint, so that the listener of the endpoint is within its scope
+  when (calling conn && not (recover log)) $ onAll $ notifyCalledNode conn
+  -- The arrival of the call in the called node (the second teleport): the thread that arrives does not go on, the
+  -- computation goes on by the message injected in the endpoint. The alternatives after the term of the call belong to
+  -- the caller, so they must not be executed here, except if the term is skipped by a "w/" in the log: then it is the
+  -- alternative which has to run. In an applicative the next term must run, so nothing is marked there
+  onAll $ endpoint Nothing <|> do
+            app <- gets isApplicative
+            when (recover log && not (calling conn) && not app) $ do
+              segment <- if null (restLog log) then return mempty else toLazyByteString <$> firstFragment (restLog log)
+              unless ("w/" `BS.isPrefixOf` segment) $ modify (\s -> s {execMode = Remote})
+            guard (not $ recover log)
   -- In the called side of a replay, the closure to respond to is the closure with the name of the endpoint just
   -- created (the names of the endpoints are the same in all the nodes, since they depend on the position in the
   -- program). It can not be the one of the last message processed, which may belong to an inner level.
@@ -636,7 +643,7 @@ teleport =  do
 
     -- executed in run mode and in recover mode when "e" is in the log
     -- notify to the calling teleport when no remaining threads are running in the remote node
-    -- when (recover log && not (calling conn)) $ setNotifyFinishToCallingNode conn
+    when (recover log) $ notifyCallingNode conn
 
     when ( (not $ recover log)) $ do
 
@@ -744,34 +751,39 @@ calledConn c = do
           Nothing -> return c
     _ -> return c
 
--- notify to the calling teleport when no remaining threads are running in the remote node
-setNotifyFinishToCallingNode :: Connection -> TransIO ()
-setNotifyFinishToCallingNode conn = do
+-- | Notify the node that called, when no threads remain here (the finish of the endpoint of the called node): its call has
+-- finished in this node. It is a 'SLast' without log to the closure to respond to. It is registered after the endpoint,
+-- when it is a replay, since the closure to respond to is set after the endpoint.
+notifyCallingNode :: Connection -> TransIO ()
+notifyCallingNode conn = do
     -- check if it is my node TODO
     mctr <- getData
     PrevClos prevClosDBRef _ _ _ _ :: PrevClos <- getData `onNothing` noExState "teleport" -- return (PrevClos  0 "0" False)
-
-    case mctr of
-      Nothing -> tr "NO CLOS TO RESPOND"
-      Just (ClosToRespond ref) -> do
-        tr ("SETTING ONFINISH for remote",ref)
-
-        onFinish $ const $ do
-          -- remove the EVar waiting for messages from the remote node
-          -- PrevClos prevClosDBRef _ _<- getData `onNothing` error "teleport: no execution state" -- return (PrevClos  0 "0" False)
+    onFinish' False $ const $ do
           tr ("ONFINISH IN TELEPORT",prevClosDBRef)
-
-          -- lc <- liftIO $ atomically $ readDBRef prevClosDBRef `onNothing` error "teleport: no prevclos"
-          -- tr ("prevClosDBRefs",prevClosDBRef)
-          -- cleanEVar $ fromJust $ localEvar lc
-
-          let (sessRemote,closRemote)= getSessClosure ref
-          tr ("TRIGGERING  ONFINISH in teleport from to",prevClosDBRef,ref,"closremote=",closRemote)
-          when (closRemote /= closureId0) $ do
-            log <- getLog
-            when (not $ recover log) $ do
-              tr ("TELEPORT ONFINISH SEND TO",prevClosDBRef,ref, recover log)
+          forM_ mctr $ \(ClosToRespond ref) -> do
+            let (sessRemote,closRemote)= getSessClosure ref
+            when (closRemote /= closureId0) $ do
               msend conn $ toLazyByteString $ serialize $ SLast $ ClosureData closRemote sessRemote closureId0 sessionId0 mempty
+
+-- | Notify the node that was called, when no threads remain here (the finish of the endpoint of the call in the calling
+-- node): nothing here depends on the call any more, so what hangs from the endpoint of the same name in the called node,
+-- which is the computation started by the call, must be killed. It is a 'SLast' with 'killClosureId' as origin.
+-- It is registered before the endpoint of the call, which must be the one of a run (not a replay).
+notifyCalledNode :: Connection -> TransIO ()
+notifyCalledNode conn = do
+    PrevClos prevClosDBRef mn _ _ _ :: PrevClos <- getData `onNothing` noExState "teleport"
+    log <- getLog
+    -- the endpoint of the call has the name of the position in the program and the session in force: they are the same in
+    -- the called node, where it is the endpoint of the arrival
+    let sess= fromMaybe (fst $ getSessClosure prevClosDBRef) mn
+        clos= ClosureId $ BC.pack $ show $ hashClosure log
+    -- a visit to an endpoint that is already active (another alternative of the same call) has not the listener of the
+    -- endpoint in its scope, so its finish would fire as soon as its thread ends: the first visit, which owns the
+    -- listener, is the one that orders the kill
+    mclos <- liftIO $ atomically $ readDBRef (getDBRef (kLocalClos sess clos) :: DBRef LocalClosure)
+    unless (maybe False (isJust . localEvar) mclos) $ onFinish' False $ const $ do
+          msend conn $ toLazyByteString $ serialize (SLast $ ClosureData clos sess killClosureId sessionId0 mempty :: StreamData NodeMSG)
 
 
 -- | forward exceptions back to the calling node

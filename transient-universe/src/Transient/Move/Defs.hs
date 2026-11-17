@@ -277,7 +277,10 @@ data LocalClosure = LocalClosure
     -- | The key of the closure this one is a copy of, when it was made by a jump to another session (@#source-new@).
     -- It is persisted: after a restart, a message for a copy that is not alive goes to its source if the source is
     -- alive, which is where the state shared by the sessions lives (a 'Transient.Move.Job.collectc').
-    localSource   :: Maybe String
+    localSource   :: Maybe String,
+    -- | The number of visits of a run to this endpoint while its subscription is active. It is not persisted. The
+    -- subscription is kept until the same number of final messages has arrived, since each visit expects its own.
+    localVisits   :: Int
   }
 
 instance Show LocalClosure where show lc= keyResource lc
@@ -419,12 +422,15 @@ instance TC.Serializable LocalClosure where
     let (localClos,localSession, prevClos, logstr, localCaller, localSource) = TC.deserialize str
         localLog = fragmentFromString logstr
         block = unsafePerformIO $ newMVar ()
-     in LocalClosure (ClosureId localClos) (SessionId localSession)   prevClos  localLog  block Nothing Nothing localCaller localSource
+     in LocalClosure (ClosureId localClos) (SessionId localSession)   prevClos  localLog  block Nothing Nothing localCaller localSource 1
 
 dbClos0= getDBRef $ kLocalClos sessionId0 closureId0 :: DBRef LocalClosure
 
 sessionId0= SessionId "0"
 closureId0= ClosureId "0"
+
+-- | The closure of origin of a message that orders to kill what hangs from the closure of destination in the receiver node
+killClosureId= ClosureId "kill"
 
 type Pool = [Connection]
 type SKey = String
@@ -473,9 +479,11 @@ instance Loggable NodeMSG where
       <*> (SessionId <$> readit)
       <*> (ClosureId <$> readit)
       <*> (SessionId <$> readit)
-      <*>  coerce (deserialize :: TransIO [FragmentType])
+      <*>  coerce (noFragments <|> deserialize :: TransIO [FragmentType])
 
     where
+      -- the empty list: the parser of a fragment would take the closing bracket as a fragment (notification of the end of a request)
+      noFragments = withGetParseString $ \s -> if BL.take 2 s == BL.pack "[]" then return ([], BL.drop 2 s) else empty
       readit= BL.toStrict <$> tTakeWhile (/= '/') <* tChar '/'
       restOfIt = lazyByteString <$> giveParseString
 

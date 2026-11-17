@@ -28,7 +28,7 @@ module Transient.Move.Logged(Cloud(..),
 Loggable(..), logged, logged', endpoint, received, param, getLog, exec,wait, emptyLog,
  Log(..),hashExec,genPersistId,persistDBRef,firstCont,
   firstEndpoint,dbClos0, noExState, setLastClosureForConnection,getLastClosureForConnection,updateLastClosureForConnection,setLog,
-  processMessage, sendToClosure, getClosureLog, getClosureLogFrom) where
+  processMessage, sendToClosure, getClosureLog, getClosureLogFrom, firstFragment) where
 
 import Data.Typeable
 import Data.Maybe
@@ -109,9 +109,11 @@ genPersistId = liftIO $
 -- | Block on the closure's 'EVar' waiting for the next incoming message
 -- ('SMore' or 'SLast'), then update the connection, headers, and log so
 -- that execution resumes in the correct context.
-receive1 ::  LocalClosure -> TransIO ()
+receive1 ::  Bool -> LocalClosure -> TransIO ()
 
-receive1  lc = do
+-- the first parameter is True when the endpoint is the one of a teleport (it has no name): only then the session of the
+-- responses is adopted. The named endpoints (minput) keep the session
+receive1  isTeleport lc = do
   guard (isJust  $ localEvar lc) <|> error "receive: No EVar"
   conn <- tryState
 
@@ -119,9 +121,13 @@ receive1  lc = do
   labelState $ "endpoint " <> let ClosureId id =localClos lc in id
 
   let ev= fromJust $ localEvar lc
-  -- ctr :: Maybe ClosToRespond <- getData
+  ctr :: Maybe ClosToRespond <- getData
+  lg <- getLog
 
-  mr <- readEVar ev -- if isJust ctr then readEVar1 ev else readEVar ev
+  -- the endpoints of the arrival of the request in the called node (the second) and of the return in the calling node (the fourth) are read
+  -- once: both have a closure to respond to and are created in a replay. The third one (the response) stays active
+  -- each visit has its own subscription, identified to remove only it when its last message arrives
+  mr <- if isJust ctr && recover lg then readEVar1 ev else readEVar ev
 
   -- tr ("RECEIVED", mr)
 
@@ -129,8 +135,18 @@ receive1  lc = do
     Right (SDone, _, _, _,_)    -> error "endpoint/teleport: SDone not expected"
     Right (SError e, _, _, _,_) -> error $ show ("unexpected remote error:",e)
     Right (SLast logs, s2, closr, map, isfromremote) -> do
-      cleanEVar ev
-      liftIO $ writeResource lc{localEvar = Nothing}
+      -- each visit of a run expects its own final message: the subscription is removed when the last one arrives
+      visits <- liftIO $ atomically $ do
+        let dbr= getDBRef (keyResource lc) :: DBRef LocalClosure
+        cur <- readDBRef dbr
+        case cur of
+          Just c | localVisits c > 1 -> writeDBRef dbr c {localVisits = localVisits c - 1} >> return (localVisits c)
+          _ -> return 1
+      when (visits <= 1) $ do
+        cleanEVar ev
+        liftIO $ writeResource lc{localEvar = Nothing}
+      -- the finish of the called node ('notifyCallingNode') carries no log: there is nothing to continue with
+      when (null logs) empty
       let conn' = fromMaybe (error "receive1: no connection") $ unsafeCoerce $ M.lookup (typeOf (ofType :: Connection))  map
 
       -- let hdrs= fromMaybe (unsafeCoerce emptyHeaders) $ unsafeCoerce $ M.lookup (typeOf (ofType :: HTTPHeaders))  map
@@ -143,8 +159,14 @@ receive1  lc = do
 
       -- a closure within an applicative term can not be the last one: the other term would not be resolved there
       when isfromremote $ do
-        PrevClos{isApplicativ= app} <- getData `onNothing` noExState "receive1"
+        pc@PrevClos{isApplicativ= app} <- getData `onNothing` noExState "receive1"
         when (not app) $ setLastClosureForConnection (idConn conn)  (getDBRef (kLocalClos s2 closr))
+        -- the endpoints that follow are created in the session of the remote closure that answered: the names of the
+        -- endpoints are the same in all the nodes, and so must be their sessions
+        -- the first endpoint of a call (the calling node, not in recover) receives the responses of the third: the
+        -- endpoints that follow are created in the session of the remote closure that answered, since the names of the
+        -- endpoints are the same in all the nodes, and so must be their sessions
+        when (isTeleport && calling conn && not (recover lg)) $ setState pc{pnewSession= Just s2}
 
       setLog (idConn conn') logs s2 closr
 
@@ -160,8 +182,14 @@ receive1  lc = do
     
       -- a closure within an applicative term can not be the last one: the other term would not be resolved there
       when isfromremote $ do
-        PrevClos{isApplicativ= app} <- getData `onNothing` noExState "receive1"
+        pc@PrevClos{isApplicativ= app} <- getData `onNothing` noExState "receive1"
         when (not app) $ setLastClosureForConnection (idConn conn)  (getDBRef (kLocalClos s2 closr))
+        -- the endpoints that follow are created in the session of the remote closure that answered: the names of the
+        -- endpoints are the same in all the nodes, and so must be their sessions
+        -- the first endpoint of a call (the calling node, not in recover) receives the responses of the third: the
+        -- endpoints that follow are created in the session of the remote closure that answered, since the names of the
+        -- endpoints are the same in all the nodes, and so must be their sessions
+        when (isTeleport && calling conn && not (recover lg)) $ setState pc{pnewSession= Just s2}
 
 
       setData conn'{calling= calling conn}
@@ -236,18 +264,20 @@ endpoint1  maybeName = do
       case mr of
         Just locClos@LocalClosure {..} -> do
           tr "found dblocalclos"
-          closure <- if nullLog partLog -- two consecutive endpoints
-            then return locClos
-            else do 
-              ev <-  newEVar 
-              return locClos {localEvar = Just ev, localCont = Just cont,localLog= 
+          let newLog =
                       if  recover  then localLog               -- unaltered
                       else if  iscollect  then  Collect $ partLog:
                         case localLog of
                           Collect rest -> rest -- all the paths are stored in the closure log
                           Fragment rest -> [rest]
                           other -> error $ "teleport, collect mismatch: " <> show other
-                      else Fragment partLog}                          -- only the current and remove the previous
+                      else Fragment partLog                    -- only the current and remove the previous
+          closure <- if nullLog partLog then return locClos     -- two consecutive endpoints: it is reused
+            else if isJust localEvar && not recover             -- the endpoint is active: it keeps its subscription, but
+              then return $ locClos {localLog = newLog, localVisits = localVisits + 1}  -- the response to send is the one of this visit
+            else do 
+              ev <-  newEVar 
+              return locClos {localEvar = Just ev, localCont = Just cont, localLog = newLog}
           -- preservePath= True
           setState (PrevClos dblocalclos Nothing True isapp iscollect :: PrevClos)
           -- A replay that revisits an endpoint whose continuation is alive does not replace it: the messages addressed to
@@ -284,7 +314,8 @@ endpoint1  maybeName = do
                     localMvar = mv,
                     localCont = Just cont,
                     localCaller = mcaller,
-                    localSource = Nothing
+                    localSource = Nothing,
+                    localVisits = 1
                   }
 
 
@@ -335,11 +366,12 @@ endpoint1  maybeName = do
                   -- setParseString sets the Serial mode, which would stop the alternative computation if it is the
                   -- second term of an applicative (see xparallel in Transient.LEngine)
                   modify $ \s -> s{execMode= mode}
-                  -- in an applicative, the hash advances as the execution that wrote the "w/" did (see addWait in
-                  -- logged): the statement that skipped is not replayed, so its step must be applied here
+                  -- the hash advances as the execution that wrote the "w/" did: in an applicative (see addWait in
+                  -- logged) and in an alternative (see the other branch). The statement that skipped is not replayed, so
+                  -- its step must be applied here, or the alternative would get the name of the endpoint that is skipped
                   app <- gets isApplicative
                   void $ modifyLog (\l -> l {recover = True, partLog=mempty,restLog= tail restLog
-                                              ,hashClosure= if app then hashStep hash hashTerm else hashClosure l})
+                                              ,hashClosure= if app then hashStep hash hashTerm else hashStep (hashStep hash hashExec) hashWait})
                   
                 else do
                   tr "set the log for alternative computation"
@@ -351,13 +383,16 @@ endpoint1  maybeName = do
         injectHere <|> leaveToAlternative
         
 
-  receive1 closure <|> void injectNextSegment   
+  -- an active endpoint that is visited again by a run (not a replay) keeps its single subscription: another one would
+  -- run its continuation twice for each message. The visit is counted in 'localVisits'
+  let reused = not recover && maybe False (\lc' -> not (nullLog partLog) && isJust (localEvar lc')) mr
+  (if reused then empty else receive1 (isNothing maybeName) closure) <|> void injectNextSegment
   log <- getLog
   return ()
 
 
 -- | first endpoint for cloud applications. It is internally used by initNode
-firstEndpoint= firstCont >>= receive1
+firstEndpoint= firstCont >>= receive1 False
 
 
 -- | first checkpoint to be serialized in cloud applications that do not use distributed/web computing.
@@ -382,7 +417,8 @@ firstCont =  do
             localMvar = mv,
             localCont = Just cont,
             localCaller = Nothing,
-            localSource = Nothing
+            localSource = Nothing,
+                    localVisits = 1
           }
 
   liftIO $ atomically $ writeDBRef dbClos0 this
@@ -645,7 +681,12 @@ processMessage s1@(SessionId ss1) closl s2 closr mlog deleteClosure = do
         return()
         processMessage (SessionId s) closl  s2 closr mlog deleteClosure
 
-      _ -> do
+      _ | closr == killClosureId -> do
+          -- the order of the caller to kill what hangs from this endpoint: the computation that was started by the call
+          mcont <- liftIO $ atomically $ readDBRef (getDBRef (kLocalClos s1 closl) :: DBRef LocalClosure)
+          forM_ (mcont >>= localCont) $ liftIO . killChildren
+          return Nothing
+        | otherwise -> do
 
           mcont <- liftIO $ atomically $
               readDBRef (getDBRef (kLocalClos s1 closl) :: DBRef LocalClosure)
