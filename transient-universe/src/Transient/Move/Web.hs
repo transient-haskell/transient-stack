@@ -281,7 +281,7 @@ minput (ident :: String) msg' = onAll $ sandboxData (ofType :: ClosToRespond) $ 
     
       endpointEtc= do
         
-        endpoint (Just $ BC.pack ident)
+        endpointPinned (Just $ BC.pack ident)  -- the request can arrive after a restart: its closure and the path to it are stored
         -- for cross-sessions where there is a jump
         -- in which one user/session invokes a link/endpoint of another
         mmfdata <- getSessionData

@@ -66,6 +66,7 @@ counted, not read by eye.
 | `AppJob both` (and `seqjob`: the caller restarts while the remote stays up) | `runboth.sh <tag> <n1\|n0> <binary> <port>` | the caller and the remote node die together while the remote waits, and restart in either order. Works restarting either node first. With an applicative (`caller`, `injob`) and the caller dead, the result arrives twice: the job stays inside the applicative |
 | `AppJob both` + `runping.sh <tag> <binary> <port>` | the caller sends to a node that is down; the job waits for it; when the node starts with its jobs it greets the known nodes and the caller launches the job again |
 | `AppJob task` | `runajob.sh <tag> task n0 <binary> <port>` | `jobTask`: closed only when the task is completed. If the caller falls before, the task is executed again (at least once) |
+| `AppJob files` | `runfiles.sh <tag> <binary> <port> [files\|chain]` (`chain`: the job is in the called node and every closure on the path up from it is stored too) | which closures are written to files: with `jobTask (runAt ...)` running, n0 stores only the closure of the job (count > 0, none with count 0) and n1, the `runAt` target, stores none; when the task ends, n0 stores none. The runAt finishes without error. The nodes get the console command `save` to flush the cache |
 | `AppMinput` | `runminput.sh` | applicative of REST inputs (`minput`) |
 | `AssertTests` | `runassert.sh <tag> <binary> <port>`, `assertone.sh <index> <binary> <port>` | the assertion suite (four nodes). `assertone.sh` runs one test (`ASSERT_ONLY`) and reads `RESULT.txt` |
 

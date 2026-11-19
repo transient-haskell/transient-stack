@@ -10,6 +10,9 @@
 --   seqterm   the first term is a sequence of two remote calls, no job
 --   seqjob    job; localIO; runAt n1 (body with a job); the caller dies and restarts while n1 stays up
 --             (n1 answers over a new connection: the reader of the incoming connection marks it closed at EOF)
+--   files     jobTask around a runAt: while the task runs, only the closures on the path of its job are in the files
+--             of the node (see runfiles.sh); when it ends, none
+--   chain     runAt n1 (job inside): in n1 the path of closures from the job up is stored (runfiles.sh chain)
 --   injob     a job inside the first term of the applicative (the job is executed)
 -- The result must arrive once at the caller: "RESULT <value>".
 --
@@ -64,6 +67,12 @@ main = void $ keep $ initNode $ inputNodes <|> do
     "task"    -> jobTask $ do
                     localIO $ putStrLn "CALLER AFTER JOB"
                     (,) <$> runAt n1 (plain 1 slow) <*> runAt n2 (plain 2 slow)
+    "chain"   -> do a <- runAt n1 (body 1 slow)    -- the job is in n1, after the closures of the call: all of them are stored
+                    return (a, 0)
+    "files"   -> jobTask $ do
+                    localIO $ putStrLn "CALLER AFTER JOB"
+                    a <- runAt n1 (plain 1 slow)
+                    return (a, 0)
     "caller"  -> do job
                     localIO $ putStrLn "CALLER AFTER JOB"
                     (,) <$> runAt n1 (plain 1 500000) <*> runAt n2 (body 2 slow)

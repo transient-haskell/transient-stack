@@ -74,5 +74,9 @@ expect "both nodes fall, the called one restarts first"            'RESULT \(1,0
 expect "both nodes fall, the caller restarts first"                'RESULT \(1,0\);  BACK: 1' ./runboth.sh b2 n0 ajob 9800
 expect "ping: the called node starts after the call failed"        'RESULT \(1,0\);  BACK: 1' ./runping.sh pg ajob 9810
 
+expect "files: only the closures of a job are stored, not the runAt ones" 'n0 during: closures=1 counted=1 zero=0;;n1 during: closures=0;;n0 after: closures=0 jobs=0;;RESULT \(1,0\); BACK: 1;;errors: $' ./runfiles.sh f1 ajob 9980
+
+expect "files: the closures of the path to a job are all stored" 'n1 during: closures=2 counted=2 zero=0 broken-path=0;;n0 during: broken-path=0;;n0 after: closures=0 jobs=0;;RESULT \(1,0\); BACK: 1;;errors: $' ./runfiles.sh f2 ajob 9990 chain
+
 echo "$((n - FAILS)) of $n scenarios passed"
 exit $FAILS

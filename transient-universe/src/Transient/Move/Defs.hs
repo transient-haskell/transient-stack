@@ -32,7 +32,7 @@ import Transient.Move.Browser (WebSocket)
 
 import Data.CaseInsensitive (CI)
 import Data.Typeable
-import Data.Maybe (fromMaybe)
+import Data.Maybe (fromMaybe,isJust,isNothing)
 import Data.Default
 import Control.Exception
 import System.IO.Unsafe
@@ -280,7 +280,11 @@ data LocalClosure = LocalClosure
     localSource   :: Maybe String,
     -- | The number of visits of a run to this endpoint while its subscription is active. It is not persisted. The
     -- subscription is kept until the same number of final messages has arrived, since each visit expects its own.
-    localVisits   :: Int
+    localVisits   :: Int,
+    -- | Reference count of the jobs that need this closure persisted: the jobs created in it plus one for each child
+    -- closure that is itself needed (see 'addJobRef'). It is persisted. A closure with count 0 is not written to disk:
+    -- only the closures on the path of a job are rehydrated when the program is restarted.
+    localJobs     :: Int
   }
 
 instance Show LocalClosure where show lc= keyResource lc
@@ -417,12 +421,46 @@ instance {-# OVERLAPPABLE #-}  (Show a, Read a) => TC.Serializable a where
   deserialize = read . BL.unpack
 
 instance TC.Serializable LocalClosure where
-  serialize LocalClosure {localClos=ClosureId c,localSession=SessionId s,..} = TC.serialize (c,s, prevClos, fragmentToString localLog, localCaller, localSource)
+  serialize LocalClosure {localClos=ClosureId c,localSession=SessionId s,..} = TC.serialize (c,s, prevClos, fragmentToString localLog, localCaller, localSource, localJobs)
   deserialize str =
-    let (localClos,localSession, prevClos, logstr, localCaller, localSource) = TC.deserialize str
+    let (localClos,localSession, prevClos, logstr, localCaller, localSource, localJobs) = TC.deserialize str
         localLog = fragmentFromString logstr
         block = unsafePerformIO $ newMVar ()
-     in LocalClosure (ClosureId localClos) (SessionId localSession)   prevClos  localLog  block Nothing Nothing localCaller localSource 1
+     in LocalClosure (ClosureId localClos) (SessionId localSession)   prevClos  localLog  block Nothing Nothing localCaller localSource 1 localJobs
+
+  -- The closures that no job needs are not stored: writing one removes its file, if it had one from the time when it
+  -- was needed. The reads do not inspect the closure, which is undefined in that case.
+  setPersist lc = Just TC.Persist
+    { TC.readByKey = TC.readByKey TC.getDefaultPersist
+    , TC.write     = if localJobs lc > 0 then TC.write TC.getDefaultPersist else \k _ -> TC.delete TC.getDefaultPersist k
+    , TC.delete    = TC.delete TC.getDefaultPersist }
+
+-- | Add @d@ (+1 or -1) to the job count of a closure. When the count changes between 0 and non zero, the previous closure
+-- is counted too, so that the path from a job to the root is stored while the job exists, and only that path.
+addJobRef :: Int -> DBRef LocalClosure -> STM ()
+addJobRef d dbr = unless (dbr == dbClos0) $ do
+  c <- readDBRef dbr `onNothing` error ("addJobRef: closure not found " <> keyObjDBRef dbr)
+  let n = localJobs c
+      n'= n + d
+  writeDBRef dbr c{localJobs= n'}
+  -- the invariant is: a closure with count > 0 has all its previous closures with count > 0. So the walk up stops at the
+  -- first closure whose count does not change between zero and non zero: from there up, the path is already counted
+  when ((n == 0) /= (n' == 0)) $ addJobRef d (prevClos c)
+
+-- | Register a job in TCache and count it in its closure. It does nothing if the job exists: a replay after a restart
+-- executes the 'Transient.Move.Job.job' again.
+newJob :: Job -> STM ()
+newJob j = do
+  let dbr= getDBRef (keyResource j) :: DBRef Job
+  mj <- readDBRef dbr
+  when (isNothing mj) $ writeDBRef dbr j >> addJobRef 1 (jobClosure j)
+
+-- | Remove a job from TCache and discount it from its closure. It does nothing if the job does not exist.
+delJob :: Job -> STM ()
+delJob j = do
+  let dbr= getDBRef (keyResource j) :: DBRef Job
+  mj <- readDBRef dbr
+  when (isJust mj) $ delDBRef dbr >> addJobRef (-1) (jobClosure j)
 
 dbClos0= getDBRef $ kLocalClos sessionId0 closureId0 :: DBRef LocalClosure
 

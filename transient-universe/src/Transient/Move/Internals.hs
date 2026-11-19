@@ -729,7 +729,7 @@ finishJob :: TransIO ()
 finishJob = do
   mjob <- getData :: TransIO (Maybe Job)
   forM_ mjob $ \j -> unless (jobScoped j) $ do
-    liftIO $ atomically $ delDBRef (getDBRef $ keyResource j :: DBRef Job)
+    liftIO $ atomically $ delJob j
     delState j
 
 -- | The connection to respond to. In a called side whose connection is a Self connection (the replay of a job

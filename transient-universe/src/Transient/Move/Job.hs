@@ -119,7 +119,7 @@ jobWith scoped mname  =  local  $ sandboxData (ofType:: PrevClos) $ do
 
   myNode <- getMyNode
   let this= Job thisclos myNode Nothing scoped
-  liftIO $ atomically $ newDBRef this
+  liftIO $ atomically $ newJob this
 
   setData  this
   onException $ \(e :: SomeException) -> do
@@ -132,7 +132,7 @@ jobWith scoped mname  =  local  $ sandboxData (ofType:: PrevClos) $ do
 -- | Remove a job from TCache and clear it from the current state.
 jobRemove :: Job -> TransIO ()
 jobRemove job= do
-      liftIO $ atomically $ delDBRef  (getDBRef $ keyResource job :: DBRef Job)
+      liftIO $ atomically $ delJob job
       delState job
 
 
@@ -156,7 +156,7 @@ runJobs= forkCloud $ do
     onException  $ \(SomeException e) -> do lockOut $ putStrLn $ "no jobs to send to node: " <> show node;  empty -- if the index o jobs does not exist, do nothing
     dbrjobs <- liftIO $ atomically $  jobNode .==. node :: TransIO [DBRef Job] 
     rjob <- for dbrjobs
-    liftIO $ atomically $ delDBRef  rjob
+    liftIO $ atomically $ readDBRef rjob >>= mapM_ delJob
     lockOut $ putStrLn "jobs removed"
 
   execJobs = do

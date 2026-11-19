@@ -25,7 +25,7 @@
 {-# LANGUAGE InstanceSigs #-}
 {-# LANGUAGE NamedFieldPuns #-}
 module Transient.Move.Logged(Cloud(..),
-Loggable(..), logged, logged', endpoint, received, param, getLog, exec,wait, emptyLog,
+Loggable(..), logged, logged', endpoint, endpointPinned, received, param, getLog, exec,wait, emptyLog,
  Log(..),hashExec,genPersistId,persistDBRef,firstCont,
   firstEndpoint,dbClos0, noExState, setLastClosureForConnection,getLastClosureForConnection,updateLastClosureForConnection,setLog,
   processMessage, sendToClosure, getClosureLog, getClosureLogFrom, firstFragment) where
@@ -243,9 +243,16 @@ Endpoints can be continued by messages written to their 'EVar'.  The name is
 stable across nodes that share the same code base, so distributed peer nodes
 refer to the same continuation by the same identifier.
 -}
-endpoint maybeName= endpoint1 maybeName <|> (tttr "escape" >> empty)
-endpoint1 :: Maybe BSS.ByteString  -> TransIO ()
-endpoint1  maybeName = do
+endpoint maybeName= endpoint1 False maybeName <|> (tttr "escape" >> empty)
+
+-- | An endpoint that can be invoked after a restart, as the one of a request ('Transient.Move.Web.minput'): when it is
+-- created, it counts as a job that never ends, so that its closure and the path to it are stored (see 'addJobRef').
+-- After a restart the closure is read from the files, already counted.
+endpointPinned :: Maybe BSS.ByteString -> TransIO ()
+endpointPinned maybeName= endpoint1 True maybeName <|> (tttr "escape" >> empty)
+
+endpoint1 :: Bool -> Maybe BSS.ByteString  -> TransIO ()
+endpoint1 pin maybeName = do
 
   log@Log {recover, partLog, restLog, hashClosure=hash} <- getLog
   pstring <- giveParseString
@@ -285,7 +292,12 @@ endpoint1  maybeName = do
           -- continuations (where the sandboxes restore the connection and the closure to respond to). This visit
           -- goes on with its own event variable and continuation, but they are not registered.
           let stored = if recover && isJust localCont then closure {localEvar = localEvar, localCont = localCont} else closure
-          liftIO $ atomically $ writeDBRef dblocalclos stored
+          -- the counters are the current ones: a job could have counted this closure since it was read
+          liftIO $ atomically $ do
+            cur <- readDBRef dblocalclos
+            writeDBRef dblocalclos $ case cur of
+              Just LocalClosure{localJobs= j} -> stored{localJobs= j}
+              Nothing                         -> stored
           
           liftIO $ tryPutMVar localMvar ()   -- getClosurelog blocks on the MVar, so we need to release it here when it has been restored
 
@@ -315,7 +327,8 @@ endpoint1  maybeName = do
                     localCont = Just cont,
                     localCaller = mcaller,
                     localSource = Nothing,
-                    localVisits = 1
+                    localVisits = 1,
+                    localJobs = 0
                   }
 
 
@@ -324,7 +337,7 @@ endpoint1  maybeName = do
           setState (PrevClos dblocalclos Nothing True isapp iscollect :: PrevClos)
 
 
-          liftIO $ atomically $ writeDBRef dblocalclos closure
+          liftIO $ atomically $ writeDBRef dblocalclos closure >> when pin (addJobRef 1 dblocalclos)
           liftIO $ tryPutMVar (localMvar closure) ()   -- getClosurelog blocks on the MVar, so we need to release it here when it has been restored
 
           return  closure
@@ -418,7 +431,8 @@ firstCont =  do
             localCont = Just cont,
             localCaller = Nothing,
             localSource = Nothing,
-                    localVisits = 1
+                    localVisits = 1,
+            localJobs = 0
           }
 
   liftIO $ atomically $ writeDBRef dbClos0 this
